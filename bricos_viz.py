@@ -46,12 +46,15 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
             geom_x.extend([ni[0], nj[0], None])
             geom_y.extend([ni[1], nj[1], None])
     
+    # Fixed: Added name to Geometry trace to prevent "trace0"
     fig.add_trace(go.Scatter(
         x=geom_x, y=geom_y, 
         mode='lines', 
+        name='Structure',
         line=dict(color='black', width=3), 
         opacity=0.2, 
-        hoverinfo='skip'
+        hoverinfo='skip',
+        showlegend=True
     ))
     
     ann_candidates = []
@@ -161,6 +164,11 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
     # Helper: Add Results Traces
     def add_traces(res_data, sys_name, color, dash, offset_dir):
         if not res_data: return
+        
+        # Flags to ensure we only show one legend entry per group
+        showed_legend_max = False
+        showed_legend_min = False
+        
         for eid, data in res_data.items():
             vals_max, vals_min = None, None
             if type_base == 'Def':
@@ -195,10 +203,17 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
             px_max = base_x + vals_max * scale_factor * perp_x
             py_max = base_y + vals_max * scale_factor * perp_y
             
+            # Determine legend visibility for this specific segment
+            show_leg_max = not showed_legend_max
+            
             fig.add_trace(go.Scatter(
                 x=px_max, y=py_max, mode='lines', line=dict(color=color, width=2, dash=dash),
-                name=f"{sys_name} Max", text=hover_text_max, hoverinfo='text', showlegend=False
+                name=f"{sys_name} Max", 
+                legendgroup=f"{sys_name} Max",
+                showlegend=show_leg_max,
+                text=hover_text_max, hoverinfo='text'
             ))
+            showed_legend_max = True
             
             # Trace Min
             px_min = base_x + vals_min * scale_factor * perp_x
@@ -208,11 +223,18 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                 f"<b>{sys_name} - {eid} (Min)</b><br>Loc x: {x:.2f}m<br>{type_base}: {v:.2f}"
                 for x, v in zip(data['x'], vals_min)
             ]
+            
+            show_leg_min = not showed_legend_min
+            
             fig.add_trace(go.Scatter(
                 x=px_min, y=py_min, mode='lines', line=dict(color=color, width=2, dash=dash),
                 fill='tonexty', fillcolor=get_fill_color(color),
-                name=f"{sys_name} Min", text=hover_text_min, hoverinfo='text', showlegend=False
+                name=f"{sys_name} Min", 
+                legendgroup=f"{sys_name} Min",
+                showlegend=show_leg_min,
+                text=hover_text_min, hoverinfo='text'
             ))
+            showed_legend_min = True
             
             # Candidate Annotations (Min/Max peaks)
             if annotate:
