@@ -96,16 +96,36 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
         
         f_start = el.k_local @ d_loc
         active_loads = loads_map.get(i, [])
+        
         for load in active_loads:
-            f_start += el.get_fixed_end_forces(load['type'], load['params'])
+            # PROJECT GLOBAL Y LOAD TO LOCAL Y if Gravity
+            # P_local = P_global * cos(alpha) = P_global * el.cx
+            p_raw = load['params']
+            p_final = list(p_raw)
+            
+            if load.get('is_gravity', False):
+                p_final[0] *= el.cx
+                if load['type'] == 'distributed_trapezoid':
+                    p_final[1] *= el.cx
+            
+            f_start += el.get_fixed_end_forces(load['type'], p_final)
             
         load_arr = np.zeros((len(active_loads), 5))
         for k, load in enumerate(active_loads):
+            p_raw = load['params']
+            val_1 = p_raw[0]
+            val_2 = p_raw[1] if len(p_raw) > 1 else 0.0
+            
+            # Apply same projection for internal force integration
+            if load.get('is_gravity', False):
+                val_1 *= el.cx
+                val_2 *= el.cx
+            
             p = load['params']
             if load['type'] == 'point':
-                load_arr[k, :] = [1, p[0], p[1], 0.0, 0.0]
+                load_arr[k, :] = [1, val_1, p[1], 0.0, 0.0]
             elif load['type'] == 'distributed_trapezoid':
-                load_arr[k, :] = [2, p[0], p[1], p[2], p[3]]
+                load_arr[k, :] = [2, val_1, val_2, p[2], p[3]]
 
         num_pts = max(5, int(el.L / mesh_size) + 1)
         x_vals, M_vals, V_vals, N_vals = kernels.jit_internal_forces(
@@ -234,7 +254,6 @@ def run_raw_analysis(params, phi_val_override=None):
     
     num_spans = params['num_spans']
     num_supp = num_spans + 1
-    curr_x = 0.0
     
     supports_cfg = params.get('supports', [])
     
@@ -254,12 +273,52 @@ def run_raw_analysis(params, phi_val_override=None):
         val = params[prefix_list_key][idx]
         return {'I': val}
 
+    # --- GEOMETRY CONSTRUCTION WITH VERTICAL ALIGNMENT ---
+    # Store top nodes separately to attach spans and walls
+    top_node_coords = {} 
+    
+    curr_x = 0.0
+    curr_y = 0.0
+    
+    # Pre-calculate span nodes (Top Chord)
+    top_node_coords[0] = (0.0, 0.0) # Start at 0,0
+    
+    for i in range(num_spans):
+        L_horiz = params['L_list'][i]
+        
+        # Fetch Geometry data for this span
+        g_data = get_geom_data(i, 'Is_list', 'span_geom')
+        
+        # Determine Vertical Rise (dy)
+        d_y = 0.0
+        align_type = g_data.get('align_type', 0)
+        
+        if align_type == 1: # Inclined
+            mode = g_data.get('incline_mode', 0)
+            val = float(g_data.get('incline_val', 0.0))
+            if mode == 0: # Slope (%)
+                d_y = (val / 100.0) * L_horiz
+            else: # Delta H
+                d_y = val
+        
+        next_x = curr_x + L_horiz
+        next_y = curr_y + d_y
+        
+        top_node_coords[i+1] = (next_x, next_y)
+        
+        curr_x = next_x
+        curr_y = next_y
+
     if params['mode'] == 'Frame':
         for i in range(num_supp):
             h = params['h_list'][i]
             nid_b, nid_t = 100+i, 200+i
-            nodes[nid_b] = (curr_x, -h)
-            nodes[nid_t] = (curr_x, 0.0)
+            
+            # Use pre-calced top coordinate
+            t_x, t_y = top_node_coords[i]
+            
+            nodes[nid_b] = (t_x, t_y - h) # Base is height H below deck profile
+            nodes[nid_t] = (t_x, t_y)
             
             if i < len(supports_cfg): k_vec = supports_cfg[i]['k']
             else: k_vec = [1e14, 1e14, 1e14] 
@@ -275,12 +334,12 @@ def run_raw_analysis(params, phi_val_override=None):
                 'id': f'W{i+1}', 'nodes': (nid_b, nid_t),
                 'E': e_val, **g_data
             })
-            if i < num_spans: curr_x += params['L_list'][i]
             
     else: # Superstructure
         for i in range(num_supp):
             nid_t = 200+i
-            nodes[nid_t] = (curr_x, 0.0)
+            t_x, t_y = top_node_coords[i]
+            nodes[nid_t] = (t_x, t_y)
             
             if i < len(supports_cfg): k_vec = supports_cfg[i]['k']
             else:
@@ -288,7 +347,6 @@ def run_raw_analysis(params, phi_val_override=None):
                 else: k_vec = [0.0, 1e14, 0.0]
                 
             restraints[nid_t] = k_vec
-            if i < num_spans: curr_x += params['L_list'][i]
 
     for i in range(num_spans):
         nid_s, nid_e = 200+i, 200+i+1
@@ -315,7 +373,17 @@ def run_raw_analysis(params, phi_val_override=None):
         for idx, load_list in loads_dict.items():
             el = elem_objects[idx]
             for load in load_list:
-                f_loc = el.get_fixed_end_forces(load['type'], load['params'])
+                # PROJECT GLOBAL Y LOAD TO LOCAL Y if Gravity
+                # P_local = P_global * cos(alpha) = P_global * el.cx
+                p_raw = load['params']
+                p_final = list(p_raw)
+                
+                if load.get('is_gravity', False):
+                    p_final[0] *= el.cx
+                    if load['type'] == 'distributed_trapezoid':
+                        p_final[1] *= el.cx
+                
+                f_loc = el.get_fixed_end_forces(load['type'], p_final)
                 f_glob = el.T.T @ f_loc
                 ni, nj = elems_base[idx]['nodes']
                 idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
@@ -329,7 +397,8 @@ def run_raw_analysis(params, phi_val_override=None):
         if params['sw_list'][i] != 0:
             idx = i + (num_supp if params['mode'] == 'Frame' else 0)
             val = params['sw_list'][i]
-            sw_loads_map[idx] = [{'type': 'distributed_trapezoid', 'params': [val, val, 0, params['L_list'][i]]}]
+            # SW is Global Gravity
+            sw_loads_map[idx] = [{'type': 'distributed_trapezoid', 'is_gravity': True, 'params': [val, val, 0, elem_objects[idx].L]}]
     res_sw = solve_static(sw_loads_map)
 
     soil_loads_map = {}
@@ -339,7 +408,7 @@ def run_raw_analysis(params, phi_val_override=None):
                 sign = 1.0 if s['face'] == 'L' else -1.0 
                 if s['wall_idx'] not in soil_loads_map: soil_loads_map[s['wall_idx']] = []
                 soil_loads_map[s['wall_idx']].append({
-                    'type': 'distributed_trapezoid', 'params': [sign*s['q_bot'], sign*s['q_top'], 0, s['h']]
+                    'type': 'distributed_trapezoid', 'is_gravity': False, 'params': [sign*s['q_bot'], sign*s['q_top'], 0, s['h']]
                 })
     res_soil = solve_static(soil_loads_map)
 
@@ -350,7 +419,7 @@ def run_raw_analysis(params, phi_val_override=None):
                 sign = 1.0 if sur['face'] == 'L' else -1.0
                 if sur['wall_idx'] not in surch_loads_map: surch_loads_map[sur['wall_idx']] = []
                 surch_loads_map[sur['wall_idx']].append({
-                    'type': 'distributed_trapezoid', 'params': [sign*sur['q'], sign*sur['q'], 0, sur['h']]
+                    'type': 'distributed_trapezoid', 'is_gravity': False, 'params': [sign*sur['q'], sign*sur['q'], 0, sur['h']]
                 })
     res_surch = solve_static(surch_loads_map)
 
@@ -393,14 +462,20 @@ def run_raw_analysis(params, phi_val_override=None):
         sp_el_indices = np.zeros(num_spans, dtype=np.int32)
         c_x = 0
         sp_elems_info = [] 
+        
         for sp_i in range(num_spans):
-            L = params['L_list'][sp_i]
+            # L = params['L_list'][sp_i] # This is horizontal
+            # Retrieve Element Object to get True L
             el_idx = sp_start_idx + sp_i
+            true_L = elem_objects[el_idx].L
+            
             sp_start_x[sp_i] = c_x
-            sp_lens[sp_i] = L
+            sp_lens[sp_i] = true_L
             sp_el_indices[sp_i] = el_idx
-            sp_elems_info.append((c_x, L, el_idx))
-            c_x += L
+            sp_elems_info.append((c_x, true_L, el_idx))
+            c_x += true_L
+
+        total_structure_len = c_x 
 
         n_elems = len(elem_objects)
         el_L = np.zeros(n_elems)
@@ -430,20 +505,16 @@ def run_raw_analysis(params, phi_val_override=None):
             if len(v_loads_raw) == 0: continue
             
             # Setup Path and Distances based on Direction
-            total_len = sum(params['L_list'][:num_spans])
             max_d = max(v_dists_raw) if len(v_dists_raw) > 0 else 0
             step_val = params.get('step_size', 0.2)
             
             if current_dir == 'Forward':
                 # Standard L -> R
-                x_steps = np.arange(-max_d-1.0, total_len + max_d + 1.0, step_val)
+                x_steps = np.arange(-max_d-1.0, total_structure_len + max_d + 1.0, step_val)
                 v_dists_run = v_dists_raw
             else:
                 # Reverse R -> L
-                # Vehicle 'Front' moves from (Total + Margin) down to (-Margin)
-                # Axles trail 'behind' in positive X direction, so dists are negative
-                # (Axle Pos = Front_X - (-Dist) = Front_X + Dist)
-                x_steps = np.arange(total_len + max_d + 1.0, -max_d-1.0, -step_val)
+                x_steps = np.arange(total_structure_len + max_d + 1.0, -max_d-1.0, -step_val)
                 v_dists_run = -v_dists_raw
                 
             total_steps = len(x_steps)
@@ -488,7 +559,8 @@ def run_raw_analysis(params, phi_val_override=None):
                             if 0 <= local_x <= L_span:
                                 P_val = v_loads_raw[ax_i]
                                 if el_idx not in step_loads_map: step_loads_map[el_idx] = []
-                                load_p = {'type': 'point', 'params': [P_val, local_x]}
+                                # Vehicle is Gravity
+                                load_p = {'type': 'point', 'is_gravity': True, 'params': [P_val, local_x]}
                                 step_loads_map[el_idx].append(load_p)
                                 has_loads = True
                                 break

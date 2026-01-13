@@ -22,7 +22,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- LOGO DISPLAY ---
-# Place a file named 'logo.png' in the same directory to display it.
 if os.path.exists("logo.png"):
     st.sidebar.image("logo.png", width='stretch')
 
@@ -403,7 +402,13 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         key = f"{prefix_key}_{i}"
         if key not in p:
             # Init Default: Type=0(I), Shape=0(Const), Val=Default
-            p[key] = {'type': 0, 'shape': 0, 'vals': [default_val, default_val, default_val]}
+            # align_type: 0=Flat, 1=Inclined
+            # incline_mode: 0=Slope, 1=DeltaH
+            # incline_val: Value
+            p[key] = {
+                'type': 0, 'shape': 0, 'vals': [default_val, default_val, default_val],
+                'align_type': 0, 'incline_mode': 0, 'incline_val': 0.0
+            }
         return p[key]
 
     for i in range(n_spans):
@@ -412,7 +417,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         
         # Check if advanced geom is active (shape != 0)
         s_geom = get_geom_ui_data('span_geom', i, p['Is_list'][i])
-        is_adv = (s_geom['shape'] != 0) or (s_geom['type'] != 0)
+        is_adv = (s_geom['shape'] != 0) or (s_geom['type'] != 0) or (s_geom.get('align_type', 0) != 0)
         
         # Simple View Logic: Update list from geom vals
         if not is_adv:
@@ -498,14 +503,15 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     # --- SECTION PROFILER ---
     st.markdown("---")
     st.markdown("### 🛠️ Section Profiler (Advanced)")
-    st.caption("Configure variable stiffness or height profiles (e.g. haunches, tapers).")
+    st.caption("Configure variable stiffness, height profiles, or vertical alignment.")
     
     # Selector
     elem_options = [f"Span {i+1}" for i in range(n_spans)] + ([f"Wall {i+1}" for i in range(n_spans+1)] if not is_super else [])
     sel_el = st.selectbox("Edit Element:", elem_options, key=f"{curr}_prof_sel")
     
     # Parse Selection
-    if "Span" in sel_el:
+    is_span_selected = "Span" in sel_el
+    if is_span_selected:
         idx = int(sel_el.split(" ")[1]) - 1
         target_geom = p[f"span_geom_{idx}"]
         target_simple_list = p['Is_list']
@@ -540,6 +546,26 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     
     # Update simple list (backward compat)
     target_simple_list[idx] = v1 if target_geom['type']==0 else (1.0 * v1**3)/12.0
+
+    # --- ALIGNMENT SECTION (Spans Only) ---
+    if is_span_selected:
+        st.markdown("#### 📐 Alignment (Vertical Geometry)")
+        if 'align_type' not in target_geom: target_geom['align_type'] = 0
+        if 'incline_mode' not in target_geom: target_geom['incline_mode'] = 0
+        if 'incline_val' not in target_geom: target_geom['incline_val'] = 0.0
+
+        al_opts = ["Straight (Horizontal)", "Inclined"]
+        new_align = st.radio("Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, key=f"{curr}_align_t")
+        target_geom['align_type'] = al_opts.index(new_align)
+        
+        if target_geom['align_type'] == 1:
+            inc_opts = ["Slope (%)", "Delta Height (End - Start) [m]"]
+            new_inc_mode = st.radio("Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, key=f"{curr}_inc_m")
+            target_geom['incline_mode'] = inc_opts.index(new_inc_mode)
+            
+            lbl_inc = "Slope [%]" if target_geom['incline_mode'] == 0 else "Delta H [m]"
+            help_inc = "Positive slope/height goes UP. Negative goes DOWN."
+            target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", help=help_inc, key=f"{curr}_inc_v")
 
 
 # --- NEW BOUNDARY CONDITIONS TAB ---
