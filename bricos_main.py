@@ -723,7 +723,7 @@ if view_case != "Vehicle Steps":
 
 c_tog, _ = st.columns([1,1])
 with c_tog:
-    st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dyn)"], horizontal=True, key="result_mode_radio")
+    st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"], horizontal=True, key="result_mode_radio")
     
     help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
     st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], horizontal=True, key="surcharge_combo_radio", help=help_combo)
@@ -785,10 +785,15 @@ if view_case == "Vehicle Steps":
                 step_data = s_list[idx]['res']
                 out = {}
                 for k, v in step_data.items():
+                    # Populate Max/Min keys for step view (Max=Min=Current) to allow unified table generation
                     out[k] = {**v, 
                         'M':v['M']*f_factor, 'V':v['V']*f_factor, 'N':v['N']*f_factor, 
                         'M_max':v['M']*f_factor, 'M_min':v['M']*f_factor,
-                        'def_x':v['def_x']*f_factor, 'def_y':v['def_y']*f_factor
+                        'V_max':v['V']*f_factor, 'V_min':v['V']*f_factor,
+                        'N_max':v['N']*f_factor, 'N_min':v['N']*f_factor,
+                        'def_x':v['def_x']*f_factor, 'def_y':v['def_y']*f_factor,
+                        'def_x_max':v['def_x']*f_factor, 'def_x_min':v['def_x']*f_factor,
+                        'def_y_max':v['def_y']*f_factor, 'def_y_min':v['def_y']*f_factor
                     }
                 return out
             return {}
@@ -820,7 +825,6 @@ with t1:
             show_A_step = (step_view_sys == "Both" or step_view_sys == "System A")
             show_B_step = (step_view_sys == "Both" or step_view_sys == "System B")
             st.subheader("Bending Moment [kNm]")
-            # FIX: Pass static geometry (Selfweight results) to ensure skeleton is always drawn
             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_M_step")
             st.subheader("Shear Force [kN]")
             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_V_step")
@@ -905,7 +909,7 @@ with t2:
     
     if detailed_rows:
         df_detailed = pd.DataFrame(detailed_rows)
-        st.dataframe(df_detailed, use_container_width=True)
+        st.dataframe(df_detailed, width='stretch')
         st.download_button(
             "Download Detailed Data (.csv)", 
             df_detailed.to_csv(index=False).encode('utf-8'), 
