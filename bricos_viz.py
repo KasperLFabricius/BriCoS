@@ -30,32 +30,41 @@ def solve_annotations(annotations):
         ann['y'] = result_arr[i, 1]
     return annotations
 
-def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=2.0, title="", show_A=True, show_B=True, annotate=True, load_case_name="", name_A="System A", name_B="System B"):
+def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=2.0, title="", show_A=True, show_B=True, annotate=True, load_case_name="", name_A="System A", name_B="System B", geom_A=None, geom_B=None):
     """
     Generates the comparative Plotly figure for System A and System B.
+    geom_A/geom_B: Optional static datasets to define the structure skeleton (useful if sysA_data is empty for a step).
     """
     fig = go.Figure()
     
-    # 1. Draw Geometry (Skeleton)
-    geom_x, geom_y = [], []
-    # Use whichever system data is available to draw geometry (assuming similar topology if one is missing)
-    active_data = sysA_data if show_A and sysA_data else sysB_data
-    if active_data:
-        for eid, data in active_data.items():
+    # 1. Draw Geometry (Skeleton) - independently for both systems
+    def add_structure_trace(g_data, sys_label, visible):
+        if not visible or not g_data: return
+        geom_x, geom_y = [], []
+        for eid, data in g_data.items():
             ni, nj = data['ni'], data['nj']
             geom_x.extend([ni[0], nj[0], None])
             geom_y.extend([ni[1], nj[1], None])
+        
+        fig.add_trace(go.Scatter(
+            x=geom_x, y=geom_y, 
+            mode='lines', 
+            name=f'Structure {sys_label}',
+            legendgroup='Structure',
+            line=dict(color='black', width=3), 
+            opacity=0.2, 
+            hoverinfo='skip',
+            showlegend=True
+        ))
+
+    # Use specific geometry source if provided, otherwise fallback to the result data
+    source_A = geom_A if geom_A else sysA_data
+    source_B = geom_B if geom_B else sysB_data
     
-    # Fixed: Added name to Geometry trace to prevent "trace0"
-    fig.add_trace(go.Scatter(
-        x=geom_x, y=geom_y, 
-        mode='lines', 
-        name='Structure',
-        line=dict(color='black', width=3), 
-        opacity=0.2, 
-        hoverinfo='skip',
-        showlegend=True
-    ))
+    # Draw both if requested
+    add_structure_trace(source_A, "(A)", show_A)
+    # Avoid drawing B if it's identical to A? No, draw both to be safe (they overlay)
+    add_structure_trace(source_B, "(B)", show_B)
     
     ann_candidates = []
     
