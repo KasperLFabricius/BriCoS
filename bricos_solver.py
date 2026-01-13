@@ -35,6 +35,7 @@ def build_stiffness_matrix(nodes, elements, restraints_stiffness):
     K_global = np.zeros((NDOF, NDOF))
     elem_objects = []
     
+    # 1. Assemble Element Stiffness
     for el_data in elements:
         ni_id, nj_id = el_data['nodes']
         el = FrameElement(nodes[ni_id], nodes[nj_id], el_data['E'], el_data['I'])
@@ -43,11 +44,15 @@ def build_stiffness_matrix(nodes, elements, restraints_stiffness):
         indices = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
         K_global[np.ix_(indices, indices)] += el.k_global
         
+    # 2. Apply Boundary Springs / Restraints
+    # restraints_stiffness is a dict: {node_id: [kx, ky, km]}
     for nid, stiff in restraints_stiffness.items():
         if nid in node_map:
             idx = node_map[nid]*3
             for i in range(3):
-                if stiff[i] is not None: K_global[idx+i, idx+i] += stiff[i]
+                # Add spring stiffness to the diagonal (Penalty Method / Direct Stiffness)
+                if stiff[i] is not None: 
+                    K_global[idx+i, idx+i] += stiff[i]
                 
     return K_global, node_map, elem_objects, NDOF
 
@@ -199,35 +204,51 @@ def run_raw_analysis(params, phi_val_override=None):
     nodes = {}
     elems_base = []
     restraints = {}
-    FIX = 1e14
     
     num_spans = params['num_spans']
     num_supp = num_spans + 1
     curr_x = 0.0
     
+    # Retrieve Supports Config (Default to empty list if key missing)
+    supports_cfg = params.get('supports', [])
+    
     if params['mode'] == 'Frame':
-        k_rot = params['k_rot']
         for i in range(num_supp):
             h = params['h_list'][i]
             nid_b, nid_t = 100+i, 200+i
             nodes[nid_b] = (curr_x, -h)
             nodes[nid_t] = (curr_x, 0.0)
-            restraints[nid_b] = [FIX, FIX, k_rot]
+            
+            # --- APPLY VARIABLE STIFFNESS (Bottom Node) ---
+            # If supports_cfg has data for this index, use it. Otherwise default to Fixed.
+            if i < len(supports_cfg):
+                k_vec = supports_cfg[i]['k']
+            else:
+                k_vec = [1e14, 1e14, 1e14] # Default fallback
+            
+            restraints[nid_b] = k_vec
+            
             elems_base.append({
                 'id': f'W{i+1}', 'nodes': (nid_b, nid_t),
                 'E': params['E'], 'I': params['Iw_list'][i]
             })
             if i < num_spans: curr_x += params['L_list'][i]
-    else: 
-        k_rot_end = params['k_rot_super']
+            
+    else: # Superstructure
         for i in range(num_supp):
             nid_t = 200+i
             nodes[nid_t] = (curr_x, 0.0)
-            if i == 0 or i == num_supp - 1:
-                k_r = k_rot_end
+            
+            # --- APPLY VARIABLE STIFFNESS (Deck Node) ---
+            if i < len(supports_cfg):
+                k_vec = supports_cfg[i]['k']
             else:
-                k_r = 0.0 # Pinned
-            restraints[nid_t] = [FIX, FIX, k_r]
+                # Default fallback for Superstructure (Pinned start, Roller others)
+                if i == 0: k_vec = [1e14, 1e14, 0.0]
+                else: k_vec = [0.0, 1e14, 0.0]
+                
+            restraints[nid_t] = k_vec
+            
             if i < num_spans: curr_x += params['L_list'][i]
 
     for i in range(num_spans):
@@ -239,10 +260,12 @@ def run_raw_analysis(params, phi_val_override=None):
 
     K_glob, node_map, elem_objects, NDOF = build_stiffness_matrix(nodes, elems_base, restraints)
     
+    # --- SOLVER STABILITY CHECK ---
     try:
         K_inv = np.linalg.inv(K_glob)
     except np.linalg.LinAlgError:
-        return get_safe_error_result(), nodes, 0
+        # Stop execution immediately if singular (Mechanism / Unstable)
+        raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
 
     def solve_static(loads_dict):
         F = np.zeros(NDOF)

@@ -27,6 +27,7 @@ if 'keep_active_veh_step' not in st.session_state: st.session_state.keep_active_
 if 'keep_step_view_sys' not in st.session_state: st.session_state.keep_step_view_sys = "System A"
 
 def get_def():
+    # 'supports' list will store dicts: {'type': 'Fixed', 'k': [1e14, 1e14, 1e14]}
     return {
         'mode': 'Frame', 'E': 30e6, 'num_spans': 2,
         'L_list': [10.44, 13.67] + [10.0]*8,
@@ -34,15 +35,12 @@ def get_def():
         'sw_list': [85.55, 74.30] + [15.0]*8,
         'h_list': [8.29, 8.29, 13.00] + [4.0]*8,
         'Iw_list': [0.0800, 0.0850, 0.0900] + [0.005]*8,
-        'k_rot': 1e12, 'k_rot_super': 0.0,
+        'supports': [], 
         'soil': [],
         'surcharge': [{'wall_idx':1, 'face':'R', 'q':72.73, 'h':8.29}, {'wall_idx':2, 'face':'R', 'q':72.73, 'h':13.00}], 
         'vehicle': {'loads': [7,7,9.5,9.5,17.8,17.8,17.8,17.8,17.8,17.8,17.8], 'spacing': [0,1.4,3.2,1.4,6.0,1.4,1.4,1.4,1.4,1.4,1.4]},
         'vehicle_loads': "7,7,9.5,9.5,17.8,17.8,17.8,17.8,17.8,17.8,17.8", 
         'vehicle_space': "0,1.4,3.2,1.4,6.0,1.4,1.4,1.4,1.4,1.4,1.4",
-        'vehicleB': {'loads': [], 'spacing': []},
-        'vehicleB_loads': "", 
-        'vehicleB_space': "",
         'vehicleB': {'loads': [], 'spacing': []},
         'vehicleB_loads': "", 
         'vehicleB_space': "",
@@ -62,7 +60,7 @@ def get_clear(name_suffix, current_mode):
         'E': 30e6, 'num_spans': 1,
         'L_list': [0.0]*10, 'Is_list': [0.0]*10, 'sw_list': [0.0]*10,
         'h_list': [0.0]*11, 'Iw_list': [0.0]*11,
-        'k_rot': 0.0, 'k_rot_super': 0.0, 
+        'supports': [],
         'soil': [],
         'surcharge': [], 
         'vehicle': {'loads': [], 'spacing': []},
@@ -95,6 +93,11 @@ for sys_k in ['sysA', 'sysB']:
         st.session_state[sys_k]['gamma_vehB'] = 1.4
     if 'last_mode' not in st.session_state[sys_k]:
          st.session_state[sys_k]['last_mode'] = st.session_state[sys_k]['mode']
+    if 'supports' not in st.session_state[sys_k]:
+         st.session_state[sys_k]['supports'] = []
+    # Remove old keys if they exist to keep state clean
+    st.session_state[sys_k].pop('k_rot', None)
+    st.session_state[sys_k].pop('k_rot_super', None)
 
 if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 
@@ -293,7 +296,6 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
         p['last_mode'] = new_mode_sel
         st.rerun()
     
-    # Correction: KFI applies to ALL loads
     help_kfi = "Consequence Class Factor (KFI) applied to all loads."
     p['KFI'] = st.selectbox("KFI (Consequence Class)", [0.9, 1.0, 1.1], index=2, key=f"{curr}_kfi", help=help_kfi)
     
@@ -342,21 +344,18 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
     
     phi_log_placeholder = st.empty()
 
-# Renamed Expander
 with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     n_spans = st.number_input("Number of Spans", 1, 10, p['num_spans'], key=f"{curr}_nsp")
     p['num_spans'] = n_spans
     st.markdown("---")
     st.markdown("**Spans (L, I, SW)**")
     
-    # Tooltip strings for Spans
     h_L = "Length of the span [m]."
     h_I = "Moment of Inertia [m^4]."
     h_SW = "Distributed self-weight line load [kN/m]."
     
     for i in range(n_spans):
         c1, c2, c3 = st.columns([1, 1, 1])
-        # Only apply help to the first row to avoid clutter
         p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", help=h_L if i==0 else None)
         p['Is_list'][i] = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help=h_I if i==0 else None)
         p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help=h_SW if i==0 else None)
@@ -366,7 +365,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     st.markdown("**Walls (H, I, Surcharge, Soil)**")
     if is_super: st.caption("Mode: Superstructure. Walls and lateral loads are disabled.")
     
-    # Tooltip strings for Walls
     h_H = "Height of the wall [m]."
     h_Iw = "Moment of Inertia of the wall [m^4]."
     h_Sq = "Vertical vehicle surcharge load on the backfill surface [kN/m]. \n\n**Note:** The Dynamic Factor (Phi) is **never** applied to this load."
@@ -405,11 +403,62 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
             if h_L > 0: p['soil'].append({'wall_idx':i, 'face':'L', 'q_bot':qL_bot, 'q_top':qL_top, 'h':h_L})
             if h_R > 0: p['soil'].append({'wall_idx':i, 'face':'R', 'q_bot':qR_bot, 'q_top':qR_top, 'h':h_R})
 
-    st.markdown("---")
-    help_bc = "Rotational stiffness at the base/supports. 'Fixed' = Infinite stiffness (Clamped), 'Pinned' = Zero stiffness."
-    bc = st.select_slider("Base/Support Fixity", ["Pinned", "Fixed"], value="Fixed" if p['k_rot']>1e6 else "Pinned", key=f"{curr}_bc", help=help_bc)
-    p['k_rot'] = 1e12 if bc=="Fixed" else 0.0
-    p['k_rot_super'] = 1e12 if bc=="Fixed" else 0.0
+# --- NEW BOUNDARY CONDITIONS TAB ---
+with st.sidebar.expander("Boundary Conditions", expanded=False):
+    # Dynamic list management for supports
+    num_supports = n_spans + 1
+    current_supports = p.get('supports', [])
+    
+    # Ensure list length matches current geometry
+    if len(current_supports) != num_supports:
+        new_list = []
+        for i in range(num_supports):
+            if i < len(current_supports):
+                new_list.append(current_supports[i])
+            else:
+                # Default Logic
+                if p['mode'] == 'Frame':
+                    # Fixed Base
+                    new_list.append({'type': 'Fixed', 'k': [1e14, 1e14, 1e14]})
+                else:
+                    if i == 0:
+                        new_list.append({'type': 'Pinned', 'k': [1e14, 1e14, 0.0]})
+                    else:
+                        new_list.append({'type': 'Roller (X-Free)', 'k': [0.0, 1e14, 0.0]})
+        p['supports'] = new_list
+    
+    # Render Inputs
+    presets = {
+        "Fixed": [1e14, 1e14, 1e14],
+        "Pinned": [1e14, 1e14, 0.0],
+        "Roller (X-Free)": [0.0, 1e14, 0.0],
+        "Roller (Y-Free)": [1e14, 0.0, 0.0],
+        "Custom Spring": None
+    }
+    
+    for i in range(num_supports):
+        supp_name = f"Wall {i+1} Base" if p['mode'] == 'Frame' else f"Support {i+1}"
+        st.markdown(f"**{supp_name}**")
+        
+        # Get current state
+        curr_s = p['supports'][i]
+        curr_type = curr_s.get('type', 'Fixed')
+        if curr_type not in presets: curr_type = 'Custom Spring'
+        
+        sel_type = st.selectbox(f"Type {i+1}", list(presets.keys()), index=list(presets.keys()).index(curr_type), key=f"{curr}_supp_t_{i}", label_visibility="collapsed")
+        
+        new_k = curr_s['k']
+        if sel_type != "Custom Spring":
+            new_k = presets[sel_type]
+            p['supports'][i]['type'] = sel_type
+            p['supports'][i]['k'] = new_k
+        else:
+            p['supports'][i]['type'] = "Custom Spring"
+            col_k1, col_k2, col_k3 = st.columns(3)
+            kx = col_k1.number_input(f"Kx", value=float(curr_s['k'][0]), format="%.1e", key=f"{curr}_kx_{i}", help="Horizontal Stiffness [kN/m]")
+            ky = col_k2.number_input(f"Ky", value=float(curr_s['k'][1]), format="%.1e", key=f"{curr}_ky_{i}", help="Vertical Stiffness [kN/m]")
+            km = col_k3.number_input(f"Km", value=float(curr_s['k'][2]), format="%.1e", key=f"{curr}_km_{i}", help="Rotational Stiffness [kNm/rad]")
+            p['supports'][i]['k'] = [kx, ky, km]
 
 @st.cache_data
 def get_vehicle_library():
@@ -503,9 +552,23 @@ if 'result_mode' not in st.session_state: st.session_state['result_mode'] = "Des
 
 result_mode_val = st.session_state['result_mode']
 
-# CALL SOLVER
-raw_res_A, nodes_A, peak_A = solver.run_raw_analysis(st.session_state['sysA'])
-raw_res_B, nodes_B, peak_B = solver.run_raw_analysis(st.session_state['sysB'])
+# CALL SOLVER WRAPPED IN TRY/EXCEPT FOR STABILITY
+def safe_solve(params):
+    try:
+        return solver.run_raw_analysis(params)
+    except ValueError as e:
+        return None, None, str(e)
+
+raw_res_A, nodes_A, err_A = safe_solve(st.session_state['sysA'])
+raw_res_B, nodes_B, err_B = safe_solve(st.session_state['sysB'])
+
+# Display Errors if any
+if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
+if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
+
+# Proceed only if results exist
+has_res_A = (raw_res_A is not None)
+has_res_B = (raw_res_B is not None)
 
 c1, c2, c3, c4 = st.columns([1,1,1,2])
 man_scale = c2.number_input("Target Diagram Height [m]", value=st.session_state['sysA'].get('scale_manual', 2.0), format="%.2f")
@@ -541,12 +604,12 @@ with c_tog:
 
 show_labels = c3.checkbox("Labels", value=True)
 
-# Combine Results (Moved after combo injection)
-res_A = solver.combine_results(raw_res_A, st.session_state['sysA'], result_mode_val)
-res_B = solver.combine_results(raw_res_B, st.session_state['sysB'], result_mode_val)
+# Combine Results (Only if raw results exist)
+res_A = solver.combine_results(raw_res_A, st.session_state['sysA'], result_mode_val) if has_res_A else {}
+res_B = solver.combine_results(raw_res_B, st.session_state['sysB'], result_mode_val) if has_res_B else {}
 
-if p.get('phi_mode', 'Calculate') == 'Calculate':
-    active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
+if p.get('phi_mode', 'Calculate') == 'Calculate' and has_res_A: # Default to showing A log if avail
+    active_raw_res = raw_res_A if curr == 'sysA' and has_res_A else (raw_res_B if has_res_B else {})
     phi_val = active_raw_res.get('phi_calc', 1.0)
     with phi_log_placeholder.container():
         st.markdown(f"**Calculated Phi:** {phi_val:.3f}")
@@ -599,8 +662,13 @@ if view_case == "Vehicle Steps":
                 return out
             return {}
 
-        f_A = res_A['f_vehA'] if active_veh_step == "Vehicle A" else res_A['f_vehB']
-        f_B = res_B['f_vehA'] if active_veh_step == "Vehicle A" else res_B['f_vehB']
+        f_A = res_A['f_vehA'] if active_veh_step == "Vehicle A" and has_res_A else 1.0
+        f_B = res_B['f_vehA'] if active_veh_step == "Vehicle A" and has_res_B else 1.0
+        # If toggled to B
+        if active_veh_step == "Vehicle B":
+             f_A = res_A['f_vehB'] if has_res_A else 1.0
+             f_B = res_B['f_vehB'] if has_res_B else 1.0
+             
         rA = get_step(res_A, step_idx, veh_key_res, f_A)
         rB = get_step(res_B, step_idx, veh_key_res, f_B)
 else:
@@ -631,10 +699,11 @@ with t1:
     else:
         show_A = (show_sys_mode == "Both" or show_sys_mode == "System A")
         show_B = (show_sys_mode == "Both" or show_sys_mode == "System B")
-        geom_invalid_A = (not nodes_A) or (st.session_state['sysA']['num_spans'] == 0)
-        geom_invalid_B = (not nodes_B) or (st.session_state['sysB']['num_spans'] == 0)
+        # Fix check for None nodes
+        geom_invalid_A = (nodes_A is None) or (len(nodes_A)==0)
+        geom_invalid_B = (nodes_B is None) or (len(nodes_B)==0)
         
-        if geom_invalid_A and geom_invalid_B: st.warning("⚠️ No structural geometry defined.")
+        if geom_invalid_A and geom_invalid_B: st.warning("⚠️ No structural geometry or valid analysis.")
         elif (not rA) and (not rB): st.warning(f"⚠️ No results found for **{view_case}**.")
 
         st.subheader("Bending Moment [kNm]")
@@ -668,7 +737,9 @@ with t2:
         st.markdown("### Total Support Reactions (Global X/Y)")
         def react_table(reacts, nodes, sys_key, display_name):
             d = []
+            if not reacts or not nodes: return []
             for nid, f_vec in reacts.items():
+                if nid not in nodes: continue
                 y_coord = nodes[nid][1]
                 is_support = False
                 label = ""
