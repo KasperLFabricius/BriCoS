@@ -43,6 +43,9 @@ def get_def():
         'vehicleB': {'loads': [], 'spacing': []},
         'vehicleB_loads': "", 
         'vehicleB_space': "",
+        'vehicleB': {'loads': [], 'spacing': []},
+        'vehicleB_loads': "", 
+        'vehicleB_space': "",
         'KFI': 1.1, 
         'gamma_g': 1.0, 'gamma_j': 1.0, 
         'gamma_veh': 1.4, 'gamma_vehB': 1.4, 'phi': 1.0, 'scale_manual': 2.0,
@@ -290,7 +293,8 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
         p['last_mode'] = new_mode_sel
         st.rerun()
     
-    help_kfi = "Consequence Class Factor (KFI) applied to variable loads (Traffic, Surcharge)."
+    # Correction: KFI applies to ALL loads
+    help_kfi = "Consequence Class Factor (KFI) applied to all loads."
     p['KFI'] = st.selectbox("KFI (Consequence Class)", [0.9, 1.0, 1.1], index=2, key=f"{curr}_kfi", help=help_kfi)
     
     gg_opts = [0.9, 1.0, 1.10, 1.25]
@@ -338,7 +342,8 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
     
     phi_log_placeholder = st.empty()
 
-with st.sidebar.expander("Geometry & Loads", expanded=True):
+# Renamed Expander
+with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     n_spans = st.number_input("Number of Spans", 1, 10, p['num_spans'], key=f"{curr}_nsp")
     p['num_spans'] = n_spans
     st.markdown("---")
@@ -542,7 +547,9 @@ res_B = solver.combine_results(raw_res_B, st.session_state['sysB'], result_mode_
 
 if p.get('phi_mode', 'Calculate') == 'Calculate':
     active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
+    phi_val = active_raw_res.get('phi_calc', 1.0)
     with phi_log_placeholder.container():
+        st.markdown(f"**Calculated Phi:** {phi_val:.3f}")
         with st.expander("Phi Calculation Log", expanded=False):
             for log_line in active_raw_res.get('phi_log', []): st.caption(log_line)
 
