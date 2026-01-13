@@ -729,7 +729,7 @@ if view_case != "Vehicle Steps":
 
 c_tog, _ = st.columns([1,1])
 with c_tog:
-    st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dyn)"], horizontal=True, key="result_mode_radio")
+    st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"], horizontal=True, key="result_mode_radio")
     
     help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
     st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], horizontal=True, key="surcharge_combo_radio", help=help_combo)
