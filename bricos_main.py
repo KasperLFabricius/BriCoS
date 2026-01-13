@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import json
 import copy
+import os
 import bricos_solver as solver
 import bricos_viz as viz
 
@@ -19,6 +20,11 @@ st.markdown("""
     .stSelectbox label { font-size: 0.9rem; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- LOGO DISPLAY ---
+# Place a file named 'logo.png' in the same directory to display it.
+if os.path.exists("logo.png"):
+    st.sidebar.image("logo.png", width='stretch')
 
 st.title("BriCoS v0.30 - Bridge Comparison Software")
 
@@ -723,7 +729,7 @@ if view_case != "Vehicle Steps":
 
 c_tog, _ = st.columns([1,1])
 with c_tog:
-    st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"], horizontal=True, key="result_mode_radio")
+    st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dyn)"], horizontal=True, key="result_mode_radio")
     
     help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
     st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], horizontal=True, key="surcharge_combo_radio", help=help_combo)
@@ -825,13 +831,13 @@ with t1:
             show_A_step = (step_view_sys == "Both" or step_view_sys == "System A")
             show_B_step = (step_view_sys == "Both" or step_view_sys == "System B")
             st.subheader("Bending Moment [kNm]")
-            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_M_step")
+            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_M_step")
             st.subheader("Shear Force [kN]")
-            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_V_step")
+            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_V_step")
             st.subheader("Normal Force [kN]")
-            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'N', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_N_step")
+            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'N', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_N_step")
             st.subheader("Deformation [mm]")
-            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_D_step")
+            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_D_step")
     else:
         show_A = (show_sys_mode == "Both" or show_sys_mode == "System A")
         show_B = (show_sys_mode == "Both" or show_sys_mode == "System B")
@@ -843,13 +849,13 @@ with t1:
         elif (not rA) and (not rB): st.warning(f"⚠️ No results found for **{view_case}**.")
 
         st.subheader("Bending Moment [kNm]")
-        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_M")
+        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_M")
         st.subheader("Shear Force [kN]")
-        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_V")
+        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_V")
         st.subheader("Normal Force [kN]")
-        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'N', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_N")
+        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'N', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_N")
         st.subheader("Deformation [mm]")
-        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width="stretch", key="chart_D")
+        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_D")
 
 with t2:
     st.markdown(f"### Detailed Data ({view_case})")
