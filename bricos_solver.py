@@ -372,89 +372,121 @@ def run_raw_analysis(params, phi_val_override=None):
     veh_env_A = get_empty_env()
     veh_env_B = get_empty_env()
     
-    # --- STRATEGY 5 IMPLEMENTATION ---
+    # --- STRATEGY 5 IMPLEMENTATION (With Direction Control) ---
     def run_stepping(vehicle_key, env_to_fill):
-        v_loads = np.array(params[vehicle_key]['loads']) * 9.81
-        v_steps_res = [] 
+        v_loads_raw = np.array(params[vehicle_key]['loads']) * 9.81
+        v_dists_raw = np.cumsum(params[vehicle_key]['spacing'])
         
-        if len(v_loads) > 0 and env_to_fill:
-            dists = np.cumsum(params[vehicle_key]['spacing'])
+        # Determine Direction Mode
+        veh_dir = params.get('vehicle_direction', 'Forward') # Forward, Reverse, Both
+        
+        directions_to_run = []
+        if veh_dir == 'Both': directions_to_run = ['Forward', 'Reverse']
+        else: directions_to_run = [veh_dir]
+        
+        steps_out = {'Forward': [], 'Reverse': []}
+        
+        # PREPARE DATA FOR BATCH KERNELS ONCE
+        sp_start_idx = num_supp if params['mode'] == 'Frame' else 0
+        sp_start_x = np.zeros(num_spans)
+        sp_lens = np.zeros(num_spans)
+        sp_el_indices = np.zeros(num_spans, dtype=np.int32)
+        c_x = 0
+        sp_elems_info = [] 
+        for sp_i in range(num_spans):
+            L = params['L_list'][sp_i]
+            el_idx = sp_start_idx + sp_i
+            sp_start_x[sp_i] = c_x
+            sp_lens[sp_i] = L
+            sp_el_indices[sp_i] = el_idx
+            sp_elems_info.append((c_x, L, el_idx))
+            c_x += L
+
+        n_elems = len(elem_objects)
+        el_L = np.zeros(n_elems)
+        el_T = np.zeros((n_elems, 6, 6))
+        el_k_local = np.zeros((n_elems, 6, 6))
+        el_dof_indices = np.zeros((n_elems, 6), dtype=np.int32)
+        
+        for k in range(n_elems):
+            el_obj = elem_objects[k]
+            el_L[k] = el_obj.L
+            el_T[k] = el_obj.T
+            el_k_local[k] = el_obj.k_local
+            ni, nj = elems_base[k]['nodes']
+            idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
+            el_dof_indices[k] = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
+        
+        mesh_sz = params.get('mesh_size', 0.5)
+        max_len = np.max(el_L)
+        n_pts_kernel = max(5, int(max_len / mesh_sz) + 1)
+        S_matrices = kernels.jit_precompute_stress_recovery(n_elems, n_pts_kernel, el_L, el_k_local)
+        env_results_accum = np.zeros((n_elems, n_pts_kernel, 10))
+        
+        # Flag to clear envelope on first run only
+        is_first_run = True
+
+        for current_dir in directions_to_run:
+            if len(v_loads_raw) == 0: continue
+            
+            # Setup Path and Distances based on Direction
             total_len = sum(params['L_list'][:num_spans])
+            max_d = max(v_dists_raw) if len(v_dists_raw) > 0 else 0
             step_val = params.get('step_size', 0.2)
-            x_steps = np.arange(-max(dists)-1.0, total_len + max(dists) + 1.0, step_val)
+            
+            if current_dir == 'Forward':
+                # Standard L -> R
+                x_steps = np.arange(-max_d-1.0, total_len + max_d + 1.0, step_val)
+                v_dists_run = v_dists_raw
+            else:
+                # Reverse R -> L
+                # Vehicle 'Front' moves from (Total + Margin) down to (-Margin)
+                # Axles trail 'behind' in positive X direction, so dists are negative
+                # (Axle Pos = Front_X - (-Dist) = Front_X + Dist)
+                x_steps = np.arange(total_len + max_d + 1.0, -max_d-1.0, -step_val)
+                v_dists_run = -v_dists_raw
+                
             total_steps = len(x_steps)
+            v_steps_res_list = []
             
-            # --- PREPARE DATA FOR BATCH KERNELS ---
-            sp_start_idx = num_supp if params['mode'] == 'Frame' else 0
-            sp_start_x = np.zeros(num_spans)
-            sp_lens = np.zeros(num_spans)
-            sp_el_indices = np.zeros(num_spans, dtype=np.int32)
-            c_x = 0
-            sp_elems_info = [] 
-            for sp_i in range(num_spans):
-                L = params['L_list'][sp_i]
-                el_idx = sp_start_idx + sp_i
-                sp_start_x[sp_i] = c_x
-                sp_lens[sp_i] = L
-                sp_el_indices[sp_i] = el_idx
-                sp_elems_info.append((c_x, L, el_idx))
-                c_x += L
-
-            n_elems = len(elem_objects)
-            el_L = np.zeros(n_elems)
-            el_T = np.zeros((n_elems, 6, 6))
-            el_k_local = np.zeros((n_elems, 6, 6))
-            el_dof_indices = np.zeros((n_elems, 6), dtype=np.int32)
-            
-            for k in range(n_elems):
-                el_obj = elem_objects[k]
-                el_L[k] = el_obj.L
-                el_T[k] = el_obj.T
-                el_k_local[k] = el_obj.k_local
-                ni, nj = elems_base[k]['nodes']
-                idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
-                el_dof_indices[k] = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
-            
-            mesh_sz = params.get('mesh_size', 0.5)
-            max_len = np.max(el_L)
-            n_pts_kernel = max(5, int(max_len / mesh_sz) + 1)
-            S_matrices = kernels.jit_precompute_stress_recovery(n_elems, n_pts_kernel, el_L, el_k_local)
-
-            env_results_accum = np.zeros((n_elems, n_pts_kernel, 10))
             CHUNK_SIZE = 2000
             
             for start_idx in range(0, total_steps, CHUNK_SIZE):
                 end_idx = min(start_idx + CHUNK_SIZE, total_steps)
                 x_chunk = x_steps[start_idx:end_idx]
                 n_chunk = len(x_chunk)
-                is_init = (start_idx == 0)
                 
-                F_chunk = kernels.jit_build_batch_F(NDOF, n_chunk, x_chunk, v_loads, dists, sp_start_x, sp_lens, sp_el_indices, el_L, el_T, el_dof_indices)
+                # Only reset envelope if it is the very first chunk of the very first direction run
+                is_init_chunk = (is_first_run and start_idx == 0)
+                
+                F_chunk = kernels.jit_build_batch_F(NDOF, n_chunk, x_chunk, v_loads_raw, v_dists_run, sp_start_x, sp_lens, sp_el_indices, el_L, el_T, el_dof_indices)
                 D_chunk = K_inv @ F_chunk
                 
                 kernels.jit_envelope_batch_parallel(
                     n_chunk, n_elems, n_pts_kernel,
-                    x_chunk, v_loads, dists,
+                    x_chunk, v_loads_raw, v_dists_run,
                     sp_start_x, sp_lens, sp_el_indices,
                     D_chunk, el_dof_indices, el_T, el_L,
                     S_matrices,
                     env_results_accum, 
-                    is_init
+                    is_init_chunk
                 )
                 
+                # Extract steps for visualization
                 for i_local in range(n_chunk):
-                    global_i = start_idx + i_local
-                    #if global_i % 5 != 0: continue 
+                    # Visualization subsampling to avoid memory overload
+                    # if global_i % 5 != 0: continue 
                     x_front = x_chunk[i_local]
                     D_step = D_chunk[:, i_local]
                     step_loads_map = {}
                     has_loads = False
-                    for ax_i, d in enumerate(dists):
+                    
+                    for ax_i, d in enumerate(v_dists_run):
                         ax_x = x_front - d
                         for (start_x, L_span, el_idx) in sp_elems_info:
                             local_x = ax_x - start_x
                             if 0 <= local_x <= L_span:
-                                P_val = v_loads[ax_i]
+                                P_val = v_loads_raw[ax_i]
                                 if el_idx not in step_loads_map: step_loads_map[el_idx] = []
                                 load_p = {'type': 'point', 'params': [P_val, local_x]}
                                 step_loads_map[el_idx].append(load_p)
@@ -462,8 +494,13 @@ def run_raw_analysis(params, phi_val_override=None):
                                 break
                     if has_loads:
                         step_res = get_detailed_results_optimized(elem_objects, elems_base, nodes, D_step, step_loads_map, params.get('mesh_size', 0.5))
-                        v_steps_res.append({'x': x_front, 'res': step_res})
+                        v_steps_res_list.append({'x': x_front, 'res': step_res})
+            
+            steps_out[current_dir] = v_steps_res_list
+            is_first_run = False # Subsequent directions (Reverse) or chunks should NOT reset envelope
 
+        # Apply Envelope Accumulator to Output Dict
+        if len(v_loads_raw) > 0 and env_to_fill:
             for k in range(n_elems):
                 eid = elems_base[k]['id']
                 t = env_to_fill[eid]
@@ -484,7 +521,7 @@ def run_raw_analysis(params, phi_val_override=None):
                 t['def_y_max'] = np.maximum(t['def_y_max'], interp_res(8))
                 t['def_y_min'] = np.minimum(t['def_y_min'], interp_res(9))
 
-        return v_steps_res
+        return steps_out
 
     steps_A = run_stepping('vehicle', veh_env_A)
     steps_B = run_stepping('vehicleB', veh_env_B)
@@ -495,8 +532,10 @@ def run_raw_analysis(params, phi_val_override=None):
         'Surcharge': res_surch,
         'Vehicle Envelope A': veh_env_A,
         'Vehicle Envelope B': veh_env_B,
-        'Vehicle Steps A': steps_A,
-        'Vehicle Steps B': steps_B,
+        'Vehicle Steps A': steps_A['Forward'], # Legacy key for simple forward
+        'Vehicle Steps A_Rev': steps_A['Reverse'],
+        'Vehicle Steps B': steps_B['Forward'],
+        'Vehicle Steps B_Rev': steps_B['Reverse'],
         'phi_calc': calc_phi,
         'phi_log': phi_log,
         'Reactions': calculate_reactions(nodes, res_sw) 
@@ -632,7 +671,9 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         'Selfweight': out_sw, 'Soil': out_soil, 'Surcharge': out_surch,
         'Vehicle Envelope': out_veh_env, 'Total Envelope': out_total,
         'Vehicle Steps A': raw_res.get('Vehicle Steps A', []),
+        'Vehicle Steps A_Rev': raw_res.get('Vehicle Steps A_Rev', []),
         'Vehicle Steps B': raw_res.get('Vehicle Steps B', []),
+        'Vehicle Steps B_Rev': raw_res.get('Vehicle Steps B_Rev', []),
         'f_vehA': f_vehA, 'f_vehB': f_vehB,
         'phi_calc': phi, 'phi_log': raw_res['phi_log'],
         'Reactions': raw_res.get('Reactions', {})

@@ -67,7 +67,8 @@ def get_def():
         'mesh_size': 0.5, 'step_size': 0.2,
         'name': 'System',
         'last_mode': 'Frame',
-        'combine_surcharge_vehicle': False 
+        'combine_surcharge_vehicle': False,
+        'vehicle_direction': 'Forward'
     }
 
 def get_clear(name_suffix, current_mode):
@@ -95,7 +96,8 @@ def get_clear(name_suffix, current_mode):
         'mesh_size': 0.5, 'step_size': 0.2,
         'name': f"System {name_suffix}",
         'last_mode': current_mode,
-        'combine_surcharge_vehicle': False
+        'combine_surcharge_vehicle': False,
+        'vehicle_direction': 'Forward'
     }
 
 if 'sysA' not in st.session_state: st.session_state['sysA'] = {**get_def(), 'num_spans':1, 'name': "System A"}
@@ -739,6 +741,13 @@ with c_tog:
     st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
     st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
 
+    # --- NEW: VEHICLE DIRECTION ---
+    st.markdown("---")
+    help_dir = "Forward: Left to Right. Reverse: Right to Left (axles inverted). Both: Envelope of both directions."
+    dir_sel = st.radio("Vehicle Direction", ["Forward", "Reverse", "Both"], horizontal=True, index=0, key="veh_dir_radio", help=help_dir)
+    st.session_state['sysA']['vehicle_direction'] = dir_sel
+    st.session_state['sysB']['vehicle_direction'] = dir_sel
+
 show_labels = c3.checkbox("Labels", value=True)
 
 # Combine Results (Only if raw results exist)
@@ -761,19 +770,36 @@ veh_key_res = ""
 
 if view_case == "Vehicle Steps":
     st.markdown("---")
-    c_veh_tog, c_step_slide, c_step_tog = st.columns([1, 2, 1])
+    
+    # Check if we need a direction toggle
+    is_both_active = (st.session_state['sysA']['vehicle_direction'] == 'Both')
+    step_dir_suffix = ""
+    
+    # If "Both" is active, show the toggle
+    if is_both_active:
+        c_veh_tog, c_dir_tog, c_step_slide, c_step_tog = st.columns([1, 1, 2, 1])
+        step_dir_sel = c_dir_tog.radio("Step Direction:", ["Forward", "Reverse"], horizontal=True, key="step_dir_radio")
+        if step_dir_sel == "Reverse": step_dir_suffix = "_Rev"
+    else:
+        # If not "Both", determine if we are in Reverse mode implicitly
+        if st.session_state['sysA']['vehicle_direction'] == 'Reverse':
+             step_dir_suffix = "_Rev"
+        c_veh_tog, c_step_slide, c_step_tog = st.columns([1, 2, 1])
     
     def set_anim_veh(): st.session_state.keep_active_veh_step = st.session_state.anim_veh_radio
     try: av_idx = ["Vehicle A", "Vehicle B"].index(st.session_state.keep_active_veh_step)
     except ValueError: av_idx = 0
     active_veh_step = c_veh_tog.radio("Anim Vehicle:", ["Vehicle A", "Vehicle B"], index=av_idx, horizontal=True, key="anim_veh_radio", on_change=set_anim_veh)
     
-    veh_key_res = "Vehicle Steps A" if active_veh_step == "Vehicle A" else "Vehicle Steps B"
+    # Construct key based on selection
+    base_key = "Vehicle Steps A" if active_veh_step == "Vehicle A" else "Vehicle Steps B"
+    veh_key_res = f"{base_key}{step_dir_suffix}"
+    
     list_A = res_A.get(veh_key_res, [])
     list_B = res_B.get(veh_key_res, [])
     
     if not list_A and not list_B:
-        st.warning(f"No valid steps/vehicle definition found for {active_veh_step}. Please define a valid vehicle.")
+        st.warning(f"No valid steps/vehicle definition found for {active_veh_step} ({'Reverse' if '_Rev' in veh_key_res else 'Forward'}).")
     else:
         max_steps = max(1, len(list_A), len(list_B))
         step_idx = c_step_slide.slider("Step Index", 0, max_steps-1, 0, key="veh_step_slider_persistent")
