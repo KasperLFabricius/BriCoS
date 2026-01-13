@@ -16,6 +16,7 @@ st.markdown("""
 <style>
     .block-container {padding-top: 1rem; padding-bottom: 0rem;}
     div[data-testid="stExpander"] div[role="button"] p {font-size: 1rem; font-weight: bold;}
+    .stSelectbox label { font-size: 0.9rem; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -384,26 +385,41 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     st.markdown("---")
     st.markdown("**Spans (L, I, SW, Material)**")
     
-    h_L = "Length of the span [m]."
-    h_I = "Moment of Inertia [m^4]."
-    h_SW = "Distributed self-weight line load [kN/m]."
-    
     # Ensure lists are long enough
     while len(p['fck_span_list']) < 10: p['fck_span_list'].append(35.0)
     while len(p['E_custom_span']) < 10: p['E_custom_span'].append(34.0)
     while len(p['E_span_list']) < 10: p['E_span_list'].append(34e6)
 
+    # --- ADVANCED SECTION HELPER ---
+    def get_geom_ui_data(prefix_key, i, default_val):
+        key = f"{prefix_key}_{i}"
+        if key not in p:
+            # Init Default: Type=0(I), Shape=0(Const), Val=Default
+            p[key] = {'type': 0, 'shape': 0, 'vals': [default_val, default_val, default_val]}
+        return p[key]
+
     for i in range(n_spans):
         c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
-        p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", help=h_L if i==0 else None)
-        p['Is_list'][i] = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help=h_I if i==0 else None)
-        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help=h_SW if i==0 else None)
+        p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", help="Length of Span" if i==0 else None)
         
-        # MATERIAL COLUMN
+        # Check if advanced geom is active (shape != 0)
+        s_geom = get_geom_ui_data('span_geom', i, p['Is_list'][i])
+        is_adv = (s_geom['shape'] != 0) or (s_geom['type'] != 0)
+        
+        # Simple View Logic: Update list from geom vals
+        if not is_adv:
+            val = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help="Inertia" if i==0 else None)
+            p['Is_list'][i] = val
+            s_geom['vals'] = [val, val, val] # Sync
+        else:
+            c2.text_input(f"I{i+1}", "See Profiler", disabled=True, key=f"{curr}_i{i}_dis")
+
+        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help="Self-weight" if i==0 else None)
+        
+        # MATERIAL
         if is_ec:
             val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_span_list'][i]), key=f"{curr}_fck_s{i}", help=help_mat_col if i==0 else None)
             p['fck_span_list'][i] = val_in
-            # Calc E (GPa) -> Convert to kPa
             E_gpa = 22.0 * ((val_in + 8)/10.0)**0.3
             p['E_span_list'][i] = E_gpa * 1e6
         else:
@@ -416,14 +432,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     st.markdown("**Walls (H, I, Surcharge, Material)**")
     if is_super: st.caption("Mode: Superstructure. Walls and lateral loads are disabled.")
     
-    h_H = "Height of the wall [m]."
-    h_Iw = "Moment of Inertia of the wall [m^4]."
-    h_Sq = "Vertical vehicle surcharge load on the backfill surface [kN/m]. \n\n**Note:** The Dynamic Factor (Phi) is **never** applied to this load."
-    
-    h_S_h = "Vertical height of the soil layer [m]."
-    h_S_qb = "Earth pressure at the bottom of the layer [kN/m^2]."
-    h_S_qt = "Earth pressure at the top of the layer [kN/m^2]."
-
     # Ensure wall lists long enough
     while len(p['fck_wall_list']) < 11: p['fck_wall_list'].append(35.0)
     while len(p['E_custom_wall']) < 11: p['E_custom_wall'].append(34.0)
@@ -432,12 +440,21 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     for i in range(n_spans + 1):
         st.caption(f"Wall {i+1}")
         c1, c2, c3, c4 = st.columns([1,1,1,1])
-        p['h_list'][i] = c1.number_input(f"H [m]", value=float(p['h_list'][i]), disabled=is_super, key=f"{curr}_h{i}", help=h_H if i==0 else None)
-        p['Iw_list'][i] = c2.number_input(f"I [m⁴]", value=float(p['Iw_list'][i]), format="%.4f", disabled=is_super, key=f"{curr}_iw{i}", help=h_Iw if i==0 else None)
+        p['h_list'][i] = c1.number_input(f"H [m]", value=float(p['h_list'][i]), disabled=is_super, key=f"{curr}_h{i}", help="Wall Height" if i==0 else None)
+        
+        w_geom = get_geom_ui_data('wall_geom', i, p['Iw_list'][i])
+        is_adv_w = (w_geom['shape'] != 0) or (w_geom['type'] != 0)
+
+        if not is_adv_w:
+            val_w = c2.number_input(f"I [m⁴]", value=float(p['Iw_list'][i]), format="%.4f", disabled=is_super, key=f"{curr}_iw{i}", help="Inertia" if i==0 else None)
+            p['Iw_list'][i] = val_w
+            w_geom['vals'] = [val_w, val_w, val_w]
+        else:
+            c2.text_input(f"I", "See Profiler", disabled=True, key=f"{curr}_iw{i}_dis")
         
         sur = next((x for x in p['surcharge'] if x['wall_idx']==i), None)
         val_q = sur['q'] if sur else 0.0
-        new_q = c3.number_input(f"Surch. [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help=h_Sq if i==0 else None)
+        new_q = c3.number_input(f"Surch. [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help="Surcharge" if i==0 else None)
         
         if not is_super:
             p['surcharge'] = [x for x in p['surcharge'] if x['wall_idx'] != i]
@@ -458,9 +475,9 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         ex_L = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='L'), None)
         ex_R = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='R'), None)
         c_sl, c_sr = st.columns(2)
-        h_L = c_sl.number_input("H_soil [m]", value=ex_L['h'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_shl{i}", help=h_S_h if i==0 else None)
-        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_L['q_bot'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}", help=h_S_qb if i==0 else None)
-        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_L['q_top'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}", help=h_S_qt if i==0 else None)
+        h_L = c_sl.number_input("H_soil [m]", value=ex_L['h'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_shl{i}", help="Soil Height" if i==0 else None)
+        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_L['q_bot'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}", help="Pressure Bot" if i==0 else None)
+        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_L['q_top'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}", help="Pressure Top" if i==0 else None)
         h_R = c_sr.number_input("H_soil [m]", value=ex_R['h'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_shr{i}")
         qR_bot = c_sr.number_input("q_bot [kN/m²]", value=ex_R['q_bot'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_sqrb{i}")
         qR_top = c_sr.number_input("q_top [kN/m²]", value=ex_R['q_top'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_sqrt{i}")
@@ -469,6 +486,53 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
             p['soil'] = [x for x in p['soil'] if x['wall_idx']!=i]
             if h_L > 0: p['soil'].append({'wall_idx':i, 'face':'L', 'q_bot':qL_bot, 'q_top':qL_top, 'h':h_L})
             if h_R > 0: p['soil'].append({'wall_idx':i, 'face':'R', 'q_bot':qR_bot, 'q_top':qR_top, 'h':h_R})
+
+    # --- SECTION PROFILER ---
+    st.markdown("---")
+    st.markdown("### 🛠️ Section Profiler (Advanced)")
+    st.caption("Configure variable stiffness or height profiles (e.g. haunches, tapers).")
+    
+    # Selector
+    elem_options = [f"Span {i+1}" for i in range(n_spans)] + ([f"Wall {i+1}" for i in range(n_spans+1)] if not is_super else [])
+    sel_el = st.selectbox("Edit Element:", elem_options, key=f"{curr}_prof_sel")
+    
+    # Parse Selection
+    if "Span" in sel_el:
+        idx = int(sel_el.split(" ")[1]) - 1
+        target_geom = p[f"span_geom_{idx}"]
+        target_simple_list = p['Is_list']
+    else:
+        idx = int(sel_el.split(" ")[1]) - 1
+        target_geom = p[f"wall_geom_{idx}"]
+        target_simple_list = p['Iw_list']
+        
+    c_p1, c_p2 = st.columns(2)
+    new_type = c_p1.radio("Definition Mode:", ["Inertia (I)", "Height (H)"], index=target_geom['type'], key=f"{curr}_prof_type", horizontal=True)
+    target_geom['type'] = 0 if "Inertia" in new_type else 1
+    
+    new_shape = c_p2.radio("Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], index=target_geom['shape'], key=f"{curr}_prof_shape", horizontal=True)
+    shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
+    target_geom['shape'] = shape_map[new_shape]
+    
+    vals = target_geom['vals']
+    c_v1, c_v2, c_v3 = st.columns(3)
+    
+    lbl_v = "I [m⁴]" if target_geom['type']==0 else "H [m]"
+    v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1")
+    
+    v2 = vals[1]
+    if target_geom['shape'] == 2:
+        v2 = c_v2.number_input(f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", key=f"{curr}_prof_v2")
+    
+    v3 = vals[2]
+    if target_geom['shape'] >= 1:
+        v3 = c_v3.number_input(f"End {lbl_v}", value=float(vals[2]), format="%.4f", key=f"{curr}_prof_v3")
+        
+    target_geom['vals'] = [v1, v2, v3]
+    
+    # Update simple list (backward compat)
+    target_simple_list[idx] = v1 if target_geom['type']==0 else (1.0 * v1**3)/12.0
+
 
 # --- NEW BOUNDARY CONDITIONS TAB ---
 with st.sidebar.expander("Boundary Conditions", expanded=False):
@@ -744,7 +808,7 @@ else:
     rA = res_A.get(target_key, {})
     rB = res_B.get(target_key, {})
 
-t1, t2 = st.tabs(["Visualization", "Tabular Data"])
+t1, t2, t3 = st.tabs(["Visualization", "Tabular Data", "Summary"])
 name_A = st.session_state['sysA']['name']
 name_B = st.session_state['sysB']['name']
 
@@ -783,6 +847,74 @@ with t1:
         st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B), width="stretch", key="chart_D")
 
 with t2:
+    st.markdown(f"### Detailed Data ({view_case})")
+    
+    detailed_rows = []
+    
+    def process_detailed(r_dict, sys_name):
+        if not r_dict: return
+        for eid, data in r_dict.items():
+            x_vals = data.get('x', [])
+            n_pts = len(x_vals)
+            
+            # Helper to safely get array or fill with zeros
+            def get_arr(key):
+                arr = data.get(key)
+                if arr is None: return np.zeros(n_pts)
+                return arr
+            
+            # If viewing steps, data structure is simpler (M, V, N)
+            if view_case == "Vehicle Steps":
+                m = get_arr('M'); v = get_arr('V'); n = get_arr('N')
+                dx = get_arr('def_x'); dy = get_arr('def_y')
+                for i in range(n_pts):
+                    detailed_rows.append({
+                        "System": sys_name, "Element": eid, "Location [m]": x_vals[i],
+                        "M [kNm]": m[i], "V [kN]": v[i], "N [kN]": n[i],
+                        "Def_X [mm]": dx[i]*1000, "Def_Y [mm]": dy[i]*1000
+                    })
+            else:
+                # Envelopes
+                m_max = get_arr('M_max'); m_min = get_arr('M_min')
+                v_max = get_arr('V_max'); v_min = get_arr('V_min')
+                n_max = get_arr('N_max'); n_min = get_arr('N_min')
+                dx_max = get_arr('def_x_max'); dx_min = get_arr('def_x_min')
+                dy_max = get_arr('def_y_max'); dy_min = get_arr('def_y_min')
+                
+                # Fallback for single-case results like SW which might use M instead of M_max
+                if 'M_max' not in data and 'M' in data:
+                     m_max = data['M']; m_min = data['M']
+                     v_max = data['V']; v_min = data['V']
+                     n_max = data['N']; n_min = data['N']
+                     dx_max = data['def_x']; dx_min = data['def_x']
+                     dy_max = data['def_y']; dy_min = data['def_y']
+
+                for i in range(n_pts):
+                    detailed_rows.append({
+                        "System": sys_name, "Element": eid, "Location [m]": x_vals[i],
+                        "M_max [kNm]": m_max[i], "M_min [kNm]": m_min[i],
+                        "V_max [kN]": v_max[i], "V_min [kN]": v_min[i],
+                        "N_max [kN]": n_max[i], "N_min [kN]": n_min[i],
+                        "Def_X_max [mm]": dx_max[i]*1000, "Def_X_min [mm]": dx_min[i]*1000,
+                        "Def_Y_max [mm]": dy_max[i]*1000, "Def_Y_min [mm]": dy_min[i]*1000
+                    })
+
+    process_detailed(rA, name_A)
+    process_detailed(rB, name_B)
+    
+    if detailed_rows:
+        df_detailed = pd.DataFrame(detailed_rows)
+        st.dataframe(df_detailed, use_container_width=True)
+        st.download_button(
+            "Download Detailed Data (.csv)", 
+            df_detailed.to_csv(index=False).encode('utf-8'), 
+            f"bricos_detailed_{view_case.replace(' ', '_')}.csv", 
+            "text/csv"
+        )
+    else:
+        st.info("No detailed data available for this view.")
+
+with t3:
     st.markdown("### Max/Min Forces per Element")
     def table_gen(res, name):
         d = []
@@ -794,6 +926,13 @@ with t2:
                     "M_max": np.max(v['M_max']), "M_min": np.min(v['M_min']),
                     "V_max": np.max(v['V_max']), "V_min": np.min(v['V_min']),
                     "N_max": np.max(v['N_max']), "N_min": np.min(v['N_min']),
+                })
+            elif 'M' in v:
+                d.append({
+                    "Sys": name, "Elem": eid,
+                    "M_max": np.max(v['M']), "M_min": np.min(v['M']),
+                    "V_max": np.max(v['V']), "V_min": np.min(v['V']),
+                    "N_max": np.max(v['N']), "N_min": np.min(v['N']),
                 })
         return d
     rows = table_gen(rA, name_A) + table_gen(rB, name_B)

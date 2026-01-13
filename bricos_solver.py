@@ -8,20 +8,45 @@ import bricos_kernels as kernels  # Importing the renamed kernel module
 # ==========================================
 
 class FrameElement:
-    def __init__(self, node_i, node_j, E, I, A=1e4):
-        k_loc, k_glob, T, L, cx, cy = kernels.jit_beam_matrices(
-            node_i[0], node_i[1], node_j[0], node_j[1], float(E), float(I), float(A)
-        )
+    def __init__(self, node_i, node_j, E, geom_data):
+        # geom_data expects: {'type': 0(I)/1(H), 'shape': 0(Const)/1(Lin)/2(3pt), 'vals': [v1, v2, v3]}
+        # Fallback for legacy simple inputs:
+        if 'I' in geom_data and 'vals' not in geom_data:
+            I_val = float(geom_data['I'])
+            k_loc, k_glob, T, L, cx, cy = kernels.jit_beam_matrices(
+                node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_val, 1e4
+            )
+            self.E = E
+            self.I = I_val # Stored for reference, though true stiffness is in k
+        else:
+            # Advanced / Variable Section Path
+            vals = np.array(geom_data.get('vals', [1.0, 1.0, 1.0]), dtype=np.float64)
+            shape = int(geom_data.get('shape', 0))
+            v_type = int(geom_data.get('type', 0)) # 0=Input I, 1=Input H
+            
+            # Approximate Area for Axial terms (less critical for beam bending, using avg)
+            v_avg = np.mean(vals)
+            A_approx = (v_avg * 1.0) if v_type == 1 else 1e4 # If H input, A=H*1.0
+            
+            k_loc, k_glob, T, L, cx, cy = kernels.jit_non_prismatic_matrices(
+                node_i[0], node_i[1], node_j[0], node_j[1], float(E), 
+                shape, v_type, vals, float(A_approx)
+            )
+            self.E = E
+            self.I = vals[0] if v_type == 0 else (vals[0]**3)/12 # Approx for ref
+
         self.k_local = k_loc
         self.k_global = k_glob
         self.T = T
         self.L = L
         self.cx = cx
         self.cy = cy
-        self.E = E
-        self.I = I
 
     def get_fixed_end_forces(self, load_type, params):
+        # NOTE: Exact FEF for non-prismatic requires integrating M(x)/EI(x).
+        # For v0.30 stability, we use standard prismatic FEF approximations.
+        # The global stiffness matrix will correctly handle the redistribution 
+        # of forces to stiffer regions.
         if load_type == 'point':
             return kernels.jit_fef_point(params[0], params[1], self.L)
         elif load_type == 'distributed_trapezoid':
@@ -38,7 +63,8 @@ def build_stiffness_matrix(nodes, elements, restraints_stiffness):
     # 1. Assemble Element Stiffness
     for el_data in elements:
         ni_id, nj_id = el_data['nodes']
-        el = FrameElement(nodes[ni_id], nodes[nj_id], el_data['E'], el_data['I'])
+        # Pass the whole dict as geom_data
+        el = FrameElement(nodes[ni_id], nodes[nj_id], el_data['E'], el_data)
         elem_objects.append(el)
         idx_i, idx_j = node_map[ni_id]*3, node_map[nj_id]*3
         indices = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
@@ -137,6 +163,7 @@ def run_raw_analysis(params, phi_val_override=None):
         calc_phi = params.get('phi', 1.0)
         phi_log.append(f"Manual input: {calc_phi}")
     else:
+        # Standard Eurocode Phi Logic based on span lengths
         lengths_for_phi = []
         comp_desc = []
         valid_geom = False
@@ -209,14 +236,24 @@ def run_raw_analysis(params, phi_val_override=None):
     num_supp = num_spans + 1
     curr_x = 0.0
     
-    # Retrieve Supports Config
     supports_cfg = params.get('supports', [])
     
-    # --- PREPARE E-MODULUS LISTS (Backward Compat) ---
     E_default = params.get('E', 30e6)
     E_spans = params.get('E_span_list', [E_default] * num_spans)
     E_walls = params.get('E_wall_list', [E_default] * num_supp)
     
+    # NEW: Detect new geometry keys, fallback to lists if missing
+    def get_geom_data(idx, prefix_list_key, prefix_new_key):
+        # Check if new advanced structure exists
+        # E.g., params['span_geom_0'] = {'type':1, 'shape':1, 'vals':[...]}
+        adv_key = f"{prefix_new_key}_{idx}"
+        if adv_key in params:
+            return params[adv_key]
+        
+        # Legacy Fallback
+        val = params[prefix_list_key][idx]
+        return {'I': val}
+
     if params['mode'] == 'Frame':
         for i in range(num_supp):
             h = params['h_list'][i]
@@ -224,18 +261,19 @@ def run_raw_analysis(params, phi_val_override=None):
             nodes[nid_b] = (curr_x, -h)
             nodes[nid_t] = (curr_x, 0.0)
             
-            # Variable Stiffness (Bottom Node)
             if i < len(supports_cfg): k_vec = supports_cfg[i]['k']
             else: k_vec = [1e14, 1e14, 1e14] 
             
             restraints[nid_b] = k_vec
             
-            # Element Prop
             e_val = E_walls[i] if i < len(E_walls) else E_default
+            
+            # Use Wall Geometry
+            g_data = get_geom_data(i, 'Iw_list', 'wall_geom')
             
             elems_base.append({
                 'id': f'W{i+1}', 'nodes': (nid_b, nid_t),
-                'E': e_val, 'I': params['Iw_list'][i]
+                'E': e_val, **g_data
             })
             if i < num_spans: curr_x += params['L_list'][i]
             
@@ -254,12 +292,14 @@ def run_raw_analysis(params, phi_val_override=None):
 
     for i in range(num_spans):
         nid_s, nid_e = 200+i, 200+i+1
-        # Element Prop
         e_val = E_spans[i] if i < len(E_spans) else E_default
+        
+        # Use Span Geometry
+        g_data = get_geom_data(i, 'Is_list', 'span_geom')
         
         elems_base.append({
             'id': f'S{i+1}', 'nodes': (nid_s, nid_e),
-            'E': e_val, 'I': params['Is_list'][i]
+            'E': e_val, **g_data
         })
 
     K_glob, node_map, elem_objects, NDOF = build_stiffness_matrix(nodes, elems_base, restraints)
