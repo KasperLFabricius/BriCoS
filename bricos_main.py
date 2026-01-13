@@ -32,36 +32,87 @@ if 'keep_view_case' not in st.session_state: st.session_state.keep_view_case = "
 if 'keep_active_veh_step' not in st.session_state: st.session_state.keep_active_veh_step = "Vehicle A"
 if 'keep_step_view_sys' not in st.session_state: st.session_state.keep_step_view_sys = "System A"
 
+def calc_I(h_mm):
+    return (1.0 * (h_mm/1000.0)**3) / 12.0
+
+def load_vehicle_from_csv(target_name):
+    """Attempts to read a specific vehicle from CSV. Returns dict or None."""
+    try:
+        if os.path.exists("vehicles.csv"):
+            df = pd.read_csv("vehicles.csv")
+            # Strip whitespace from columns
+            df.columns = [c.strip() for c in df.columns]
+            
+            # Look for name
+            row = df[df['Name'] == target_name]
+            if not row.empty:
+                l_str = str(row.iloc[0]['Loads'])
+                s_str = str(row.iloc[0]['Spacing'])
+                
+                # Parse to arrays
+                l_arr = [float(x) for x in l_str.split(',')]
+                s_arr = [float(x) for x in s_str.split(',')]
+                
+                return {
+                    'loads': l_arr, 'spacing': s_arr,
+                    'l_str': l_str, 's_str': s_str
+                }
+    except:
+        pass
+    return None
+
 def get_def():
-    # 'supports' list will store dicts: {'type': 'Fixed', 'k': [1e14, 1e14, 1e14]}
+    # Updated Defaults based on User Request
+    I_def = calc_I(500)
+    
+    # Attempt to load Class 100
+    def_veh = load_vehicle_from_csv("Class 100")
+    
+    if def_veh:
+        veh_obj = {'loads': def_veh['loads'], 'spacing': def_veh['spacing']}
+        veh_l_str = def_veh['l_str']
+        veh_s_str = def_veh['s_str']
+    else:
+        # Fallback if CSV missing or Class 100 not found
+        veh_obj = {'loads': [100.0], 'spacing': [0.0]}
+        veh_l_str = "100.0"
+        veh_s_str = "0.0"
+
     return {
-        'mode': 'Frame', 'E': 30e6, 'num_spans': 2,
-        'L_list': [10.44, 13.67] + [10.0]*8,
-        'Is_list': [0.1300, 0.0600] + [0.01]*8,
-        'sw_list': [85.55, 74.30] + [15.0]*8,
-        'h_list': [8.29, 8.29, 13.00] + [4.0]*8,
-        'Iw_list': [0.0800, 0.0850, 0.0900] + [0.005]*8,
-        # Material Properties (Default C35/45 -> fck=35, E ~34 GPa)
+        'mode': 'Frame', 
+        'E': 33e6, # Approx C30
+        'num_spans': 1,
+        'L_list': [10.0]*10,
+        'Is_list': [I_def]*10,
+        'sw_list': [20.0]*10,
+        'h_list': [8.0]*11,
+        'Iw_list': [I_def]*11,
+        # Material Properties (C30 -> fck=30)
         'e_mode': 'Eurocode',
-        'fck_span_list': [35.0]*10,
-        'fck_wall_list': [35.0]*11,
-        'E_custom_span': [34.0]*10, # GPa
-        'E_custom_wall': [34.0]*11, # GPa
-        'E_span_list': [34e6]*10,   # kPa (Computed sent to solver)
-        'E_wall_list': [34e6]*11,   # kPa (Computed sent to solver)
+        'fck_span_list': [30.0]*10,
+        'fck_wall_list': [30.0]*11,
+        'E_custom_span': [33.0]*10, 
+        'E_custom_wall': [33.0]*11,
+        'E_span_list': [33e6]*10,
+        'E_wall_list': [33e6]*11,
         
         'supports': [], 
-        'soil': [],
-        'surcharge': [{'wall_idx':1, 'face':'R', 'q':72.73, 'h':8.29}, {'wall_idx':2, 'face':'R', 'q':72.73, 'h':13.00}], 
-        'vehicle': {'loads': [7,7,9.5,9.5,17.8,17.8,17.8,17.8,17.8,17.8,17.8], 'spacing': [0,1.4,3.2,1.4,6.0,1.4,1.4,1.4,1.4,1.4,1.4]},
-        'vehicle_loads': "7,7,9.5,9.5,17.8,17.8,17.8,17.8,17.8,17.8,17.8", 
-        'vehicle_space': "0,1.4,3.2,1.4,6.0,1.4,1.4,1.4,1.4,1.4,1.4",
+        'soil': [], # Populated in init
+        'surcharge': [], 
+        
+        # Default Vehicle A
+        'vehicle': veh_obj, 
+        'vehicle_loads': veh_l_str, 
+        'vehicle_space': veh_s_str,
+        
         'vehicleB': {'loads': [], 'spacing': []},
         'vehicleB_loads': "", 
         'vehicleB_space': "",
+        
         'KFI': 1.1, 
         'gamma_g': 1.0, 'gamma_j': 1.0, 
-        'gamma_veh': 1.4, 'gamma_vehB': 1.4, 'phi': 1.0, 'scale_manual': 2.0,
+        'gamma_veh': 1.4, 'gamma_vehB': 1.05, 
+        'phi': 1.0, 'scale_manual': 2.0,
         'phi_mode': 'Calculate',
         'mesh_size': 0.5, 'step_size': 0.2,
         'name': 'System',
@@ -77,9 +128,9 @@ def get_clear(name_suffix, current_mode):
         'L_list': [0.0]*10, 'Is_list': [0.0]*10, 'sw_list': [0.0]*10,
         'h_list': [0.0]*11, 'Iw_list': [0.0]*11,
         'e_mode': 'Eurocode',
-        'fck_span_list': [35.0]*10, 'fck_wall_list': [35.0]*11,
-        'E_custom_span': [34.0]*10, 'E_custom_wall': [34.0]*11,
-        'E_span_list': [34e6]*10, 'E_wall_list': [34e6]*11,
+        'fck_span_list': [30.0]*10, 'fck_wall_list': [30.0]*11,
+        'E_custom_span': [33.0]*10, 'E_custom_wall': [33.0]*11,
+        'E_span_list': [33e6]*10, 'E_wall_list': [33e6]*11,
         
         'supports': [],
         'soil': [],
@@ -99,8 +150,35 @@ def get_clear(name_suffix, current_mode):
         'vehicle_direction': 'Forward'
     }
 
-if 'sysA' not in st.session_state: st.session_state['sysA'] = {**get_def(), 'num_spans':1, 'name': "System A"}
-if 'sysB' not in st.session_state: st.session_state['sysB'] = {**get_def(), 'num_spans':2, 'name': "System B"}
+# --- INITIALIZATION WITH SPECIFIC DEFAULTS ---
+if 'sysA' not in st.session_state: 
+    # System A: 1 Span, Soil on Wall 0 and 1
+    d = get_def()
+    d['num_spans'] = 1
+    d['name'] = "System A"
+    d['soil'] = [
+        {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+        {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+        {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+        {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}
+    ]
+    st.session_state['sysA'] = d
+    # Trigger Vehicle Select later in UI section logic
+
+if 'sysB' not in st.session_state: 
+    # System B: 2 Spans, Soil on Wall 0 and 2 (Skip Wall 1)
+    d = get_def()
+    d['num_spans'] = 2
+    d['name'] = "System B"
+    d['soil'] = [
+        {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+        {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+        # Wall 2 is end wall for 2-span bridge
+        {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+        {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}
+    ]
+    st.session_state['sysB'] = d
+
 if 'name' not in st.session_state['sysA']: st.session_state['sysA']['name'] = "System A"
 if 'name' not in st.session_state['sysB']: st.session_state['sysB']['name'] = "System B"
 
@@ -112,7 +190,7 @@ for sys_k in ['sysA', 'sysB']:
         st.session_state[sys_k]['vehicleB'] = {'loads': [], 'spacing': []}
         st.session_state[sys_k]['vehicleB_loads'] = ""
         st.session_state[sys_k]['vehicleB_space'] = ""
-        st.session_state[sys_k]['gamma_vehB'] = 1.4
+        st.session_state[sys_k]['gamma_vehB'] = 1.05
     if 'last_mode' not in st.session_state[sys_k]:
          st.session_state[sys_k]['last_mode'] = st.session_state[sys_k]['mode']
     if 'supports' not in st.session_state[sys_k]:
@@ -120,12 +198,12 @@ for sys_k in ['sysA', 'sysB']:
     
     # Material Migration
     if 'e_mode' not in st.session_state[sys_k]: st.session_state[sys_k]['e_mode'] = 'Eurocode'
-    if 'fck_span_list' not in st.session_state[sys_k]: st.session_state[sys_k]['fck_span_list'] = [35.0]*10
-    if 'fck_wall_list' not in st.session_state[sys_k]: st.session_state[sys_k]['fck_wall_list'] = [35.0]*11
-    if 'E_custom_span' not in st.session_state[sys_k]: st.session_state[sys_k]['E_custom_span'] = [34.0]*10
-    if 'E_custom_wall' not in st.session_state[sys_k]: st.session_state[sys_k]['E_custom_wall'] = [34.0]*11
-    if 'E_span_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_span_list'] = [34e6]*10
-    if 'E_wall_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_wall_list'] = [34e6]*11
+    if 'fck_span_list' not in st.session_state[sys_k]: st.session_state[sys_k]['fck_span_list'] = [30.0]*10
+    if 'fck_wall_list' not in st.session_state[sys_k]: st.session_state[sys_k]['fck_wall_list'] = [30.0]*11
+    if 'E_custom_span' not in st.session_state[sys_k]: st.session_state[sys_k]['E_custom_span'] = [33.0]*10
+    if 'E_custom_wall' not in st.session_state[sys_k]: st.session_state[sys_k]['E_custom_wall'] = [33.0]*11
+    if 'E_span_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_span_list'] = [33e6]*10
+    if 'E_wall_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_wall_list'] = [33e6]*11
     
     # Remove old keys
     st.session_state[sys_k].pop('k_rot', None)
@@ -182,18 +260,39 @@ with st.sidebar.expander("Reset Data", expanded=False):
                 st.session_state[f"{target_key}_nsp"] = new_data['num_spans']
                 st.session_state[f"{target_key}_md_sel"] = new_data['mode']
                 st.session_state[f"{target_key}_kfi"] = new_data['KFI']
+                # Reset vehicle dropdowns
+                st.session_state[f"{target_key}_vehA_class"] = "Class 100"
+                st.session_state[f"{target_key}_vehB_class"] = "Custom"
+                st.session_state[f"{target_key}_vehA_class_last"] = None
+                
                 prefix = f"{target_key}_"
-                keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix)]
+                keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix) and 'veh' not in k]
                 for k in keys_to_del: del st.session_state[k]
 
             if mode == "A" or mode == "ALL":
                 current_mode = st.session_state['sysA']['mode']
-                data = {**get_def(), 'num_spans':1, 'name': "System A"} if action == "restore" else get_clear("A", current_mode)
+                data = {**get_def(), 'num_spans':1, 'name': "System A"}
+                # Re-apply A specific soil
+                data['soil'] = [
+                    {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+                    {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+                    {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+                    {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}
+                ]
+                if action == "clear": data = get_clear("A", current_mode)
                 reset_system_state("sysA", data)
                 
             if mode == "B" or mode == "ALL":
                 current_mode = st.session_state['sysB']['mode']
-                data = {**get_def(), 'num_spans':2, 'name': "System B"} if action == "restore" else get_clear("B", current_mode)
+                data = {**get_def(), 'num_spans':2, 'name': "System B"}
+                # Re-apply B specific soil
+                data['soil'] = [
+                    {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+                    {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+                    {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+                    {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}
+                ]
+                if action == "clear": data = get_clear("B", current_mode)
                 reset_system_state("sysB", data)
                 
             st.session_state.reset_mode = None
@@ -402,9 +501,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         key = f"{prefix_key}_{i}"
         if key not in p:
             # Init Default: Type=0(I), Shape=0(Const), Val=Default
-            # align_type: 0=Flat, 1=Inclined
-            # incline_mode: 0=Slope, 1=DeltaH
-            # incline_val: Value
             p[key] = {
                 'type': 0, 'shape': 0, 'vals': [default_val, default_val, default_val],
                 'align_type': 0, 'incline_mode': 0, 'incline_val': 0.0
@@ -643,7 +739,17 @@ with st.sidebar.expander("Vehicle Definitions", expanded=True):
     veh_options, veh_data = get_vehicle_library()
     
     def handle_veh_inputs(prefix, key_class, key_loads, key_space, struct_key):
-        sel_class = st.selectbox(f"Class {prefix}", veh_options, key=key_class)
+        # Allow default override via session state (from Reset/Init logic)
+        sess_key = f"{curr}_{prefix}_class"
+        if sess_key not in st.session_state: st.session_state[sess_key] = "Custom"
+        
+        # Sync Class 100 on First Load if needed
+        if st.session_state[sess_key] == "Class 100" and st.session_state[sess_key] in veh_data and not p[struct_key]['loads']:
+             p[key_loads] = veh_data["Class 100"]['loads']
+             p[key_space] = veh_data["Class 100"]['spacing']
+             # trigger rerun is risky inside render loop, rely on user interaction or next frame
+        
+        sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key)
         input_key_l = f"{curr}_{prefix}_loads_input"
         input_key_s = f"{curr}_{prefix}_space_input"
         if input_key_l not in st.session_state: st.session_state[input_key_l] = p[key_loads]
