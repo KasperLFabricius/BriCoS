@@ -49,7 +49,8 @@ def get_def():
         'phi_mode': 'Calculate',
         'mesh_size': 0.5, 'step_size': 0.2,
         'name': 'System',
-        'last_mode': 'Frame'
+        'last_mode': 'Frame',
+        'combine_surcharge_vehicle': False 
     }
 
 def get_clear(name_suffix, current_mode):
@@ -71,7 +72,8 @@ def get_clear(name_suffix, current_mode):
         'phi_mode': 'Manual', 
         'mesh_size': 0.5, 'step_size': 0.2,
         'name': f"System {name_suffix}",
-        'last_mode': current_mode
+        'last_mode': current_mode,
+        'combine_surcharge_vehicle': False
     }
 
 if 'sysA' not in st.session_state: st.session_state['sysA'] = {**get_def(), 'num_spans':1, 'name': "System A"}
@@ -142,8 +144,6 @@ with st.sidebar.expander("Reset Data", expanded=False):
                 st.session_state[f"{target_key}_nsp"] = new_data['num_spans']
                 st.session_state[f"{target_key}_md_sel"] = new_data['mode']
                 st.session_state[f"{target_key}_kfi"] = new_data['KFI']
-                # UI Keys Reset (Spans, Walls, Gammas, etc. would go here - simplified for brevity)
-                # ... [Full UI reset logic identical to original script] ...
                 prefix = f"{target_key}_"
                 keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix)]
                 for k in keys_to_del: del st.session_state[k]
@@ -471,15 +471,6 @@ result_mode_val = st.session_state['result_mode']
 raw_res_A, nodes_A, peak_A = solver.run_raw_analysis(st.session_state['sysA'])
 raw_res_B, nodes_B, peak_B = solver.run_raw_analysis(st.session_state['sysB'])
 
-res_A = solver.combine_results(raw_res_A, st.session_state['sysA'], result_mode_val)
-res_B = solver.combine_results(raw_res_B, st.session_state['sysB'], result_mode_val)
-
-if p.get('phi_mode', 'Calculate') == 'Calculate':
-    active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
-    with phi_log_placeholder.container():
-        with st.expander("Phi Calculation Log", expanded=False):
-            for log_line in active_raw_res.get('phi_log', []): st.caption(log_line)
-
 c1, c2, c3, c4 = st.columns([1,1,1,2])
 man_scale = c2.number_input("Target Diagram Height [m]", value=st.session_state['sysA'].get('scale_manual', 2.0), format="%.2f")
 st.session_state['sysA']['scale_manual'] = man_scale
@@ -504,8 +495,23 @@ c_tog, _ = st.columns([1,1])
 with c_tog:
     st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dyn)"], horizontal=True, key="result_mode_radio")
     st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], horizontal=True, key="surcharge_combo_radio")
+    
+    # === BUG FIX: INJECT COMBO STATE INTO SYSTEMS ===
+    is_simultaneous = (st.session_state["surcharge_combo_radio"] == "Simultaneous (Vehicle + Surcharge)")
+    st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
+    st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
 
 show_labels = c3.checkbox("Labels", value=True)
+
+# Combine Results (Moved after combo injection)
+res_A = solver.combine_results(raw_res_A, st.session_state['sysA'], result_mode_val)
+res_B = solver.combine_results(raw_res_B, st.session_state['sysB'], result_mode_val)
+
+if p.get('phi_mode', 'Calculate') == 'Calculate':
+    active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
+    with phi_log_placeholder.container():
+        with st.expander("Phi Calculation Log", expanded=False):
+            for log_line in active_raw_res.get('phi_log', []): st.caption(log_line)
 
 # Prepare Plot Data
 rA, rB = {}, {}
