@@ -209,8 +209,13 @@ def run_raw_analysis(params, phi_val_override=None):
     num_supp = num_spans + 1
     curr_x = 0.0
     
-    # Retrieve Supports Config (Default to empty list if key missing)
+    # Retrieve Supports Config
     supports_cfg = params.get('supports', [])
+    
+    # --- PREPARE E-MODULUS LISTS (Backward Compat) ---
+    E_default = params.get('E', 30e6)
+    E_spans = params.get('E_span_list', [E_default] * num_spans)
+    E_walls = params.get('E_wall_list', [E_default] * num_supp)
     
     if params['mode'] == 'Frame':
         for i in range(num_supp):
@@ -219,18 +224,18 @@ def run_raw_analysis(params, phi_val_override=None):
             nodes[nid_b] = (curr_x, -h)
             nodes[nid_t] = (curr_x, 0.0)
             
-            # --- APPLY VARIABLE STIFFNESS (Bottom Node) ---
-            # If supports_cfg has data for this index, use it. Otherwise default to Fixed.
-            if i < len(supports_cfg):
-                k_vec = supports_cfg[i]['k']
-            else:
-                k_vec = [1e14, 1e14, 1e14] # Default fallback
+            # Variable Stiffness (Bottom Node)
+            if i < len(supports_cfg): k_vec = supports_cfg[i]['k']
+            else: k_vec = [1e14, 1e14, 1e14] 
             
             restraints[nid_b] = k_vec
             
+            # Element Prop
+            e_val = E_walls[i] if i < len(E_walls) else E_default
+            
             elems_base.append({
                 'id': f'W{i+1}', 'nodes': (nid_b, nid_t),
-                'E': params['E'], 'I': params['Iw_list'][i]
+                'E': e_val, 'I': params['Iw_list'][i]
             })
             if i < num_spans: curr_x += params['L_list'][i]
             
@@ -239,23 +244,22 @@ def run_raw_analysis(params, phi_val_override=None):
             nid_t = 200+i
             nodes[nid_t] = (curr_x, 0.0)
             
-            # --- APPLY VARIABLE STIFFNESS (Deck Node) ---
-            if i < len(supports_cfg):
-                k_vec = supports_cfg[i]['k']
+            if i < len(supports_cfg): k_vec = supports_cfg[i]['k']
             else:
-                # Default fallback for Superstructure (Pinned start, Roller others)
                 if i == 0: k_vec = [1e14, 1e14, 0.0]
                 else: k_vec = [0.0, 1e14, 0.0]
                 
             restraints[nid_t] = k_vec
-            
             if i < num_spans: curr_x += params['L_list'][i]
 
     for i in range(num_spans):
         nid_s, nid_e = 200+i, 200+i+1
+        # Element Prop
+        e_val = E_spans[i] if i < len(E_spans) else E_default
+        
         elems_base.append({
             'id': f'S{i+1}', 'nodes': (nid_s, nid_e),
-            'E': params['E'], 'I': params['Is_list'][i]
+            'E': e_val, 'I': params['Is_list'][i]
         })
 
     K_glob, node_map, elem_objects, NDOF = build_stiffness_matrix(nodes, elems_base, restraints)
@@ -264,7 +268,6 @@ def run_raw_analysis(params, phi_val_override=None):
     try:
         K_inv = np.linalg.inv(K_glob)
     except np.linalg.LinAlgError:
-        # Stop execution immediately if singular (Mechanism / Unstable)
         raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
 
     def solve_static(loads_dict):
@@ -456,7 +459,7 @@ def run_raw_analysis(params, phi_val_override=None):
         'Vehicle Steps B': steps_B,
         'phi_calc': calc_phi,
         'phi_log': phi_log,
-        'Reactions': calculate_reactions(nodes, res_sw) # Simplification, react calc needs more detail for env
+        'Reactions': calculate_reactions(nodes, res_sw) 
     }, nodes, 0
 
 def combine_results(raw_res, params, result_mode="Design (ULS)"):

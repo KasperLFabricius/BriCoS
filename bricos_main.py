@@ -35,6 +35,15 @@ def get_def():
         'sw_list': [85.55, 74.30] + [15.0]*8,
         'h_list': [8.29, 8.29, 13.00] + [4.0]*8,
         'Iw_list': [0.0800, 0.0850, 0.0900] + [0.005]*8,
+        # Material Properties (Default C35/45 -> fck=35, E ~34 GPa)
+        'e_mode': 'Eurocode',
+        'fck_span_list': [35.0]*10,
+        'fck_wall_list': [35.0]*11,
+        'E_custom_span': [34.0]*10, # GPa
+        'E_custom_wall': [34.0]*11, # GPa
+        'E_span_list': [34e6]*10,   # kPa (Computed sent to solver)
+        'E_wall_list': [34e6]*11,   # kPa (Computed sent to solver)
+        
         'supports': [], 
         'soil': [],
         'surcharge': [{'wall_idx':1, 'face':'R', 'q':72.73, 'h':8.29}, {'wall_idx':2, 'face':'R', 'q':72.73, 'h':13.00}], 
@@ -60,6 +69,11 @@ def get_clear(name_suffix, current_mode):
         'E': 30e6, 'num_spans': 1,
         'L_list': [0.0]*10, 'Is_list': [0.0]*10, 'sw_list': [0.0]*10,
         'h_list': [0.0]*11, 'Iw_list': [0.0]*11,
+        'e_mode': 'Eurocode',
+        'fck_span_list': [35.0]*10, 'fck_wall_list': [35.0]*11,
+        'E_custom_span': [34.0]*10, 'E_custom_wall': [34.0]*11,
+        'E_span_list': [34e6]*10, 'E_wall_list': [34e6]*11,
+        
         'supports': [],
         'soil': [],
         'surcharge': [], 
@@ -95,7 +109,17 @@ for sys_k in ['sysA', 'sysB']:
          st.session_state[sys_k]['last_mode'] = st.session_state[sys_k]['mode']
     if 'supports' not in st.session_state[sys_k]:
          st.session_state[sys_k]['supports'] = []
-    # Remove old keys if they exist to keep state clean
+    
+    # Material Migration
+    if 'e_mode' not in st.session_state[sys_k]: st.session_state[sys_k]['e_mode'] = 'Eurocode'
+    if 'fck_span_list' not in st.session_state[sys_k]: st.session_state[sys_k]['fck_span_list'] = [35.0]*10
+    if 'fck_wall_list' not in st.session_state[sys_k]: st.session_state[sys_k]['fck_wall_list'] = [35.0]*11
+    if 'E_custom_span' not in st.session_state[sys_k]: st.session_state[sys_k]['E_custom_span'] = [34.0]*10
+    if 'E_custom_wall' not in st.session_state[sys_k]: st.session_state[sys_k]['E_custom_wall'] = [34.0]*11
+    if 'E_span_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_span_list'] = [34e6]*10
+    if 'E_wall_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_wall_list'] = [34e6]*11
+    
+    # Remove old keys
     st.session_state[sys_k].pop('k_rot', None)
     st.session_state[sys_k].pop('k_rot_super', None)
 
@@ -296,6 +320,10 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
         p['last_mode'] = new_mode_sel
         st.rerun()
     
+    help_mat = "Choose method for Elastic Modulus (E) definition:\n- Eurocode: Calculate E from f_ck (Ecm = 22 * (fcm/10)^0.3)\n- Manual: Enter E directly in GPa."
+    e_mode = st.radio("Material Definition", ["Eurocode (f_ck)", "Manual (E-Modulus)"], horizontal=True, index=0 if p['e_mode']=='Eurocode' else 1, key=f"{curr}_emode", help=help_mat)
+    p['e_mode'] = "Eurocode" if "Eurocode" in e_mode else "Manual"
+
     help_kfi = "Consequence Class Factor (KFI) applied to all loads."
     p['KFI'] = st.selectbox("KFI (Consequence Class)", [0.9, 1.0, 1.1], index=2, key=f"{curr}_kfi", help=help_kfi)
     
@@ -347,22 +375,45 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
 with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     n_spans = st.number_input("Number of Spans", 1, 10, p['num_spans'], key=f"{curr}_nsp")
     p['num_spans'] = n_spans
+    
+    # Material Header logic
+    is_ec = (p['e_mode'] == 'Eurocode')
+    lbl_mat = "f_ck [MPa]" if is_ec else "E [GPa]"
+    help_mat_col = "Concrete Cylinder Strength (f_ck)." if is_ec else "Elastic Modulus (Young's Modulus)."
+    
     st.markdown("---")
-    st.markdown("**Spans (L, I, SW)**")
+    st.markdown("**Spans (L, I, SW, Material)**")
     
     h_L = "Length of the span [m]."
     h_I = "Moment of Inertia [m^4]."
     h_SW = "Distributed self-weight line load [kN/m]."
     
+    # Ensure lists are long enough
+    while len(p['fck_span_list']) < 10: p['fck_span_list'].append(35.0)
+    while len(p['E_custom_span']) < 10: p['E_custom_span'].append(34.0)
+    while len(p['E_span_list']) < 10: p['E_span_list'].append(34e6)
+
     for i in range(n_spans):
-        c1, c2, c3 = st.columns([1, 1, 1])
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
         p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", help=h_L if i==0 else None)
         p['Is_list'][i] = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help=h_I if i==0 else None)
         p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help=h_SW if i==0 else None)
         
+        # MATERIAL COLUMN
+        if is_ec:
+            val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_span_list'][i]), key=f"{curr}_fck_s{i}", help=help_mat_col if i==0 else None)
+            p['fck_span_list'][i] = val_in
+            # Calc E (GPa) -> Convert to kPa
+            E_gpa = 22.0 * ((val_in + 8)/10.0)**0.3
+            p['E_span_list'][i] = E_gpa * 1e6
+        else:
+            val_in = c4.number_input(f"{lbl_mat}", value=float(p['E_custom_span'][i]), key=f"{curr}_Eman_s{i}", help=help_mat_col if i==0 else None)
+            p['E_custom_span'][i] = val_in
+            p['E_span_list'][i] = val_in * 1e6
+        
     is_super = (p['mode'] == 'Superstructure')
     st.markdown("---")
-    st.markdown("**Walls (H, I, Surcharge, Soil)**")
+    st.markdown("**Walls (H, I, Surcharge, Material)**")
     if is_super: st.caption("Mode: Superstructure. Walls and lateral loads are disabled.")
     
     h_H = "Height of the wall [m]."
@@ -373,20 +424,36 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     h_S_qb = "Earth pressure at the bottom of the layer [kN/m^2]."
     h_S_qt = "Earth pressure at the top of the layer [kN/m^2]."
 
+    # Ensure wall lists long enough
+    while len(p['fck_wall_list']) < 11: p['fck_wall_list'].append(35.0)
+    while len(p['E_custom_wall']) < 11: p['E_custom_wall'].append(34.0)
+    while len(p['E_wall_list']) < 11: p['E_wall_list'].append(34e6)
+
     for i in range(n_spans + 1):
         st.caption(f"Wall {i+1}")
-        c1, c2, c3 = st.columns([1,1,2])
+        c1, c2, c3, c4 = st.columns([1,1,1,1])
         p['h_list'][i] = c1.number_input(f"H [m]", value=float(p['h_list'][i]), disabled=is_super, key=f"{curr}_h{i}", help=h_H if i==0 else None)
         p['Iw_list'][i] = c2.number_input(f"I [m⁴]", value=float(p['Iw_list'][i]), format="%.4f", disabled=is_super, key=f"{curr}_iw{i}", help=h_Iw if i==0 else None)
         
         sur = next((x for x in p['surcharge'] if x['wall_idx']==i), None)
         val_q = sur['q'] if sur else 0.0
-        new_q = c3.number_input(f"Surcharge [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help=h_Sq if i==0 else None)
+        new_q = c3.number_input(f"Surch. [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help=h_Sq if i==0 else None)
         
         if not is_super:
             p['surcharge'] = [x for x in p['surcharge'] if x['wall_idx'] != i]
             if new_q != 0: 
                 p['surcharge'].append({'wall_idx':i, 'face':'R', 'q':new_q, 'h':p['h_list'][i]})
+
+        # MATERIAL COLUMN WALL
+        if is_ec:
+            val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_wall_list'][i]), disabled=is_super, key=f"{curr}_fck_w{i}", help=help_mat_col if i==0 else None)
+            p['fck_wall_list'][i] = val_in
+            E_gpa = 22.0 * ((val_in + 8)/10.0)**0.3
+            p['E_wall_list'][i] = E_gpa * 1e6
+        else:
+            val_in = c4.number_input(f"{lbl_mat}", value=float(p['E_custom_wall'][i]), disabled=is_super, key=f"{curr}_Eman_w{i}", help=help_mat_col if i==0 else None)
+            p['E_custom_wall'][i] = val_in
+            p['E_wall_list'][i] = val_in * 1e6
 
         ex_L = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='L'), None)
         ex_R = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='R'), None)
