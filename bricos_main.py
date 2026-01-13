@@ -263,7 +263,8 @@ p = st.session_state[curr]
 
 # --- MAIN INPUTS ---
 with st.sidebar.expander("Design Factors & Type", expanded=True):
-    new_mode_sel = st.selectbox("Model Type", ["Frame", "Superstructure"], index=0 if p['mode']=='Frame' else 1, key=f"{curr}_md_sel")
+    help_mode = "Choose 'Frame' for full interaction (Walls + Slab) or 'Superstructure' for a simplified slab-on-supports analysis."
+    new_mode_sel = st.selectbox("Model Type", ["Frame", "Superstructure"], index=0 if p['mode']=='Frame' else 1, key=f"{curr}_md_sel", help=help_mode)
     
     old_mode = p.get('last_mode', 'Frame')
     if old_mode != new_mode_sel:
@@ -289,20 +290,25 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
         p['last_mode'] = new_mode_sel
         st.rerun()
     
-    p['KFI'] = st.selectbox("KFI (Consequence Class)", [0.9, 1.0, 1.1], index=2, key=f"{curr}_kfi")
+    help_kfi = "Consequence Class Factor (KFI) applied to variable loads (Traffic, Surcharge)."
+    p['KFI'] = st.selectbox("KFI (Consequence Class)", [0.9, 1.0, 1.1], index=2, key=f"{curr}_kfi", help=help_kfi)
     
     gg_opts = [0.9, 1.0, 1.10, 1.25]
     c_gg, c_gj = st.columns(2)
     gg_val = p.get('gamma_g', 1.0)
     idx_gg = gg_opts.index(gg_val) if gg_val in gg_opts else len(gg_opts)
-    gg_sel = c_gg.selectbox(r"$\gamma_{g}$ (Self-weight)", gg_opts + ["Custom"], index=min(idx_gg, len(gg_opts)), key=f"{curr}_gg_sel")
+    
+    help_gg = "Partial factor for permanent self-weight loads."
+    gg_sel = c_gg.selectbox(r"$\gamma_{g}$ (Self-weight)", gg_opts + ["Custom"], index=min(idx_gg, len(gg_opts)), key=f"{curr}_gg_sel", help=help_gg)
     if gg_sel == "Custom": p['gamma_g'] = c_gg.number_input(r"Custom $\gamma_{g}$", value=float(gg_val), key=f"{curr}_gg_cust")
     else: p['gamma_g'] = float(gg_sel)
 
     gj_opts = [1.0, 1.1]
     gj_val = p.get('gamma_j', 1.0)
     idx_gj = gj_opts.index(gj_val) if gj_val in gj_opts else len(gj_opts)
-    gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts + ["Custom"], index=min(idx_gj, len(gj_opts)), key=f"{curr}_gj_sel")
+    
+    help_gj = "Partial factor for permanent soil loads (Earth Pressure)."
+    gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts + ["Custom"], index=min(idx_gj, len(gj_opts)), key=f"{curr}_gj_sel", help=help_gj)
     if gj_sel == "Custom": p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust")
     else: p['gamma_j'] = float(gj_sel)
 
@@ -310,17 +316,22 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
     c_ga, c_gb = st.columns(2)
     gam_valA = p.get('gamma_veh', 1.0)
     idx_gamA = gam_opts.index(gam_valA) if gam_valA in gam_opts else len(gam_opts)
-    gam_selA = c_ga.selectbox(r"$\gamma_{veh,A}$", gam_opts + ["Custom"], index=min(idx_gamA, len(gam_opts)), key=f"{curr}_gamA_sel")
+    
+    help_gamA = "Partial factor for variable traffic loads (Vehicle A)."
+    gam_selA = c_ga.selectbox(r"$\gamma_{veh,A}$", gam_opts + ["Custom"], index=min(idx_gamA, len(gam_opts)), key=f"{curr}_gamA_sel", help=help_gamA)
     if gam_selA == "Custom": p['gamma_veh'] = c_ga.number_input(r"Custom $\gamma_{A}$", value=float(gam_valA), key=f"{curr}_gamA_cust")
     else: p['gamma_veh'] = float(gam_selA)
 
     gam_valB = p.get('gamma_vehB', 1.0)
     idx_gamB = gam_opts.index(gam_valB) if gam_valB in gam_opts else len(gam_opts)
-    gam_selB = c_gb.selectbox(r"$\gamma_{veh,B}$", gam_opts + ["Custom"], index=min(idx_gamB, len(gam_opts)), key=f"{curr}_gamB_sel")
+    
+    help_gamB = "Partial factor for variable traffic loads (Vehicle B)."
+    gam_selB = c_gb.selectbox(r"$\gamma_{veh,B}$", gam_opts + ["Custom"], index=min(idx_gamB, len(gam_opts)), key=f"{curr}_gamB_sel", help=help_gamB)
     if gam_selB == "Custom": p['gamma_vehB'] = c_gb.number_input(r"Custom $\gamma_{B}$", value=float(gam_valB), key=f"{curr}_gamB_cust")
     else: p['gamma_vehB'] = float(gam_selB)
 
-    phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim")
+    help_phi = "Dynamic Amplification Factor calculation method. Manual allows fixed input; Calculate uses Eurocode logic based on span lengths."
+    phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", help=help_phi)
     p['phi_mode'] = phi_mode
     if phi_mode == "Manual":
         p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv")
@@ -332,26 +343,42 @@ with st.sidebar.expander("Geometry & Loads", expanded=True):
     p['num_spans'] = n_spans
     st.markdown("---")
     st.markdown("**Spans (L, I, SW)**")
+    
+    # Tooltip strings for Spans
+    h_L = "Length of the span [m]."
+    h_I = "Moment of Inertia [m^4]."
+    h_SW = "Distributed self-weight line load [kN/m]."
+    
     for i in range(n_spans):
         c1, c2, c3 = st.columns([1, 1, 1])
-        p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}")
-        p['Is_list'][i] = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}")
-        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}")
+        # Only apply help to the first row to avoid clutter
+        p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", help=h_L if i==0 else None)
+        p['Is_list'][i] = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help=h_I if i==0 else None)
+        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help=h_SW if i==0 else None)
         
     is_super = (p['mode'] == 'Superstructure')
     st.markdown("---")
     st.markdown("**Walls (H, I, Surcharge, Soil)**")
     if is_super: st.caption("Mode: Superstructure. Walls and lateral loads are disabled.")
     
+    # Tooltip strings for Walls
+    h_H = "Height of the wall [m]."
+    h_Iw = "Moment of Inertia of the wall [m^4]."
+    h_Sq = "Vertical vehicle surcharge load on the backfill surface [kN/m]. \n\n**Note:** The Dynamic Factor (Phi) is **never** applied to this load."
+    
+    h_S_h = "Vertical height of the soil layer [m]."
+    h_S_qb = "Earth pressure at the bottom of the layer [kN/m^2]."
+    h_S_qt = "Earth pressure at the top of the layer [kN/m^2]."
+
     for i in range(n_spans + 1):
         st.caption(f"Wall {i+1}")
         c1, c2, c3 = st.columns([1,1,2])
-        p['h_list'][i] = c1.number_input(f"H [m]", value=float(p['h_list'][i]), disabled=is_super, key=f"{curr}_h{i}")
-        p['Iw_list'][i] = c2.number_input(f"I [m⁴]", value=float(p['Iw_list'][i]), format="%.4f", disabled=is_super, key=f"{curr}_iw{i}")
+        p['h_list'][i] = c1.number_input(f"H [m]", value=float(p['h_list'][i]), disabled=is_super, key=f"{curr}_h{i}", help=h_H if i==0 else None)
+        p['Iw_list'][i] = c2.number_input(f"I [m⁴]", value=float(p['Iw_list'][i]), format="%.4f", disabled=is_super, key=f"{curr}_iw{i}", help=h_Iw if i==0 else None)
         
         sur = next((x for x in p['surcharge'] if x['wall_idx']==i), None)
         val_q = sur['q'] if sur else 0.0
-        new_q = c3.number_input(f"Surcharge [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}")
+        new_q = c3.number_input(f"Surcharge [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help=h_Sq if i==0 else None)
         
         if not is_super:
             p['surcharge'] = [x for x in p['surcharge'] if x['wall_idx'] != i]
@@ -361,9 +388,9 @@ with st.sidebar.expander("Geometry & Loads", expanded=True):
         ex_L = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='L'), None)
         ex_R = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='R'), None)
         c_sl, c_sr = st.columns(2)
-        h_L = c_sl.number_input("H_soil [m]", value=ex_L['h'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_shl{i}")
-        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_L['q_bot'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}")
-        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_L['q_top'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}")
+        h_L = c_sl.number_input("H_soil [m]", value=ex_L['h'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_shl{i}", help=h_S_h if i==0 else None)
+        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_L['q_bot'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}", help=h_S_qb if i==0 else None)
+        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_L['q_top'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}", help=h_S_qt if i==0 else None)
         h_R = c_sr.number_input("H_soil [m]", value=ex_R['h'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_shr{i}")
         qR_bot = c_sr.number_input("q_bot [kN/m²]", value=ex_R['q_bot'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_sqrb{i}")
         qR_top = c_sr.number_input("q_top [kN/m²]", value=ex_R['q_top'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_sqrt{i}")
@@ -374,7 +401,8 @@ with st.sidebar.expander("Geometry & Loads", expanded=True):
             if h_R > 0: p['soil'].append({'wall_idx':i, 'face':'R', 'q_bot':qR_bot, 'q_top':qR_top, 'h':h_R})
 
     st.markdown("---")
-    bc = st.select_slider("Base/Support Fixity", ["Pinned", "Fixed"], value="Fixed" if p['k_rot']>1e6 else "Pinned", key=f"{curr}_bc")
+    help_bc = "Rotational stiffness at the base/supports. 'Fixed' = Infinite stiffness (Clamped), 'Pinned' = Zero stiffness."
+    bc = st.select_slider("Base/Support Fixity", ["Pinned", "Fixed"], value="Fixed" if p['k_rot']>1e6 else "Pinned", key=f"{curr}_bc", help=help_bc)
     p['k_rot'] = 1e12 if bc=="Fixed" else 0.0
     p['k_rot_super'] = 1e12 if bc=="Fixed" else 0.0
 
@@ -415,9 +443,12 @@ with st.sidebar.expander("Vehicle Definitions", expanded=True):
                 p[key_loads] = veh_data[sel_class]['loads']; p[key_space] = veh_data[sel_class]['spacing']
                 st.session_state[input_key_l] = p[key_loads]; st.session_state[input_key_s] = p[key_space] 
                 st.rerun()
-
-        p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l)
-        p[key_space] = st.text_input(f"Space {prefix} [m]", key=input_key_s)
+        
+        h_loads = "Comma-separated axle loads [tonnes]. Example: 10,10,12"
+        h_space = "Comma-separated distances [m] between axles. First value must be 0. Example: 0, 1.5, 3.0"
+        
+        p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, help=h_loads)
+        p[key_space] = st.text_input(f"Space {prefix} [m]", key=input_key_s, help=h_space)
         
         valid_veh = False
         msg = ""
@@ -494,7 +525,9 @@ if view_case != "Vehicle Steps":
 c_tog, _ = st.columns([1,1])
 with c_tog:
     st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dyn)"], horizontal=True, key="result_mode_radio")
-    st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], horizontal=True, key="surcharge_combo_radio")
+    
+    help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
+    st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], horizontal=True, key="surcharge_combo_radio", help=help_combo)
     
     # === BUG FIX: INJECT COMBO STATE INTO SYSTEMS ===
     is_simultaneous = (st.session_state["surcharge_combo_radio"] == "Simultaneous (Vehicle + Surcharge)")
