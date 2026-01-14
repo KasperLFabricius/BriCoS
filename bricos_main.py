@@ -151,31 +151,43 @@ def get_clear(name_suffix, current_mode):
     }
 
 # --- INITIALIZATION WITH SPECIFIC DEFAULTS ---
+# Correct Convention:
+# Soil on LEFT (Outside Wall 0) -> Acts on face='L' -> Pushes Right (+X)
+# Soil on RIGHT (Outside Wall 1) -> Acts on face='R' -> Pushes Left (-X)
+
 if 'sysA' not in st.session_state: 
-    # System A: 1 Span, Soil on Wall 0 and 1
+    # System A: 1 Span
     d = get_def()
     d['num_spans'] = 1
     d['name'] = "System A"
     d['soil'] = [
-        {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+        # Wall 0 (Left Wall):
+        # - Soil Left (Outside) -> Full Height -> face='L'
+        # - Soil Right (Inside) -> Half Height -> face='R'
+        {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, 
         {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-        {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
-        {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}
+        
+        # Wall 1 (Right Wall):
+        # - Soil Left (Inside) -> Half Height -> face='L'
+        # - Soil Right (Outside) -> Full Height -> face='R'
+        {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+        {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
     ]
     st.session_state['sysA'] = d
-    # Trigger Vehicle Select later in UI section logic
 
 if 'sysB' not in st.session_state: 
-    # System B: 2 Spans, Soil on Wall 0 and 2 (Skip Wall 1)
+    # System B: 2 Spans
     d = get_def()
     d['num_spans'] = 2
     d['name'] = "System B"
     d['soil'] = [
+        # Wall 0 (Left): Outside Full (L), Inside Half (R)
         {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
         {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-        # Wall 2 is end wall for 2-span bridge
-        {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
-        {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}
+        
+        # Wall 2 (Right): Inside Half (L), Outside Full (R)
+        {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+        {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
     ]
     st.session_state['sysB'] = d
 
@@ -272,12 +284,12 @@ with st.sidebar.expander("Reset Data", expanded=False):
             if mode == "A" or mode == "ALL":
                 current_mode = st.session_state['sysA']['mode']
                 data = {**get_def(), 'num_spans':1, 'name': "System A"}
-                # Re-apply A specific soil
+                # Re-apply A specific soil (CORRECTED)
                 data['soil'] = [
-                    {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
-                    {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-                    {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
-                    {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}
+                    {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, # Out (L) -> Push R
+                    {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, # In (R) -> Push L
+                    {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, # In (L) -> Push R
+                    {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}  # Out (R) -> Push L
                 ]
                 if action == "clear": data = get_clear("A", current_mode)
                 reset_system_state("sysA", data)
@@ -285,12 +297,12 @@ with st.sidebar.expander("Reset Data", expanded=False):
             if mode == "B" or mode == "ALL":
                 current_mode = st.session_state['sysB']['mode']
                 data = {**get_def(), 'num_spans':2, 'name': "System B"}
-                # Re-apply B specific soil
+                # Re-apply B specific soil (CORRECTED)
                 data['soil'] = [
                     {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
                     {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-                    {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
-                    {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}
+                    {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+                    {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
                 ]
                 if action == "clear": data = get_clear("B", current_mode)
                 reset_system_state("sysB", data)
@@ -581,15 +593,24 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
             p['E_custom_wall'][i] = val_in
             p['E_wall_list'][i] = val_in * 1e6
 
-        ex_L = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='L'), None)
-        ex_R = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='R'), None)
+        # --- UPDATED SOIL UI LOGIC (CORRECTED) ---
+        # Soil Left (User Input) -> Pushes Right -> face='L'
+        # Soil Right (User Input) -> Pushes Left -> face='R'
+        
+        ex_SoilLeft = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='L'), None)
+        ex_SoilRight = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='R'), None)
+        
         c_sl, c_sr = st.columns(2)
-        h_L = c_sl.number_input("H_soil [m]", value=ex_L['h'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_shl{i}", help="Soil Height" if i==0 else None)
-        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_L['q_bot'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}", help="Pressure Bot" if i==0 else None)
-        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_L['q_top'] if ex_L else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}", help="Pressure Top" if i==0 else None)
-        h_R = c_sr.number_input("H_soil [m]", value=ex_R['h'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_shr{i}")
-        qR_bot = c_sr.number_input("q_bot [kN/m²]", value=ex_R['q_bot'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_sqrb{i}")
-        qR_top = c_sr.number_input("q_top [kN/m²]", value=ex_R['q_top'] if ex_R else 0.0, disabled=is_super, key=f"{curr}_sqrt{i}")
+        
+        # Left Column = H_soil_left (Writes to face='L')
+        h_L = c_sl.number_input("H_soil_left [m]", value=ex_SoilLeft['h'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_shl{i}", help="Soil on Left Face (Pushing Right)")
+        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_SoilLeft['q_bot'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}", help="Pressure Bot")
+        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_SoilLeft['q_top'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}", help="Pressure Top")
+        
+        # Right Column = H_soil_right (Writes to face='R')
+        h_R = c_sr.number_input("H_soil_right [m]", value=ex_SoilRight['h'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_shr{i}", help="Soil on Right Face (Pushing Left)")
+        qR_bot = c_sr.number_input("q_bot [kN/m²]", value=ex_SoilRight['q_bot'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_sqrb{i}")
+        qR_top = c_sr.number_input("q_top [kN/m²]", value=ex_SoilRight['q_top'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_sqrt{i}")
 
         if not is_super:
             p['soil'] = [x for x in p['soil'] if x['wall_idx']!=i]
