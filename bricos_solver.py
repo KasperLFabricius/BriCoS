@@ -187,30 +187,30 @@ def run_raw_analysis(params, phi_val_override=None):
         lengths_for_phi = []
         comp_desc = []
         valid_geom = False
+        
         if params['mode'] == 'Frame':
+            # --- FIX: Use FULL HEIGHT for Frame Legs (ignore soil embedment for Phi) ---
+            # Left Wall (Index 0)
             h_left_total = params['h_list'][0]
             if h_left_total > 0: valid_geom = True
-            soil_L = [s['h'] for s in params.get('soil', []) if s['wall_idx'] == 0]
-            h_emb_L = max(soil_L) if soil_L else 0.0
-            h_free_L = max(0.0, h_left_total - h_emb_L)
-            lengths_for_phi.append(h_free_L)
-            comp_desc.append(f"LeftLeg({h_free_L:.2f}m)")
+            lengths_for_phi.append(h_left_total)
+            comp_desc.append(f"LeftLeg({h_left_total:.2f}m)")
             
+            # Spans
             for i in range(params['num_spans']):
                 L = params['L_list'][i]
                 if L > 0: valid_geom = True
                 lengths_for_phi.append(L)
                 comp_desc.append(f"Span{i+1}({L:.2f}m)")
             
+            # Right Wall (Index num_spans)
             end_idx = params['num_spans']
             h_right_total = params['h_list'][end_idx]
             if h_right_total > 0: valid_geom = True
-            soil_R = [s['h'] for s in params.get('soil', []) if s['wall_idx'] == end_idx]
-            h_emb_R = max(soil_R) if soil_R else 0.0
-            h_free_R = max(0.0, h_right_total - h_emb_R)
-            lengths_for_phi.append(h_free_R)
-            comp_desc.append(f"RightLeg({h_free_R:.2f}m)")
-        else:
+            lengths_for_phi.append(h_right_total)
+            comp_desc.append(f"RightLeg({h_right_total:.2f}m)")
+            
+        else: # Superstructure Mode
             for i in range(params['num_spans']):
                 L = params['L_list'][i]
                 if L > 0: valid_geom = True
