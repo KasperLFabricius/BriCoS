@@ -65,7 +65,7 @@ def get_def():
     # Updated Defaults based on User Request
     I_def = calc_I(500)
     
-    # [cite_start]Attempt to load Class 100 [cite: 1]
+    # Attempt to load Class 100
     def_veh = load_vehicle_from_csv("Class 100")
     
     if def_veh:
@@ -265,18 +265,21 @@ with st.sidebar.expander("Reset Data", expanded=False):
             action = st.session_state.reset_action
             
             def reset_system_state(target_key, new_data):
+                # 1. CLEANUP: Delete ALL widget states for this system first.
+                # This ensures input widgets (including Vehicle selectors) re-initialize 
+                # from the new_data on the next run.
+                prefix = f"{target_key}_"
+                keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix)]
+                for k in keys_to_del: del st.session_state[k]
+
+                # 2. SET DATA: Apply the new data dictionary
                 st.session_state[target_key] = new_data
+                
+                # 3. SYNC HELPERS: Re-establish keys needed for sidebar rendering logic
                 st.session_state[f"{target_key}_nsp"] = new_data['num_spans']
                 st.session_state[f"{target_key}_md_sel"] = new_data['mode']
                 st.session_state[f"{target_key}_kfi"] = new_data['KFI']
-                # Reset vehicle dropdowns
-                st.session_state[f"{target_key}_vehA_class"] = "Class 100"
-                st.session_state[f"{target_key}_vehB_class"] = "Custom"
-                st.session_state[f"{target_key}_vehA_class_last"] = None
-                
-                prefix = f"{target_key}_"
-                keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix) and 'veh' not in k]
-                for k in keys_to_del: del st.session_state[k]
+                # Note: Vehicle keys are NOT set here; they will auto-init in 'handle_veh_inputs' on rerun.
 
             if mode == "A" or mode == "ALL":
                 current_mode = st.session_state['sysA']['mode']
@@ -1052,17 +1055,19 @@ with t1:
         geom_invalid_A = (nodes_A is None) or (len(nodes_A)==0)
         geom_invalid_B = (nodes_B is None) or (len(nodes_B)==0)
         
-        if geom_invalid_A and geom_invalid_B: st.warning("⚠️ No structural geometry or valid analysis.")
-        elif (not rA) and (not rB): st.warning(f"⚠️ No results found for **{view_case}**.")
+        if geom_invalid_A and geom_invalid_B: 
+             st.warning("⚠️ No structural geometry or valid analysis.")
+        else:
+             if (not rA) and (not rB): st.warning(f"⚠️ No results found for **{view_case}**.")
 
-        st.subheader("Bending Moment [kNm]")
-        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_M")
-        st.subheader("Shear Force [kN]")
-        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_V")
-        st.subheader("Normal Force [kN]")
-        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'N', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_N")
-        st.subheader("Deformation [mm]")
-        st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_D")
+             st.subheader("Bending Moment [kNm]")
+             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_M")
+             st.subheader("Shear Force [kN]")
+             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_V")
+             st.subheader("Normal Force [kN]")
+             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'N', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_N")
+             st.subheader("Deformation [mm]")
+             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_D")
 
 with t2:
     st.markdown(f"### Detailed Data ({view_case})")
