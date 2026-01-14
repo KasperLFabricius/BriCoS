@@ -22,7 +22,6 @@ st.markdown("""
     .stSelectbox label { font-size: 0.9rem; font-weight: bold; }
     
     /* Sticky Sidebar Container */
-    /* Targets the vertical block containing the specific ID marker */
     div[data-testid="stVerticalBlock"]:has(div#sticky-sidebar-marker) {
         position: sticky;
         top: 0rem;
@@ -194,8 +193,6 @@ def get_clear(name_suffix, current_mode):
 def force_ui_update(sys_key, data):
     """
     Explicitly synchronizes the Streamlit session_state keys with the provided data dict.
-    This ensures that when data is reset/copied/imported, the UI widgets (which use these keys)
-    display the correct values immediately.
     """
     
     # 1. Main Config Keys
@@ -214,14 +211,12 @@ def force_ui_update(sys_key, data):
 
     # 3. Spans
     nsp = data.get('num_spans', 1)
-    for i in range(10): # Update all potential slots
+    for i in range(10): 
         if i < len(data['L_list']): st.session_state[f"{sys_key}_l{i}"] = data['L_list'][i]
         if i < len(data['Is_list']): st.session_state[f"{sys_key}_i{i}"] = data['Is_list'][i]
         if i < len(data['sw_list']): st.session_state[f"{sys_key}_s{i}"] = data['sw_list'][i]
         if i < len(data['fck_span_list']): st.session_state[f"{sys_key}_fck_s{i}"] = data['fck_span_list'][i]
         if i < len(data['E_custom_span']): st.session_state[f"{sys_key}_Eman_s{i}"] = data['E_custom_span'][i]
-        
-        # Reset profiler keys just in case
         st.session_state[f"{sys_key}_i{i}_dis"] = "See Profiler"
 
     # 4. Walls
@@ -231,13 +226,11 @@ def force_ui_update(sys_key, data):
         if i < len(data['fck_wall_list']): st.session_state[f"{sys_key}_fck_w{i}"] = data['fck_wall_list'][i]
         if i < len(data['E_custom_wall']): st.session_state[f"{sys_key}_Eman_w{i}"] = data['E_custom_wall'][i]
         
-        # Surcharge (Find from list or 0)
         surch_val = 0.0
         for s in data.get('surcharge', []):
             if s['wall_idx'] == i: surch_val = s['q']
         st.session_state[f"{sys_key}_sq{i}"] = surch_val
         
-        # Soil Logic (Reconstruct from list of dicts)
         hL, qL_b, qL_t = 0.0, 0.0, 0.0
         hR, qR_b, qR_t = 0.0, 0.0, 0.0
         
@@ -256,18 +249,15 @@ def force_ui_update(sys_key, data):
         st.session_state[f"{sys_key}_sqrt{i}"] = qR_t
 
     # 5. Vehicles
-    # Force the text inputs to match data
     st.session_state[f"{sys_key}_A_loads_input"] = data.get('vehicle_loads', "")
     st.session_state[f"{sys_key}_A_space_input"] = data.get('vehicle_space', "")
     st.session_state[f"{sys_key}_B_loads_input"] = data.get('vehicleB_loads', "")
     st.session_state[f"{sys_key}_B_space_input"] = data.get('vehicleB_space', "")
     
-    # Reset Dropdowns to 'Custom' to ensure text is respected
     if f"{sys_key}_vehA_class" in st.session_state: del st.session_state[f"{sys_key}_vehA_class"]
     if f"{sys_key}_vehB_class" in st.session_state: del st.session_state[f"{sys_key}_vehB_class"]
     
     # 6. Supports
-    # Clear old support keys
     prefix = f"{sys_key}_"
     supp_keys = [k for k in st.session_state.keys() if k.startswith(prefix) and "_k" in k]
     for k in supp_keys: del st.session_state[k]
@@ -285,15 +275,8 @@ if 'sysA' not in st.session_state:
     d['num_spans'] = 1
     d['name'] = "System A"
     d['soil'] = [
-        # Wall 0 (Left Wall):
-        # - Soil Left (Outside) -> Full Height -> face='L'
-        # - Soil Right (Inside) -> Half Height -> face='R'
         {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, 
         {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-        
-        # Wall 1 (Right Wall):
-        # - Soil Left (Inside) -> Half Height -> face='L'
-        # - Soil Right (Outside) -> Full Height -> face='R'
         {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
         {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
     ]
@@ -305,11 +288,8 @@ if 'sysB' not in st.session_state:
     d['num_spans'] = 2
     d['name'] = "System B"
     d['soil'] = [
-        # Wall 0 (Left): Outside Full (L), Inside Half (R)
         {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
         {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-        
-        # Wall 2 (Right): Inside Half (L), Outside Full (R)
         {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
         {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
     ]
@@ -341,7 +321,6 @@ for sys_k in ['sysA', 'sysB']:
     if 'E_span_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_span_list'] = [33e6]*10
     if 'E_wall_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_wall_list'] = [33e6]*11
     
-    # Remove old keys
     st.session_state[sys_k].pop('k_rot', None)
     st.session_state[sys_k].pop('k_rot_super', None)
 
@@ -353,8 +332,6 @@ if st.session_state['sysB'].get('scale_manual', 0) < 0.1: st.session_state['sysB
 st.sidebar.header("Configuration")
 
 # --- STICKY SIDEBAR: ACTIVE SYSTEM & NAMES ---
-# We use st.container() and inject a hidden marker div.
-# The CSS :has() selector will target this container and make it sticky.
 with st.sidebar.container():
     st.markdown('<div id="sticky-sidebar-marker"></div>', unsafe_allow_html=True)
     c_nA, c_nB = st.columns(2)
@@ -413,10 +390,7 @@ with st.sidebar.expander("Reset Data", expanded=False):
             action = st.session_state.reset_action
             
             def reset_system_state(target_key, new_data):
-                # 1. SET DATA: Apply the new data dictionary
                 st.session_state[target_key] = new_data
-                
-                # 2. FORCE UI SYNC: Update all widget keys to match new data
                 force_ui_update(target_key, new_data)
 
             if mode == "A" or mode == "ALL":
@@ -425,7 +399,6 @@ with st.sidebar.expander("Reset Data", expanded=False):
                     data = get_clear("A", current_mode)
                 else:
                     data = {**get_def(), 'num_spans':1, 'name': "System A"}
-                    # Re-apply A specific soil
                     data['soil'] = [
                         {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, 
                         {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, 
@@ -440,7 +413,6 @@ with st.sidebar.expander("Reset Data", expanded=False):
                     data = get_clear("B", current_mode)
                 else:
                     data = {**get_def(), 'num_spans':2, 'name': "System B"}
-                    # Re-apply B specific soil
                     data['soil'] = [
                         {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
                         {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
@@ -478,7 +450,6 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
         try:
             df_load = pd.read_csv(uploaded_file)
             if 'System' in df_load.columns and 'Parameter' in df_load.columns:
-                # 1. Update Data in Session State
                 for _, row in df_load.iterrows():
                     sys_n = row['System']
                     if sys_n in ['sysA', 'sysB']:
@@ -487,7 +458,6 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
                             st.session_state[sys_n][row['Parameter']] = val
                         except: pass
                 
-                # 2. Force UI Sync for both systems
                 force_ui_update('sysA', st.session_state['sysA'])
                 force_ui_update('sysB', st.session_state['sysB'])
 
@@ -515,10 +485,7 @@ with st.sidebar.expander("Copy Data", expanded=False):
             nm = st.session_state['sysB']['name']
             st.session_state['sysB'] = copy.deepcopy(st.session_state['sysA'])
             st.session_state['sysB']['name'] = nm
-            
-            # Force UI Sync for B
             force_ui_update('sysB', st.session_state['sysB'])
-            
             st.session_state.copy_confirm_mode = None
             st.rerun()
         if c_no.button("Cancel"):
@@ -532,10 +499,7 @@ with st.sidebar.expander("Copy Data", expanded=False):
             nm = st.session_state['sysA']['name']
             st.session_state['sysA'] = copy.deepcopy(st.session_state['sysB'])
             st.session_state['sysA']['name'] = nm
-            
-            # Force UI Sync for A
             force_ui_update('sysA', st.session_state['sysA'])
-
             st.session_state.copy_confirm_mode = None
             st.rerun()
         if c_no.button("Cancel"):
@@ -630,7 +594,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     n_spans = st.number_input("Number of Spans", 1, 10, p['num_spans'], key=f"{curr}_nsp")
     p['num_spans'] = n_spans
     
-    # Material Header logic
     is_ec = (p['e_mode'] == 'Eurocode')
     lbl_mat = "f_ck [MPa]" if is_ec else "E [GPa]"
     help_mat_col = "Concrete Cylinder Strength (f_ck)." if is_ec else "Elastic Modulus (Young's Modulus)."
@@ -638,16 +601,13 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     st.markdown("---")
     st.markdown("**Spans (L, I, SW, Material)**")
     
-    # Ensure lists are long enough
     while len(p['fck_span_list']) < 10: p['fck_span_list'].append(35.0)
     while len(p['E_custom_span']) < 10: p['E_custom_span'].append(34.0)
     while len(p['E_span_list']) < 10: p['E_span_list'].append(34e6)
 
-    # --- ADVANCED SECTION HELPER ---
     def get_geom_ui_data(prefix_key, i, default_val):
         key = f"{prefix_key}_{i}"
         if key not in p:
-            # Init Default: Type=0(I), Shape=0(Const), Val=Default
             p[key] = {
                 'type': 0, 'shape': 0, 'vals': [default_val, default_val, default_val],
                 'align_type': 0, 'incline_mode': 0, 'incline_val': 0.0
@@ -658,21 +618,18 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
         p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", help="Length of Span" if i==0 else None)
         
-        # Check if advanced geom is active (shape != 0)
         s_geom = get_geom_ui_data('span_geom', i, p['Is_list'][i])
         is_adv = (s_geom['shape'] != 0) or (s_geom['type'] != 0) or (s_geom.get('align_type', 0) != 0)
         
-        # Simple View Logic: Update list from geom vals
         if not is_adv:
             val = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help="Inertia" if i==0 else None)
             p['Is_list'][i] = val
-            s_geom['vals'] = [val, val, val] # Sync
+            s_geom['vals'] = [val, val, val]
         else:
             c2.text_input(f"I{i+1}", "See Profiler", disabled=True, key=f"{curr}_i{i}_dis")
 
         p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help="Distributed load from permanent dead loads." if i==0 else None)
         
-        # MATERIAL
         if is_ec:
             val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_span_list'][i]), key=f"{curr}_fck_s{i}", help=help_mat_col if i==0 else None)
             p['fck_span_list'][i] = val_in
@@ -688,7 +645,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
     st.markdown("**Walls (H, I, Surcharge, Material)**")
     if is_super: st.caption("Mode: Superstructure. Walls and lateral loads are disabled.")
     
-    # Ensure wall lists long enough
     while len(p['fck_wall_list']) < 11: p['fck_wall_list'].append(35.0)
     while len(p['E_custom_wall']) < 11: p['E_custom_wall'].append(34.0)
     while len(p['E_wall_list']) < 11: p['E_wall_list'].append(34e6)
@@ -717,7 +673,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
             if new_q != 0: 
                 p['surcharge'].append({'wall_idx':i, 'face':'R', 'q':new_q, 'h':p['h_list'][i]})
 
-        # MATERIAL COLUMN WALL
         if is_ec:
             val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_wall_list'][i]), disabled=is_super, key=f"{curr}_fck_w{i}", help=help_mat_col if i==0 else None)
             p['fck_wall_list'][i] = val_in
@@ -728,7 +683,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
             p['E_custom_wall'][i] = val_in
             p['E_wall_list'][i] = val_in * 1e6
 
-        # --- UPDATED SOIL UI LOGIC ---
         ex_SoilLeft = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='L'), None)
         ex_SoilRight = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='R'), None)
         
@@ -747,16 +701,13 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
             if h_L > 0: p['soil'].append({'wall_idx':i, 'face':'L', 'q_bot':qL_bot, 'q_top':qL_top, 'h':h_L})
             if h_R > 0: p['soil'].append({'wall_idx':i, 'face':'R', 'q_bot':qR_bot, 'q_top':qR_top, 'h':h_R})
 
-    # --- SECTION PROFILER ---
     st.markdown("---")
     with st.sidebar.expander("🛠️ Section Profiler (Advanced)", expanded=False):
         st.caption("Configure variable stiffness, height profiles, or vertical alignment.")
         
-        # Selector
         elem_options = [f"Span {i+1}" for i in range(n_spans)] + ([f"Wall {i+1}" for i in range(n_spans+1)] if not is_super else [])
         sel_el = st.selectbox("Edit Element:", elem_options, key=f"{curr}_prof_sel")
         
-        # Parse Selection
         is_span_selected = "Span" in sel_el
         if is_span_selected:
             idx = int(sel_el.split(" ")[1]) - 1
@@ -791,10 +742,8 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
             
         target_geom['vals'] = [v1, v2, v3]
         
-        # Update simple list (backward compat)
         target_simple_list[idx] = v1 if target_geom['type']==0 else (1.0 * v1**3)/12.0
 
-        # --- ALIGNMENT SECTION (Spans Only) ---
         if is_span_selected:
             st.markdown("#### 📐 Alignment (Vertical Geometry)")
             if 'align_type' not in target_geom: target_geom['align_type'] = 0
@@ -817,11 +766,9 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
 
 # --- BOUNDARY CONDITIONS TAB ---
 with st.sidebar.expander("Boundary Conditions", expanded=False):
-    # Dynamic list management for supports
     num_supports = n_spans + 1
     current_supports = p.get('supports', [])
     
-    # Ensure list length matches current geometry
     if len(current_supports) != num_supports:
         new_list = []
         for i in range(num_supports):
@@ -835,7 +782,6 @@ with st.sidebar.expander("Boundary Conditions", expanded=False):
                     else: new_list.append({'type': 'Roller (X-Free)', 'k': [0.0, 1e14, 0.0]})
         p['supports'] = new_list
     
-    # Render Inputs
     presets = {
         "Fixed": [1e14, 1e14, 1e14],
         "Pinned": [1e14, 1e14, 0.0],
@@ -889,7 +835,6 @@ with st.sidebar.expander("Vehicle Definitions", expanded=True):
         default_class = "Class 100" if prefix == "A" else "Custom"
         if sess_key not in st.session_state: st.session_state[sess_key] = default_class
         
-        # Sync Class 100 on First Load if needed (Only for A)
         if prefix == "A" and st.session_state[sess_key] == "Class 100" and st.session_state[sess_key] in veh_data and not p[struct_key]['loads']:
              p[key_loads] = veh_data["Class 100"]['loads']
              p[key_space] = veh_data["Class 100"]['spacing']
@@ -970,7 +915,6 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=True):
     st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
     st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
 
-    # --- MOVED SLIDERS ---
     st.markdown("---")
     st.markdown("**Calculation Precision**")
     c_mesh, c_step = st.columns(2)
@@ -1015,7 +959,6 @@ raw_res_B, nodes_B, err_B = safe_solve(st.session_state['sysB'])
 if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
 if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
 
-# Safe Check for None (Safe Solver Update)
 has_res_A = (raw_res_A is not None) and (nodes_A is not None)
 has_res_B = (raw_res_B is not None) and (nodes_B is not None)
 
@@ -1025,8 +968,6 @@ st.session_state['sysA']['scale_manual'] = man_scale
 st.session_state['sysB']['scale_manual'] = man_scale
 
 # --- STICKY RESULTS TOOLBAR ---
-# We use st.container() and inject a hidden marker div.
-# The CSS :has() selector will target this container and make it sticky.
 with st.container():
     st.markdown('<div id="sticky-results-marker"></div>', unsafe_allow_html=True)
     c_res_tool1, c_res_tool2, c_res_tool3 = st.columns([2, 2, 2])
@@ -1177,7 +1118,6 @@ with t1:
 
 with t2:
     st.markdown(f"### Detailed Data ({view_case})")
-    
     detailed_rows = []
     
     def process_detailed(r_dict, sys_name):
@@ -1240,46 +1180,251 @@ with t2:
         st.info("No detailed data available for this view.")
 
 with t3:
-    st.markdown("### Max/Min Forces per Element")
-    def table_gen(res, name):
-        d = []
-        if not res: return []
-        for eid, v in res.items():
-            if 'M_max' in v:
-                d.append({
-                    "Sys": name, "Elem": eid,
-                    "M_max": np.max(v['M_max']), "M_min": np.min(v['M_min']),
-                    "V_max": np.max(v['V_max']), "V_min": np.min(v['V_min']),
-                    "N_max": np.max(v['N_max']), "N_min": np.min(v['N_min']),
-                })
-            elif 'M' in v:
-                d.append({
-                    "Sys": name, "Elem": eid,
-                    "M_max": np.max(v['M']), "M_min": np.min(v['M']),
-                    "V_max": np.max(v['V']), "V_min": np.min(v['V']),
-                    "N_max": np.max(v['N']), "N_min": np.min(v['N']),
-                })
-        return d
-    rows = table_gen(rA, name_A) + table_gen(rB, name_B)
-    if rows: st.dataframe(pd.DataFrame(rows).round(1))
-    else: st.info("No data for this view.")
+    st.subheader(f"Comparsion Summary ({view_case})")
     
-    if view_case != "Vehicle Steps":
-        st.markdown("### Total Support Reactions (Global X/Y)")
-        def react_table(reacts, nodes, sys_key, display_name):
-            d = []
-            if not reacts or not nodes: return []
-            for nid, f_vec in reacts.items():
-                if nid not in nodes: continue
-                y_coord = nodes[nid][1]
-                is_support = False
-                label = ""
-                if st.session_state[sys_key]['mode'] == 'Frame':
-                    if y_coord < -0.1: is_support = True; wall_idx = nid - 100 + 1; label = f"Wall {wall_idx} Base"
-                else:
-                    is_support = True; sup_idx = nid - 200 + 1; label = f"Support {sup_idx}"
-                if is_support:
-                    d.append({"Sys": display_name, "Node": nid, "Loc": label, "Rx (kN)": f_vec[0], "Ry (kN)": f_vec[1], "Mz (kNm)": f_vec[2]})
-            return d
-        r_rows = react_table(res_A.get('Reactions', {}), nodes_A, "sysA", name_A) + react_table(res_B.get('Reactions', {}), nodes_B, "sysB", name_B)
-        st.dataframe(pd.DataFrame(r_rows).round(1))
+    # ----------------------------------------------
+    # 1. SECTION FORCES / DEFORMATION (Comparison)
+    # ----------------------------------------------
+    st.markdown("##### Peak Section Forces & Deformations")
+    
+    # 1a. Helper to get clean max/min values from envelope results
+    def get_peaks(r_dict, key_max, key_min):
+        if not r_dict: return None, None
+        
+        # Check if envelope or single step
+        has_env = (key_max in r_dict)
+        has_step = ('M' in r_dict) and not has_env
+        
+        val_max, val_min = -1e9, 1e9
+        found = False
+        
+        if has_env:
+            val_max = np.max(r_dict[key_max])
+            val_min = np.min(r_dict[key_min])
+            found = True
+        elif has_step:
+            # Map request to basic keys M, V, N, def_x, def_y
+            base_k = key_max.replace("_max", "")
+            if base_k in r_dict:
+                arr = r_dict[base_k]
+                val_max = np.max(arr)
+                val_min = np.min(arr)
+                found = True
+        
+        if not found: return None, None
+        return val_max, val_min
+
+    # 1b. Collect all Element IDs from both systems
+    all_elems = sorted(list(set(rA.keys()) | set(rB.keys())), key=lambda x: (x[0], int(x[1:])))
+    
+    # 1c. Comparison Logic (Increase = Red)
+    def calc_diff(val_a, val_b):
+        if val_a is None or val_b is None: return np.nan
+        # Diff based on Magnitude Increase
+        # Increase = Larger Absolute Value in B compared to A
+        abs_a = abs(val_a)
+        abs_b = abs(val_b)
+        
+        if abs_a < 1e-6:
+            if abs_b < 1e-6: return 0.0
+            return 999.0 # Infinite increase
+        
+        return ((abs_b - abs_a) / abs_a) * 100.0
+
+    # 1d. Build Table Rows
+    comp_rows = []
+    
+    # Define metrics to compare
+    metrics = [
+        ("M_max", "M_min", "M [kNm]"),
+        ("V_max", "V_min", "V [kN]"),
+        ("N_max", "N_min", "N [kN]"),
+        ("def_x_max", "def_x_min", "Def_X [mm]"),
+        ("def_y_max", "def_y_min", "Def_Y [mm]")
+    ]
+    
+    for eid in all_elems:
+        row_dat = {"Element": eid}
+        dataA = rA.get(eid, {})
+        dataB = rB.get(eid, {})
+        
+        for k_max, k_min, label in metrics:
+            # Scale Deformations
+            is_def = "def" in k_max
+            scale = 1000.0 if is_def else 1.0
+            
+            # Get A
+            a_mx, a_mn = get_peaks(dataA, k_max, k_min)
+            if a_mx is not None: a_mx *= scale; a_mn *= scale
+            
+            # Get B
+            b_mx, b_mn = get_peaks(dataB, k_max, k_min)
+            if b_mx is not None: b_mx *= scale; b_mn *= scale
+            
+            # Calculate Diff
+            d_mx = calc_diff(a_mx, b_mx)
+            d_mn = calc_diff(a_mn, b_mn)
+            
+            # Store in Row (Formatted)
+            # Max
+            row_dat[f"{label} (Max) A"] = f"{a_mx:.1f}" if a_mx is not None else "--"
+            row_dat[f"{label} (Max) B"] = f"{b_mx:.1f}" if b_mx is not None else "--"
+            row_dat[f"{label} (Max) %"] = d_mx 
+            
+            # Min
+            row_dat[f"{label} (Min) A"] = f"{a_mn:.1f}" if a_mn is not None else "--"
+            row_dat[f"{label} (Min) B"] = f"{b_mn:.1f}" if b_mn is not None else "--"
+            row_dat[f"{label} (Min) %"] = d_mn
+            
+        comp_rows.append(row_dat)
+        
+    df_comp = pd.DataFrame(comp_rows)
+
+    # 1e. Styling Function
+    def color_diff(val):
+        if pd.isna(val): return ""
+        if val > 0.05: return 'color: red; font-weight: bold' # Increase -> Red
+        if val < -0.05: return 'color: green; font-weight: bold' # Decrease -> Green
+        return 'color: gray'
+
+    # Apply Style to all % columns
+    pct_cols = [c for c in df_comp.columns if "%" in c]
+    
+    # FIX: Use Styler.format instead of manual string conversion to avoid TypeError in map
+    format_dict = {c: "{:+.1f}%" for c in pct_cols}
+    
+    # Render with Style
+    st.dataframe(
+        df_comp.style.map(color_diff, subset=pct_cols).format(format_dict, na_rep="--"),
+        height=400,
+        width='stretch'
+    )
+    
+    # ----------------------------------------------
+    # 2. REACTIONS (Comparison with Min/Max Envelope)
+    # ----------------------------------------------
+    st.markdown("##### Envelope Support Reactions (Min/Max)")
+
+    # 2a. Function to Calculate Reaction Envelope from Element Results
+    def get_reaction_envelope(res_dict, nodes_dict):
+        # Result Structure: { NodeID: {'Rx_max':.., 'Rx_min':.., 'Ry_max':.. } }
+        reacts = {}
+        if not res_dict or not nodes_dict: return reacts
+        
+        # Identify Support Nodes (Frame: 100-110, Super: 200-210 with restraints)
+        # We scan all elements and check if ends are supports.
+        
+        for eid, dat in res_dict.items():
+            if 'ni_id' not in dat or 'nj_id' not in dat: continue
+            
+            def add_to_node(nid, fx_mx, fx_mn, fy_mx, fy_mn, mz_mx, mz_mn):
+                if nid not in reacts: 
+                    reacts[nid] = {
+                        'Rx_max': 0.0, 'Rx_min': 0.0, 
+                        'Ry_max': 0.0, 'Ry_min': 0.0, 
+                        'Mz_max': 0.0, 'Mz_min': 0.0
+                    }
+                reacts[nid]['Rx_max'] += fx_mx
+                reacts[nid]['Rx_min'] += fx_mn
+                reacts[nid]['Ry_max'] += fy_mx
+                reacts[nid]['Ry_min'] += fy_mn
+                reacts[nid]['Mz_max'] += mz_mx
+                reacts[nid]['Mz_min'] += mz_mn
+
+            c, s = dat['cx'], dat['cy']
+            
+            # --- START NODE ---
+            def get_val(key, idx):
+                if key in dat: return dat[key][idx] 
+                elif key.replace("_max","") in dat: 
+                     return dat[key.replace("_max","")][idx]
+                return 0.0
+
+            n_mx = get_val('N_max', 0); n_mn = get_val('N_min', 0)
+            v_mx = get_val('V_max', 0); v_mn = get_val('V_min', 0)
+            m_mx = get_val('M_max', 0); m_mn = get_val('M_min', 0)
+            
+            def get_bounds(c_fac, s_fac):
+                vals = []
+                for n_v in [n_mx, n_mn]:
+                    for v_v in [v_mx, v_mn]:
+                        vals.append(c_fac*n_v - s_fac*v_v)
+                return max(vals), min(vals)
+            
+            fx_mx, fx_mn = get_bounds(c, s)
+            fy_mx, fy_mn = get_bounds(s, -c) 
+            
+            y_start = nodes_dict[dat['ni_id']][1]
+            is_supp_start = (y_start < -0.01) if p['mode'] == 'Frame' else (dat['ni_id'] >= 200) 
+            
+            if is_supp_start:
+                add_to_node(dat['ni_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
+
+            # --- END NODE ---
+            n_mx = get_val('N_max', -1); n_mn = get_val('N_min', -1)
+            v_mx = get_val('V_max', -1); v_mn = get_val('V_min', -1)
+            m_mx = get_val('M_max', -1); m_mn = get_val('M_min', -1)
+            
+            n_mx, n_mn = -n_mn, -n_mx 
+            v_mx, v_mn = -v_mn, -v_mx
+            m_mx, m_mn = -m_mn, -m_mx
+            
+            fx_mx, fx_mn = get_bounds(c, s)
+            fy_mx, fy_mn = get_bounds(s, -c)
+            
+            y_end = nodes_dict[dat['nj_id']][1]
+            is_supp_end = (y_end < -0.01) if p['mode'] == 'Frame' else (dat['nj_id'] >= 200)
+
+            if is_supp_end:
+                 add_to_node(dat['nj_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
+                 
+        return reacts
+
+    # 2b. Compute Reactions for A and B
+    reactsA = get_reaction_envelope(rA, nodes_A)
+    reactsB = get_reaction_envelope(rB, nodes_B)
+    
+    # 2c. Build Reaction Table
+    all_react_nodes = sorted(list(set(reactsA.keys()) | set(reactsB.keys())))
+    r_rows = []
+    
+    for nid in all_react_nodes:
+        # Determine Label
+        label = f"Node {nid}"
+        if nid >= 200: label = f"Support {nid-200+1}"
+        elif nid >= 100: label = f"Wall {nid-100+1} Base"
+        
+        row = {"Location": label}
+        dA = reactsA.get(nid, {})
+        dB = reactsB.get(nid, {})
+        
+        for comp in ['Rx', 'Ry', 'Mz']:
+            for bnd in ['max', 'min']:
+                key = f"{comp}_{bnd}"
+                valA = dA.get(key)
+                valB = dB.get(key)
+                
+                # Format Columns
+                col_A = f"{comp} ({bnd}) A"
+                col_B = f"{comp} ({bnd}) B"
+                col_P = f"{comp} ({bnd}) %"
+                
+                row[col_A] = f"{valA:.1f}" if valA is not None else "--"
+                row[col_B] = f"{valB:.1f}" if valB is not None else "--"
+                row[col_P] = calc_diff(valA, valB)
+        
+        r_rows.append(row)
+    
+    if r_rows:
+        df_react = pd.DataFrame(r_rows)
+        pct_cols_r = [c for c in df_react.columns if "%" in c]
+        
+        # FIX: Format dict for reactions
+        format_dict_r = {c: "{:+.1f}%" for c in pct_cols_r}
+            
+        st.dataframe(
+            df_react.style.map(color_diff, subset=pct_cols_r).format(format_dict_r, na_rep="--"),
+            width='stretch'
+        )
+    else:
+        st.info("No reaction data found (check supports).")
