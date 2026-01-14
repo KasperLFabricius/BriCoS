@@ -161,6 +161,105 @@ def get_clear(name_suffix, current_mode):
         'vehicle_direction': 'Forward'
     }
 
+# --- FORCE UPDATE HELPER ---
+def force_ui_update(sys_key, data):
+    """
+    Explicitly synchronizes the Streamlit session_state keys with the provided data dict.
+    This ensures that when data is reset/copied/imported, the UI widgets (which use these keys)
+    display the correct values immediately.
+    """
+    
+    # 1. Main Config Keys
+    st.session_state[f"{sys_key}_md_sel"] = data.get('mode', 'Frame')
+    st.session_state[f"{sys_key}_emode"] = "Eurocode (f_ck)" if data.get('e_mode') == "Eurocode" else "Manual (E-Modulus)"
+    st.session_state[f"{sys_key}_kfi"] = data.get('KFI', 1.0)
+    st.session_state[f"{sys_key}_phim"] = data.get('phi_mode', 'Calculate')
+    st.session_state[f"{sys_key}_phiv"] = data.get('phi', 1.0)
+    st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
+    
+    # 2. Factors
+    st.session_state[f"{sys_key}_gg_cust"] = data.get('gamma_g', 1.0)
+    st.session_state[f"{sys_key}_gj_cust"] = data.get('gamma_j', 1.0)
+    st.session_state[f"{sys_key}_gamA_cust"] = data.get('gamma_veh', 1.0)
+    st.session_state[f"{sys_key}_gamB_cust"] = data.get('gamma_vehB', 1.0)
+
+    # 3. Spans
+    nsp = data.get('num_spans', 1)
+    for i in range(10): # Update all potential slots
+        if i < len(data['L_list']): st.session_state[f"{sys_key}_l{i}"] = data['L_list'][i]
+        if i < len(data['Is_list']): st.session_state[f"{sys_key}_i{i}"] = data['Is_list'][i]
+        if i < len(data['sw_list']): st.session_state[f"{sys_key}_s{i}"] = data['sw_list'][i]
+        if i < len(data['fck_span_list']): st.session_state[f"{sys_key}_fck_s{i}"] = data['fck_span_list'][i]
+        if i < len(data['E_custom_span']): st.session_state[f"{sys_key}_Eman_s{i}"] = data['E_custom_span'][i]
+        
+        # Reset profiler keys just in case
+        st.session_state[f"{sys_key}_i{i}_dis"] = "See Profiler"
+
+    # 4. Walls
+    for i in range(11):
+        if i < len(data['h_list']): st.session_state[f"{sys_key}_h{i}"] = data['h_list'][i]
+        if i < len(data['Iw_list']): st.session_state[f"{sys_key}_iw{i}"] = data['Iw_list'][i]
+        if i < len(data['fck_wall_list']): st.session_state[f"{sys_key}_fck_w{i}"] = data['fck_wall_list'][i]
+        if i < len(data['E_custom_wall']): st.session_state[f"{sys_key}_Eman_w{i}"] = data['E_custom_wall'][i]
+        
+        # Surcharge (Find from list or 0)
+        surch_val = 0.0
+        for s in data.get('surcharge', []):
+            if s['wall_idx'] == i: surch_val = s['q']
+        st.session_state[f"{sys_key}_sq{i}"] = surch_val
+        
+        # Soil Logic (Reconstruct from list of dicts)
+        hL, qL_b, qL_t = 0.0, 0.0, 0.0
+        hR, qR_b, qR_t = 0.0, 0.0, 0.0
+        
+        for s in data.get('soil', []):
+            if s['wall_idx'] == i:
+                if s['face'] == 'L':
+                    hL = s.get('h', 0.0); qL_b = s.get('q_bot', 0.0); qL_t = s.get('q_top', 0.0)
+                elif s['face'] == 'R':
+                    hR = s.get('h', 0.0); qR_b = s.get('q_bot', 0.0); qR_t = s.get('q_top', 0.0)
+        
+        st.session_state[f"{sys_key}_shl{i}"] = hL
+        st.session_state[f"{sys_key}_sqlb{i}"] = qL_b
+        st.session_state[f"{sys_key}_sqlt{i}"] = qL_t
+        st.session_state[f"{sys_key}_shr{i}"] = hR
+        st.session_state[f"{sys_key}_sqrb{i}"] = qR_b
+        st.session_state[f"{sys_key}_sqrt{i}"] = qR_t
+
+    # 5. Vehicles
+    # Force the text inputs to match data
+    st.session_state[f"{sys_key}_A_loads_input"] = data.get('vehicle_loads', "")
+    st.session_state[f"{sys_key}_A_space_input"] = data.get('vehicle_space', "")
+    st.session_state[f"{sys_key}_B_loads_input"] = data.get('vehicleB_loads', "")
+    st.session_state[f"{sys_key}_B_space_input"] = data.get('vehicleB_space', "")
+    
+    # Reset Dropdowns to 'Custom' to ensure text is respected, unless logic exists to detect class
+    # For now, we clear the class selection state to force a re-evaluation or default
+    if f"{sys_key}_vehA_class" in st.session_state: del st.session_state[f"{sys_key}_vehA_class"]
+    if f"{sys_key}_vehB_class" in st.session_state: del st.session_state[f"{sys_key}_vehB_class"]
+    
+    # 6. Supports
+    # Clear old support keys
+    prefix = f"{sys_key}_"
+    supp_keys = [k for k in st.session_state.keys() if k.startswith(prefix) and "_k" in k]
+    for k in supp_keys: del st.session_state[k]
+    
+    # Re-populate support keys if they exist in data
+    # Note: Support keys are dynamically generated as {sys}_kx_{i}. 
+    # We rely on the widget reading from data['supports'] if the key is missing/deleted, 
+    # OR we can explicitly set them if we want to be 100% sure. 
+    # Given the complexity of support types (Fixed vs Custom), deleting the key 
+    # allows the UI logic (lines 485+) to re-init from data['supports']. 
+    # For text inputs like 'vehicle', explicitly setting is better. 
+    # For numeric/selects like supports, deleting often works well, 
+    # but let's be consistent and set the Custom values if present.
+    
+    for i, supp in enumerate(data.get('supports', [])):
+        if supp['type'] == 'Custom Spring':
+            st.session_state[f"{sys_key}_kx_{i}"] = supp['k'][0]
+            st.session_state[f"{sys_key}_ky_{i}"] = supp['k'][1]
+            st.session_state[f"{sys_key}_km_{i}"] = supp['k'][2]
+
 # --- INITIALIZATION WITH SPECIFIC DEFAULTS ---
 if 'sysA' not in st.session_state: 
     # System A: 1 Span
@@ -275,23 +374,11 @@ with st.sidebar.expander("Reset Data", expanded=False):
             action = st.session_state.reset_action
             
             def reset_system_state(target_key, new_data):
-                # 1. CLEANUP: Delete ALL widget states for this system first.
-                # This ensures input widgets re-initialize from new_data on next run
-                # and fixes "Ghosting" or "Reverting" input issues.
-                prefix = f"{target_key}_"
-                keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix)]
-                for k in keys_to_del: del st.session_state[k]
-
-                # 2. SET DATA: Apply the new data dictionary
+                # 1. SET DATA: Apply the new data dictionary
                 st.session_state[target_key] = new_data
                 
-                # 3. SYNC HELPERS
-                st.session_state[f"{target_key}_nsp"] = new_data['num_spans']
-                st.session_state[f"{target_key}_md_sel"] = new_data['mode']
-                st.session_state[f"{target_key}_kfi"] = new_data['KFI']
-                # Force vehicle reset in widget keys
-                if f"{target_key}_vehA_class" in st.session_state: del st.session_state[f"{target_key}_vehA_class"]
-                if f"{target_key}_vehB_class" in st.session_state: del st.session_state[f"{target_key}_vehB_class"]
+                # 2. FORCE UI SYNC: Update all widget keys to match new data
+                force_ui_update(target_key, new_data)
 
             if mode == "A" or mode == "ALL":
                 current_mode = st.session_state['sysA']['mode']
@@ -352,6 +439,7 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
         try:
             df_load = pd.read_csv(uploaded_file)
             if 'System' in df_load.columns and 'Parameter' in df_load.columns:
+                # 1. Update Data in Session State
                 for _, row in df_load.iterrows():
                     sys_n = row['System']
                     if sys_n in ['sysA', 'sysB']:
@@ -360,8 +448,10 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
                             st.session_state[sys_n][row['Parameter']] = val
                         except: pass
                 
-                keys_to_clear = [k for k in st.session_state.keys() if k.startswith('sysA_') or k.startswith('sysB_')]
-                for k in keys_to_clear: del st.session_state[k]
+                # 2. Force UI Sync for both systems
+                force_ui_update('sysA', st.session_state['sysA'])
+                force_ui_update('sysB', st.session_state['sysB'])
+
                 st.session_state.uploader_key += 1
                 st.success("Configuration loaded! UI will update.")
                 st.rerun()
@@ -386,9 +476,10 @@ with st.sidebar.expander("Copy Data", expanded=False):
             nm = st.session_state['sysB']['name']
             st.session_state['sysB'] = copy.deepcopy(st.session_state['sysA'])
             st.session_state['sysB']['name'] = nm
-            prefix = "sysB_"
-            keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix)]
-            for k in keys_to_del: del st.session_state[k]
+            
+            # Force UI Sync for B
+            force_ui_update('sysB', st.session_state['sysB'])
+            
             st.session_state.copy_confirm_mode = None
             st.rerun()
         if c_no.button("Cancel"):
@@ -402,9 +493,10 @@ with st.sidebar.expander("Copy Data", expanded=False):
             nm = st.session_state['sysA']['name']
             st.session_state['sysA'] = copy.deepcopy(st.session_state['sysB'])
             st.session_state['sysA']['name'] = nm
-            prefix = "sysA_"
-            keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix)]
-            for k in keys_to_del: del st.session_state[k]
+            
+            # Force UI Sync for A
+            force_ui_update('sysA', st.session_state['sysA'])
+
             st.session_state.copy_confirm_mode = None
             st.rerun()
         if c_no.button("Cancel"):
