@@ -186,38 +186,33 @@ def run_raw_analysis(params, phi_val_override=None):
         # Standard Eurocode Phi Logic based on span lengths
         lengths_for_phi = []
         comp_desc = []
-        valid_geom = False
         
         if params['mode'] == 'Frame':
             # --- FIX: Use FULL HEIGHT for Frame Legs (ignore soil embedment for Phi) ---
             # Left Wall (Index 0)
             h_left_total = params['h_list'][0]
-            if h_left_total > 0: valid_geom = True
             lengths_for_phi.append(h_left_total)
             comp_desc.append(f"LeftLeg({h_left_total:.2f}m)")
             
             # Spans
             for i in range(params['num_spans']):
                 L = params['L_list'][i]
-                if L > 0: valid_geom = True
                 lengths_for_phi.append(L)
                 comp_desc.append(f"Span{i+1}({L:.2f}m)")
             
             # Right Wall (Index num_spans)
             end_idx = params['num_spans']
             h_right_total = params['h_list'][end_idx]
-            if h_right_total > 0: valid_geom = True
             lengths_for_phi.append(h_right_total)
             comp_desc.append(f"RightLeg({h_right_total:.2f}m)")
             
         else: # Superstructure Mode
             for i in range(params['num_spans']):
                 L = params['L_list'][i]
-                if L > 0: valid_geom = True
                 lengths_for_phi.append(L)
                 comp_desc.append(f"Span{i+1}({L:.2f}m)")
 
-        if valid_geom:
+        if lengths_for_phi:
             n = len(lengths_for_phi)
             if n == 1:
                 L_phi = lengths_for_phi[0]
@@ -309,9 +304,20 @@ def run_raw_analysis(params, phi_val_override=None):
         curr_x = next_x
         curr_y = next_y
 
+    # --- CRITICAL FIX: Skip Zero Length Elements to prevent Solver Crash ---
+    # If a user clears input, lengths become 0.0. Trying to create an element
+    # with L=0 results in ZeroDivisionError in the kernel.
+    # We filter and only build Valid elements.
+    
+    TOLERANCE = 1e-4
+
     if params['mode'] == 'Frame':
         for i in range(num_supp):
             h = params['h_list'][i]
+            
+            # --- GUARD: Skip if Wall Height is effectively zero ---
+            if h < TOLERANCE: continue
+
             nid_b, nid_t = 100+i, 200+i
             
             # Use pre-calced top coordinate
@@ -349,6 +355,9 @@ def run_raw_analysis(params, phi_val_override=None):
             restraints[nid_t] = k_vec
 
     for i in range(num_spans):
+        # --- GUARD: Skip if Span Length is effectively zero ---
+        if params['L_list'][i] < TOLERANCE: continue
+
         nid_s, nid_e = 200+i, 200+i+1
         e_val = E_spans[i] if i < len(E_spans) else E_default
         
@@ -359,6 +368,10 @@ def run_raw_analysis(params, phi_val_override=None):
             'id': f'S{i+1}', 'nodes': (nid_s, nid_e),
             'E': e_val, **g_data
         })
+
+    # --- FINAL GUARD: If no elements were created (e.g. Cleared Data), Abort ---
+    if len(elems_base) == 0:
+        return get_safe_error_result(), {}, "No valid structural elements defined (Length/Height > 0)."
 
     K_glob, node_map, elem_objects, NDOF = build_stiffness_matrix(nodes, elems_base, restraints)
     
@@ -395,32 +408,58 @@ def run_raw_analysis(params, phi_val_override=None):
     sw_loads_map = {}
     for i in range(num_spans):
         if params['sw_list'][i] != 0:
-            idx = i + (num_supp if params['mode'] == 'Frame' else 0)
-            val = params['sw_list'][i]
-            # SW is Global Gravity
-            sw_loads_map[idx] = [{'type': 'distributed_trapezoid', 'is_gravity': True, 'params': [val, val, 0, elem_objects[idx].L]}]
+            # We need to find the correct index in elem_objects corresponding to span i
+            # Since we filter out zero-length elements, the index is not just i + offset.
+            # We search by ID.
+            target_id = f'S{i+1}'
+            # Find index in elems_base
+            found_idx = -1
+            for k, el_info in enumerate(elems_base):
+                if el_info['id'] == target_id:
+                    found_idx = k
+                    break
+            
+            if found_idx != -1:
+                val = params['sw_list'][i]
+                sw_loads_map[found_idx] = [{'type': 'distributed_trapezoid', 'is_gravity': True, 'params': [val, val, 0, elem_objects[found_idx].L]}]
     res_sw = solve_static(sw_loads_map)
 
     soil_loads_map = {}
     if params['mode'] == 'Frame':
         for s in params.get('soil', []):
             if s['wall_idx'] < num_supp:
-                sign = 1.0 if s['face'] == 'L' else -1.0 
-                if s['wall_idx'] not in soil_loads_map: soil_loads_map[s['wall_idx']] = []
-                soil_loads_map[s['wall_idx']].append({
-                    'type': 'distributed_trapezoid', 'is_gravity': False, 'params': [sign*s['q_bot'], sign*s['q_top'], 0, s['h']]
-                })
+                target_id = f'W{s["wall_idx"]+1}'
+                found_idx = -1
+                for k, el_info in enumerate(elems_base):
+                    if el_info['id'] == target_id:
+                        found_idx = k
+                        break
+                
+                if found_idx != -1:
+                    sign = 1.0 if s['face'] == 'L' else -1.0 
+                    if found_idx not in soil_loads_map: soil_loads_map[found_idx] = []
+                    soil_loads_map[found_idx].append({
+                        'type': 'distributed_trapezoid', 'is_gravity': False, 'params': [sign*s['q_bot'], sign*s['q_top'], 0, s['h']]
+                    })
     res_soil = solve_static(soil_loads_map)
 
     surch_loads_map = {}
     if params['mode'] == 'Frame':
         for sur in params.get('surcharge', []):
             if sur['wall_idx'] < num_supp:
-                sign = 1.0 if sur['face'] == 'L' else -1.0
-                if sur['wall_idx'] not in surch_loads_map: surch_loads_map[sur['wall_idx']] = []
-                surch_loads_map[sur['wall_idx']].append({
-                    'type': 'distributed_trapezoid', 'is_gravity': False, 'params': [sign*sur['q'], sign*sur['q'], 0, sur['h']]
-                })
+                target_id = f'W{sur["wall_idx"]+1}'
+                found_idx = -1
+                for k, el_info in enumerate(elems_base):
+                    if el_info['id'] == target_id:
+                        found_idx = k
+                        break
+
+                if found_idx != -1:
+                    sign = 1.0 if sur['face'] == 'L' else -1.0
+                    if found_idx not in surch_loads_map: surch_loads_map[found_idx] = []
+                    surch_loads_map[found_idx].append({
+                        'type': 'distributed_trapezoid', 'is_gravity': False, 'params': [sign*sur['q'], sign*sur['q'], 0, sur['h']]
+                    })
     res_surch = solve_static(surch_loads_map)
 
     def get_empty_env():
@@ -456,24 +495,42 @@ def run_raw_analysis(params, phi_val_override=None):
         steps_out = {'Forward': [], 'Reverse': []}
         
         # PREPARE DATA FOR BATCH KERNELS ONCE
-        sp_start_idx = num_supp if params['mode'] == 'Frame' else 0
-        sp_start_x = np.zeros(num_spans)
-        sp_lens = np.zeros(num_spans)
-        sp_el_indices = np.zeros(num_spans, dtype=np.int32)
+        # NOTE: We must rebuild span info mapping because indices in elem_objects 
+        # might have shifted due to filtering out zero-length elements.
+        
+        sp_start_x = []
+        sp_lens = []
+        sp_el_indices = []
         c_x = 0
         sp_elems_info = [] 
         
         for sp_i in range(num_spans):
-            # L = params['L_list'][sp_i] # This is horizontal
-            # Retrieve Element Object to get True L
-            el_idx = sp_start_idx + sp_i
-            true_L = elem_objects[el_idx].L
+            target_id = f'S{sp_i+1}'
+            # Find this span in active elements
+            el_idx = -1
+            for k, el_info in enumerate(elems_base):
+                if el_info['id'] == target_id:
+                    el_idx = k
+                    break
             
-            sp_start_x[sp_i] = c_x
-            sp_lens[sp_i] = true_L
-            sp_el_indices[sp_i] = el_idx
-            sp_elems_info.append((c_x, true_L, el_idx))
-            c_x += true_L
+            if el_idx != -1:
+                # L = params['L_list'][sp_i] # This is horizontal
+                true_L = elem_objects[el_idx].L
+                
+                sp_start_x.append(c_x)
+                sp_lens.append(true_L)
+                sp_el_indices.append(el_idx)
+                sp_elems_info.append((c_x, true_L, el_idx))
+                c_x += true_L
+            else:
+                # Span was filtered out (L=0). 
+                # We skip it in the stepping path logic.
+                pass
+
+        # Convert lists to numpy arrays for Numba
+        sp_start_x = np.array(sp_start_x, dtype=np.float64)
+        sp_lens = np.array(sp_lens, dtype=np.float64)
+        sp_el_indices = np.array(sp_el_indices, dtype=np.int32)
 
         total_structure_len = c_x 
 
@@ -493,7 +550,7 @@ def run_raw_analysis(params, phi_val_override=None):
             el_dof_indices[k] = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
         
         mesh_sz = params.get('mesh_size', 0.5)
-        max_len = np.max(el_L)
+        max_len = np.max(el_L) if len(el_L) > 0 else 1.0
         n_pts_kernel = max(5, int(max_len / mesh_sz) + 1)
         S_matrices = kernels.jit_precompute_stress_recovery(n_elems, n_pts_kernel, el_L, el_k_local)
         env_results_accum = np.zeros((n_elems, n_pts_kernel, 10))

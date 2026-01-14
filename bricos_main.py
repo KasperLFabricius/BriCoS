@@ -123,27 +123,37 @@ def get_def():
     }
 
 def get_clear(name_suffix, current_mode):
+    # Strictly cleared state: 0 Geometry, 1.0 Factors, Manual Phi=1.0
     return {
         'mode': current_mode, 
         'E': 30e6, 'num_spans': 1,
         'L_list': [0.0]*10, 'Is_list': [0.0]*10, 'sw_list': [0.0]*10,
         'h_list': [0.0]*11, 'Iw_list': [0.0]*11,
-        'e_mode': 'Eurocode',
+        'e_mode': 'Manual', # Reset to Manual E to avoid implicit fck calcs
         'fck_span_list': [30.0]*10, 'fck_wall_list': [30.0]*11,
-        'E_custom_span': [33.0]*10, 'E_custom_wall': [33.0]*11,
-        'E_span_list': [33e6]*10, 'E_wall_list': [33e6]*11,
+        'E_custom_span': [30.0]*10, 'E_custom_wall': [30.0]*11,
+        'E_span_list': [30e6]*10, 'E_wall_list': [30e6]*11,
         
         'supports': [],
         'soil': [],
         'surcharge': [], 
+        
+        # Cleared Vehicles
         'vehicle': {'loads': [], 'spacing': []},
         'vehicle_loads': "", 'vehicle_space': "",
         'vehicleB': {'loads': [], 'spacing': []},
         'vehicleB_loads': "", 'vehicleB_space': "",
+        
+        # Unity Factors
         'KFI': 1.0, 
         'gamma_g': 1.0, 'gamma_j': 1.0, 
-        'gamma_veh': 1.0, 'gamma_vehB': 1.0, 'phi': 1.0, 'scale_manual': 2.0,
-        'phi_mode': 'Manual', 
+        'gamma_veh': 1.0, 'gamma_vehB': 1.0, 
+        
+        # Manual Phi = 1.0
+        'phi': 1.0, 
+        'phi_mode': 'Manual',
+        
+        'scale_manual': 2.0, 
         'mesh_size': 0.5, 'step_size': 0.2,
         'name': f"System {name_suffix}",
         'last_mode': current_mode,
@@ -266,8 +276,8 @@ with st.sidebar.expander("Reset Data", expanded=False):
             
             def reset_system_state(target_key, new_data):
                 # 1. CLEANUP: Delete ALL widget states for this system first.
-                # This ensures input widgets (including Vehicle selectors) re-initialize 
-                # from the new_data on the next run.
+                # This ensures input widgets re-initialize from new_data on next run
+                # and fixes "Ghosting" or "Reverting" input issues.
                 prefix = f"{target_key}_"
                 keys_to_del = [k for k in st.session_state.keys() if k.startswith(prefix)]
                 for k in keys_to_del: del st.session_state[k]
@@ -275,36 +285,42 @@ with st.sidebar.expander("Reset Data", expanded=False):
                 # 2. SET DATA: Apply the new data dictionary
                 st.session_state[target_key] = new_data
                 
-                # 3. SYNC HELPERS: Re-establish keys needed for sidebar rendering logic
+                # 3. SYNC HELPERS
                 st.session_state[f"{target_key}_nsp"] = new_data['num_spans']
                 st.session_state[f"{target_key}_md_sel"] = new_data['mode']
                 st.session_state[f"{target_key}_kfi"] = new_data['KFI']
-                # Note: Vehicle keys are NOT set here; they will auto-init in 'handle_veh_inputs' on rerun.
+                # Force vehicle reset in widget keys
+                if f"{target_key}_vehA_class" in st.session_state: del st.session_state[f"{target_key}_vehA_class"]
+                if f"{target_key}_vehB_class" in st.session_state: del st.session_state[f"{target_key}_vehB_class"]
 
             if mode == "A" or mode == "ALL":
                 current_mode = st.session_state['sysA']['mode']
-                data = {**get_def(), 'num_spans':1, 'name': "System A"}
-                # Re-apply A specific soil
-                data['soil'] = [
-                    {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, 
-                    {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, 
-                    {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, 
-                    {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
-                ]
-                if action == "clear": data = get_clear("A", current_mode)
+                if action == "clear":
+                    data = get_clear("A", current_mode)
+                else:
+                    data = {**get_def(), 'num_spans':1, 'name': "System A"}
+                    # Re-apply A specific soil
+                    data['soil'] = [
+                        {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, 
+                        {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, 
+                        {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, 
+                        {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
+                    ]
                 reset_system_state("sysA", data)
                 
             if mode == "B" or mode == "ALL":
                 current_mode = st.session_state['sysB']['mode']
-                data = {**get_def(), 'num_spans':2, 'name': "System B"}
-                # Re-apply B specific soil
-                data['soil'] = [
-                    {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
-                    {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-                    {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-                    {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
-                ]
-                if action == "clear": data = get_clear("B", current_mode)
+                if action == "clear":
+                    data = get_clear("B", current_mode)
+                else:
+                    data = {**get_def(), 'num_spans':2, 'name': "System B"}
+                    # Re-apply B specific soil
+                    data['soil'] = [
+                        {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
+                        {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+                        {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+                        {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
+                    ]
                 reset_system_state("sysB", data)
                 
             st.session_state.reset_mode = None
@@ -444,7 +460,10 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
     p['e_mode'] = "Eurocode" if "Eurocode" in e_mode else "Manual"
 
     help_kfi = "Consequence Class Factor (KFI) applied to all loads."
-    p['KFI'] = st.selectbox("KFI (Consequence Class)", [0.9, 1.0, 1.1], index=2, key=f"{curr}_kfi", help=help_kfi)
+    kfi_opts = [0.9, 1.0, 1.1]
+    curr_kfi = p.get('KFI', 1.0)
+    idx_kfi = kfi_opts.index(curr_kfi) if curr_kfi in kfi_opts else 1
+    p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", help=help_kfi)
     
     gg_opts = [0.9, 1.0, 1.10, 1.25]
     c_gg, c_gj = st.columns(2)
@@ -535,8 +554,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         else:
             c2.text_input(f"I{i+1}", "See Profiler", disabled=True, key=f"{curr}_i{i}_dis")
 
-        # UPDATED SELFWEIGHT HELP
-        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help="Distributed load from permanent dead loads, such as structure selfweight, surfacing, soil and another permanent loads." if i==0 else None)
+        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help="Distributed load from permanent dead loads." if i==0 else None)
         
         # MATERIAL
         if is_ec:
@@ -576,8 +594,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         
         sur = next((x for x in p['surcharge'] if x['wall_idx']==i), None)
         val_q = sur['q'] if sur else 0.0
-        # UPDATED SURCHARGE HELP
-        new_q = c3.number_input(f"Surch. [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help="Vehicle Surcharge, acting uniformly on the wall. Dynamic Factor is never added to surcharge load. For combination with vertical vehicle loads, see Analysis settings." if i==0 else None)
+        new_q = c3.number_input(f"Surch. [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help="Vehicle Surcharge" if i==0 else None)
         
         if not is_super:
             p['surcharge'] = [x for x in p['surcharge'] if x['wall_idx'] != i]
@@ -595,21 +612,16 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
             p['E_custom_wall'][i] = val_in
             p['E_wall_list'][i] = val_in * 1e6
 
-        # --- UPDATED SOIL UI LOGIC (CORRECTED) ---
-        # Soil Left (User Input) -> Pushes Right -> face='L'
-        # Soil Right (User Input) -> Pushes Left -> face='R'
-        
+        # --- UPDATED SOIL UI LOGIC ---
         ex_SoilLeft = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='L'), None)
         ex_SoilRight = next((x for x in p['soil'] if x['wall_idx']==i and x['face']=='R'), None)
         
         c_sl, c_sr = st.columns(2)
         
-        # Left Column = H_soil_left (Writes to face='L')
         h_L = c_sl.number_input("H_soil_left [m]", value=ex_SoilLeft['h'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_shl{i}", help="Soil on Left Face (Pushing Right)")
-        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_SoilLeft['q_bot'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}", help="Pressure Bot")
-        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_SoilLeft['q_top'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}", help="Pressure Top")
+        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_SoilLeft['q_bot'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}")
+        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_SoilLeft['q_top'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}")
         
-        # Right Column = H_soil_right (Writes to face='R')
         h_R = c_sr.number_input("H_soil_right [m]", value=ex_SoilRight['h'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_shr{i}", help="Soil on Right Face (Pushing Left)")
         qR_bot = c_sr.number_input("q_bot [kN/m²]", value=ex_SoilRight['q_bot'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_sqrb{i}")
         qR_top = c_sr.number_input("q_top [kN/m²]", value=ex_SoilRight['q_top'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_sqrt{i}")
@@ -621,7 +633,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
 
     # --- SECTION PROFILER ---
     st.markdown("---")
-    # CHANGED: Wrapped in Expander
     with st.sidebar.expander("🛠️ Section Profiler (Advanced)", expanded=False):
         st.caption("Configure variable stiffness, height profiles, or vertical alignment.")
         
@@ -688,7 +699,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
                 target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", help=help_inc, key=f"{curr}_inc_v")
 
 
-# --- NEW BOUNDARY CONDITIONS TAB ---
+# --- BOUNDARY CONDITIONS TAB ---
 with st.sidebar.expander("Boundary Conditions", expanded=False):
     # Dynamic list management for supports
     num_supports = n_spans + 1
@@ -701,15 +712,11 @@ with st.sidebar.expander("Boundary Conditions", expanded=False):
             if i < len(current_supports):
                 new_list.append(current_supports[i])
             else:
-                # Default Logic
                 if p['mode'] == 'Frame':
-                    # Fixed Base
                     new_list.append({'type': 'Fixed', 'k': [1e14, 1e14, 1e14]})
                 else:
-                    if i == 0:
-                        new_list.append({'type': 'Pinned', 'k': [1e14, 1e14, 0.0]})
-                    else:
-                        new_list.append({'type': 'Roller (X-Free)', 'k': [0.0, 1e14, 0.0]})
+                    if i == 0: new_list.append({'type': 'Pinned', 'k': [1e14, 1e14, 0.0]})
+                    else: new_list.append({'type': 'Roller (X-Free)', 'k': [0.0, 1e14, 0.0]})
         p['supports'] = new_list
     
     # Render Inputs
@@ -725,7 +732,6 @@ with st.sidebar.expander("Boundary Conditions", expanded=False):
         supp_name = f"Wall {i+1} Base" if p['mode'] == 'Frame' else f"Support {i+1}"
         st.markdown(f"**{supp_name}**")
         
-        # Get current state
         curr_s = p['supports'][i]
         curr_type = curr_s.get('type', 'Fixed')
         if curr_type not in presets: curr_type = 'Custom Spring'
@@ -763,10 +769,7 @@ with st.sidebar.expander("Vehicle Definitions", expanded=True):
     veh_options, veh_data = get_vehicle_library()
     
     def handle_veh_inputs(prefix, key_class, key_loads, key_space, struct_key):
-        # Allow default override via session state (from Reset/Init logic)
         sess_key = f"{curr}_{prefix}_class"
-        
-        # CHANGE: Differentiate default based on Prefix
         default_class = "Class 100" if prefix == "A" else "Custom"
         if sess_key not in st.session_state: st.session_state[sess_key] = default_class
         
@@ -828,10 +831,9 @@ with st.sidebar.expander("Vehicle Definitions", expanded=True):
     st.markdown("**Vehicle B**")
     handle_veh_inputs("B", f"{curr}_vehB_class", 'vehicleB_loads', 'vehicleB_space', 'vehicleB')
 
-# --- NEW: ANALYSIS SETTINGS EXPANDER (Moved BEFORE execution to fix lag) ---
+# --- ANALYSIS SETTINGS ---
 with st.sidebar.expander("Analysis & Result Settings", expanded=True):
     help_dir = "Forward: Left to Right. Reverse: Right to Left (axles inverted). Both: Envelope of both directions."
-    # Determine default index based on current state
     curr_dir = st.session_state['sysA'].get('vehicle_direction', 'Forward')
     dir_opts = ["Forward", "Reverse", "Both"]
     idx_dir = dir_opts.index(curr_dir) if curr_dir in dir_opts else 0
@@ -843,7 +845,6 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=True):
     st.markdown("---")
     help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
     
-    # Determine default surcharge index
     is_sim = st.session_state['sysA'].get('combine_surcharge_vehicle', False)
     combo_idx = 1 if is_sim else 0
     
@@ -852,8 +853,6 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=True):
     is_simultaneous = (surch_sel == "Simultaneous (Vehicle + Surcharge)")
     st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
     st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
-    
-    # RESULT TYPE REMOVED FROM HERE, MOVED TO MAIN UI
 
 if "common_mesh_slider" in st.session_state:
     m_val = st.session_state["common_mesh_slider"]
@@ -879,28 +878,23 @@ def set_view_case(): st.session_state.keep_view_case = st.session_state.view_cas
 try: v_idx = view_options.index(st.session_state.keep_view_case)
 except ValueError: v_idx = 0
 
-# Result Mode Logic (MOVED TO MAIN)
-# Default initialization if not present
 if 'result_mode' not in st.session_state: st.session_state['result_mode'] = "Design (ULS)"
 
-# CALL SOLVER WRAPPED IN TRY/EXCEPT FOR STABILITY
 def safe_solve(params):
     try:
         return solver.run_raw_analysis(params)
     except ValueError as e:
         return None, None, str(e)
 
-# Now safe_solve is called AFTER sidebar inputs are processed
 raw_res_A, nodes_A, err_A = safe_solve(st.session_state['sysA'])
 raw_res_B, nodes_B, err_B = safe_solve(st.session_state['sysB'])
 
-# Display Errors if any
 if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
 if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
 
-# Proceed only if results exist
-has_res_A = (raw_res_A is not None)
-has_res_B = (raw_res_B is not None)
+# Safe Check for None (Safe Solver Update)
+has_res_A = (raw_res_A is not None) and (nodes_A is not None)
+has_res_B = (raw_res_B is not None) and (nodes_B is not None)
 
 c1, c2, c3, c4 = st.columns([1,1,1,2])
 man_scale = c2.number_input("Target Diagram Height [m]", value=st.session_state['sysA'].get('scale_manual', 2.0), format="%.2f")
@@ -922,8 +916,7 @@ if view_case != "Vehicle Steps":
         tog_map = {"Both": "Both", "System A": st.session_state['sysA']['name'], "System B": st.session_state['sysB']['name']}
         show_sys_mode = st.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle")
 
-# MOVED RESULT TYPE SELECTOR HERE
-st.write("") # Spacer
+st.write("") 
 curr_res_mode = st.session_state.get('result_mode', "Design (ULS)")
 res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
 try: res_idx = res_opts.index(curr_res_mode)
@@ -931,14 +924,12 @@ except: res_idx = 0
 st.session_state['result_mode'] = st.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_main_ui")
 result_mode_val = st.session_state['result_mode']
 
-# Label Checkbox
 show_labels = c3.checkbox("Labels", value=True)
 
-# Combine Results (Only if raw results exist)
 res_A = solver.combine_results(raw_res_A, st.session_state['sysA'], result_mode_val) if has_res_A else {}
 res_B = solver.combine_results(raw_res_B, st.session_state['sysB'], result_mode_val) if has_res_B else {}
 
-if p.get('phi_mode', 'Calculate') == 'Calculate' and has_res_A: # Default to showing A log if avail
+if p.get('phi_mode', 'Calculate') == 'Calculate' and has_res_A:
     active_raw_res = raw_res_A if curr == 'sysA' and has_res_A else (raw_res_B if has_res_B else {})
     phi_val = active_raw_res.get('phi_calc', 1.0)
     with phi_log_placeholder.container():
@@ -946,7 +937,6 @@ if p.get('phi_mode', 'Calculate') == 'Calculate' and has_res_A: # Default to sho
         with st.expander("Phi Calculation Log", expanded=False):
             for log_line in active_raw_res.get('phi_log', []): st.caption(log_line)
 
-# Prepare Plot Data
 rA, rB = {}, {}
 step_view_sys = "System A"
 active_veh_step = "Vehicle A"
@@ -954,18 +944,14 @@ veh_key_res = ""
 
 if view_case == "Vehicle Steps":
     st.markdown("---")
-    
-    # Check if we need a direction toggle
     is_both_active = (st.session_state['sysA']['vehicle_direction'] == 'Both')
     step_dir_suffix = ""
     
-    # If "Both" is active, show the toggle
     if is_both_active:
         c_veh_tog, c_dir_tog, c_step_slide, c_step_tog = st.columns([1, 1, 2, 1])
         step_dir_sel = c_dir_tog.radio("Step Direction:", ["Forward", "Reverse"], horizontal=True, key="step_dir_radio")
         if step_dir_sel == "Reverse": step_dir_suffix = "_Rev"
     else:
-        # If not "Both", determine if we are in Reverse mode implicitly
         if st.session_state['sysA']['vehicle_direction'] == 'Reverse':
              step_dir_suffix = "_Rev"
         c_veh_tog, c_step_slide, c_step_tog = st.columns([1, 2, 1])
@@ -975,7 +961,6 @@ if view_case == "Vehicle Steps":
     except ValueError: av_idx = 0
     active_veh_step = c_veh_tog.radio("Anim Vehicle:", ["Vehicle A", "Vehicle B"], index=av_idx, horizontal=True, key="anim_veh_radio", on_change=set_anim_veh)
     
-    # Construct key based on selection
     base_key = "Vehicle Steps A" if active_veh_step == "Vehicle A" else "Vehicle Steps B"
     veh_key_res = f"{base_key}{step_dir_suffix}"
     
@@ -1001,7 +986,6 @@ if view_case == "Vehicle Steps":
                 step_data = s_list[idx]['res']
                 out = {}
                 for k, v in step_data.items():
-                    # Populate Max/Min keys for step view (Max=Min=Current) to allow unified table generation
                     out[k] = {**v, 
                         'M':v['M']*f_factor, 'V':v['V']*f_factor, 'N':v['N']*f_factor, 
                         'M_max':v['M']*f_factor, 'M_min':v['M']*f_factor,
@@ -1016,7 +1000,6 @@ if view_case == "Vehicle Steps":
 
         f_A = res_A['f_vehA'] if active_veh_step == "Vehicle A" and has_res_A else 1.0
         f_B = res_B['f_vehA'] if active_veh_step == "Vehicle A" and has_res_B else 1.0
-        # If toggled to B
         if active_veh_step == "Vehicle B":
              f_A = res_A['f_vehB'] if has_res_A else 1.0
              f_B = res_B['f_vehB'] if has_res_B else 1.0
@@ -1051,12 +1034,12 @@ with t1:
     else:
         show_A = (show_sys_mode == "Both" or show_sys_mode == "System A")
         show_B = (show_sys_mode == "Both" or show_sys_mode == "System B")
-        # Fix check for None nodes
+        
         geom_invalid_A = (nodes_A is None) or (len(nodes_A)==0)
         geom_invalid_B = (nodes_B is None) or (len(nodes_B)==0)
         
         if geom_invalid_A and geom_invalid_B: 
-             st.warning("⚠️ No structural geometry or valid analysis.")
+             st.warning("⚠️ No structural geometry defined. Please configure Spans/Walls in the sidebar.")
         else:
              if (not rA) and (not rB): st.warning(f"⚠️ No results found for **{view_case}**.")
 
@@ -1080,13 +1063,11 @@ with t2:
             x_vals = data.get('x', [])
             n_pts = len(x_vals)
             
-            # Helper to safely get array or fill with zeros
             def get_arr(key):
                 arr = data.get(key)
                 if arr is None: return np.zeros(n_pts)
                 return arr
             
-            # If viewing steps, data structure is simpler (M, V, N)
             if view_case == "Vehicle Steps":
                 m = get_arr('M'); v = get_arr('V'); n = get_arr('N')
                 dx = get_arr('def_x'); dy = get_arr('def_y')
@@ -1097,14 +1078,12 @@ with t2:
                         "Def_X [mm]": dx[i]*1000, "Def_Y [mm]": dy[i]*1000
                     })
             else:
-                # Envelopes
                 m_max = get_arr('M_max'); m_min = get_arr('M_min')
                 v_max = get_arr('V_max'); v_min = get_arr('V_min')
                 n_max = get_arr('N_max'); n_min = get_arr('N_min')
                 dx_max = get_arr('def_x_max'); dx_min = get_arr('def_x_min')
                 dy_max = get_arr('def_y_max'); dy_min = get_arr('def_y_min')
                 
-                # Fallback for single-case results like SW which might use M instead of M_max
                 if 'M_max' not in data and 'M' in data:
                      m_max = data['M']; m_min = data['M']
                      v_max = data['V']; v_min = data['V']
