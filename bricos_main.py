@@ -802,6 +802,44 @@ with st.sidebar.expander("Vehicle Definitions", expanded=True):
     st.markdown("**Vehicle B**")
     handle_veh_inputs("B", f"{curr}_vehB_class", 'vehicleB_loads', 'vehicleB_space', 'vehicleB')
 
+# --- NEW: ANALYSIS SETTINGS EXPANDER (Moved BEFORE execution to fix lag) ---
+with st.sidebar.expander("Analysis & Result Settings", expanded=True):
+    help_dir = "Forward: Left to Right. Reverse: Right to Left (axles inverted). Both: Envelope of both directions."
+    # Determine default index based on current state
+    curr_dir = st.session_state['sysA'].get('vehicle_direction', 'Forward')
+    dir_opts = ["Forward", "Reverse", "Both"]
+    idx_dir = dir_opts.index(curr_dir) if curr_dir in dir_opts else 0
+    
+    dir_sel = st.radio("Vehicle Direction", dir_opts, horizontal=True, index=idx_dir, key="veh_dir_radio_sidebar", help=help_dir)
+    st.session_state['sysA']['vehicle_direction'] = dir_sel
+    st.session_state['sysB']['vehicle_direction'] = dir_sel
+    
+    st.markdown("---")
+    help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
+    
+    # Determine default surcharge index
+    is_sim = st.session_state['sysA'].get('combine_surcharge_vehicle', False)
+    combo_idx = 1 if is_sim else 0
+    
+    surch_sel = st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], index=combo_idx, horizontal=True, key="surcharge_combo_radio_sidebar", help=help_combo)
+    
+    is_simultaneous = (surch_sel == "Simultaneous (Vehicle + Surcharge)")
+    st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
+    st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
+    
+    st.markdown("---")
+    # Result mode (ULS/SLS) doesn't affect Solver loop, but logically fits here
+    if "result_mode_radio_sidebar" in st.session_state: st.session_state['result_mode'] = st.session_state["result_mode_radio_sidebar"]
+    if 'result_mode' not in st.session_state: st.session_state['result_mode'] = "Design (ULS)"
+    
+    curr_res_mode = st.session_state['result_mode']
+    res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
+    try: res_idx = res_opts.index(curr_res_mode)
+    except: res_idx = 0
+    
+    st.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_radio_sidebar")
+
+
 if "common_mesh_slider" in st.session_state:
     m_val = st.session_state["common_mesh_slider"]
     st.session_state['sysA']['mesh_size'] = m_val
@@ -818,9 +856,6 @@ def set_view_case(): st.session_state.keep_view_case = st.session_state.view_cas
 try: v_idx = view_options.index(st.session_state.keep_view_case)
 except ValueError: v_idx = 0
 
-if "result_mode_radio" in st.session_state: st.session_state['result_mode'] = st.session_state["result_mode_radio"]
-if 'result_mode' not in st.session_state: st.session_state['result_mode'] = "Design (ULS)"
-
 result_mode_val = st.session_state['result_mode']
 
 # CALL SOLVER WRAPPED IN TRY/EXCEPT FOR STABILITY
@@ -830,6 +865,7 @@ def safe_solve(params):
     except ValueError as e:
         return None, None, str(e)
 
+# Now safe_solve is called AFTER sidebar inputs are processed
 raw_res_A, nodes_A, err_A = safe_solve(st.session_state['sysA'])
 raw_res_B, nodes_B, err_B = safe_solve(st.session_state['sysB'])
 
@@ -861,25 +897,7 @@ if view_case != "Vehicle Steps":
         tog_map = {"Both": "Both", "System A": st.session_state['sysA']['name'], "System B": st.session_state['sysB']['name']}
         show_sys_mode = st.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle")
 
-c_tog, _ = st.columns([1,1])
-with c_tog:
-    st.radio("Result Type", ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"], horizontal=True, key="result_mode_radio")
-    
-    help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
-    st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], horizontal=True, key="surcharge_combo_radio", help=help_combo)
-    
-    # === BUG FIX: INJECT COMBO STATE INTO SYSTEMS ===
-    is_simultaneous = (st.session_state["surcharge_combo_radio"] == "Simultaneous (Vehicle + Surcharge)")
-    st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
-    st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
-
-    # --- NEW: VEHICLE DIRECTION ---
-    st.markdown("---")
-    help_dir = "Forward: Left to Right. Reverse: Right to Left (axles inverted). Both: Envelope of both directions."
-    dir_sel = st.radio("Vehicle Direction", ["Forward", "Reverse", "Both"], horizontal=True, index=0, key="veh_dir_radio", help=help_dir)
-    st.session_state['sysA']['vehicle_direction'] = dir_sel
-    st.session_state['sysB']['vehicle_direction'] = dir_sel
-
+# Label Checkbox
 show_labels = c3.checkbox("Labels", value=True)
 
 # Combine Results (Only if raw results exist)
