@@ -13,11 +13,40 @@ import bricos_viz as viz
 
 st.set_page_config(layout="wide", page_title="BriCoS v0.30")
 
+# --- CSS FOR STICKY CONTROLS & LAYOUT ---
+# Updated to use :has() selector for robust container targeting
 st.markdown("""
 <style>
-    .block-container {padding-top: 1rem; padding-bottom: 0rem;}
+    .block-container {padding-top: 1rem; padding-bottom: 3rem;}
     div[data-testid="stExpander"] div[role="button"] p {font-size: 1rem; font-weight: bold;}
     .stSelectbox label { font-size: 0.9rem; font-weight: bold; }
+    
+    /* Sticky Sidebar Container */
+    /* Targets the vertical block containing the specific ID marker */
+    div[data-testid="stVerticalBlock"]:has(div#sticky-sidebar-marker) {
+        position: sticky;
+        top: 0rem;
+        z-index: 1000;
+        background-color: inherit; /* Inherit Blue/Red tint */
+        padding-top: 10px;
+        padding-bottom: 15px;
+        border-bottom: 2px solid rgba(0,0,0,0.1);
+        margin-bottom: 10px;
+    }
+    
+    /* Sticky Results Toolbar (Main Pane) */
+    div[data-testid="stVerticalBlock"]:has(div#sticky-results-marker) {
+        position: sticky;
+        top: 3.75rem; /* Matches Streamlit Header Height */
+        z-index: 999;
+        background-color: white;
+        padding: 15px;
+        margin-top: -15px;
+        margin-bottom: 10px;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+        border: 1px solid #eee;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -233,8 +262,7 @@ def force_ui_update(sys_key, data):
     st.session_state[f"{sys_key}_B_loads_input"] = data.get('vehicleB_loads', "")
     st.session_state[f"{sys_key}_B_space_input"] = data.get('vehicleB_space', "")
     
-    # Reset Dropdowns to 'Custom' to ensure text is respected, unless logic exists to detect class
-    # For now, we clear the class selection state to force a re-evaluation or default
+    # Reset Dropdowns to 'Custom' to ensure text is respected
     if f"{sys_key}_vehA_class" in st.session_state: del st.session_state[f"{sys_key}_vehA_class"]
     if f"{sys_key}_vehB_class" in st.session_state: del st.session_state[f"{sys_key}_vehB_class"]
     
@@ -243,16 +271,6 @@ def force_ui_update(sys_key, data):
     prefix = f"{sys_key}_"
     supp_keys = [k for k in st.session_state.keys() if k.startswith(prefix) and "_k" in k]
     for k in supp_keys: del st.session_state[k]
-    
-    # Re-populate support keys if they exist in data
-    # Note: Support keys are dynamically generated as {sys}_kx_{i}. 
-    # We rely on the widget reading from data['supports'] if the key is missing/deleted, 
-    # OR we can explicitly set them if we want to be 100% sure. 
-    # Given the complexity of support types (Fixed vs Custom), deleting the key 
-    # allows the UI logic (lines 485+) to re-init from data['supports']. 
-    # For text inputs like 'vehicle', explicitly setting is better. 
-    # For numeric/selects like supports, deleting often works well, 
-    # but let's be consistent and set the Custom values if present.
     
     for i, supp in enumerate(data.get('supports', [])):
         if supp['type'] == 'Custom Spring':
@@ -333,6 +351,27 @@ if st.session_state['sysA'].get('scale_manual', 0) < 0.1: st.session_state['sysA
 if st.session_state['sysB'].get('scale_manual', 0) < 0.1: st.session_state['sysB']['scale_manual'] = 2.0
 
 st.sidebar.header("Configuration")
+
+# --- STICKY SIDEBAR: ACTIVE SYSTEM & NAMES ---
+# We use st.container() and inject a hidden marker div.
+# The CSS :has() selector will target this container and make it sticky.
+with st.sidebar.container():
+    st.markdown('<div id="sticky-sidebar-marker"></div>', unsafe_allow_html=True)
+    c_nA, c_nB = st.columns(2)
+    st.session_state['sysA']['name'] = c_nA.text_input("Name Sys A", st.session_state['sysA']['name'])
+    st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'])
+
+    sys_map = {"sysA": f"{st.session_state['sysA']['name']} (Blue)", "sysB": f"{st.session_state['sysB']['name']} (Red)"}
+    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True)
+
+    if active_sys_key == 'sysA':
+        st.markdown("""<style>[data-testid="stSidebar"] { background-color: #F0F8FF; }</style>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""<style>[data-testid="stSidebar"] { background-color: #FFF5F5; }</style>""", unsafe_allow_html=True)
+
+curr = active_sys_key
+p = st.session_state[curr]
+# ---------------------------------------------
 
 # --- RESET DATA SECTION ---
 with st.sidebar.expander("Reset Data", expanded=False):
@@ -502,21 +541,6 @@ with st.sidebar.expander("Copy Data", expanded=False):
         if c_no.button("Cancel"):
             st.session_state.copy_confirm_mode = None
             st.rerun()
-
-c_nA, c_nB = st.sidebar.columns(2)
-st.session_state['sysA']['name'] = c_nA.text_input("Name Sys A", st.session_state['sysA']['name'])
-st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'])
-
-sys_map = {"sysA": f"{st.session_state['sysA']['name']} (Blue)", "sysB": f"{st.session_state['sysB']['name']} (Red)"}
-active_sys_key = st.sidebar.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True)
-
-if active_sys_key == 'sysA':
-    st.markdown("""<style>[data-testid="stSidebar"] { background-color: #F0F8FF; }</style>""", unsafe_allow_html=True)
-else:
-    st.markdown("""<style>[data-testid="stSidebar"] { background-color: #FFF5F5; }</style>""", unsafe_allow_html=True)
-
-curr = active_sys_key
-p = st.session_state[curr]
 
 # --- MAIN INPUTS ---
 with st.sidebar.expander("Design Factors & Type", expanded=True):
@@ -946,13 +970,20 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=True):
     st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
     st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
 
+    # --- MOVED SLIDERS ---
+    st.markdown("---")
+    st.markdown("**Calculation Precision**")
+    c_mesh, c_step = st.columns(2)
+    def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
+    def_step = st.session_state['sysA'].get('step_size', 0.2)
+    m_val = c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider")
+    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider")
+
 if "common_mesh_slider" in st.session_state:
-    m_val = st.session_state["common_mesh_slider"]
     st.session_state['sysA']['mesh_size'] = m_val
     st.session_state['sysB']['mesh_size'] = m_val
 
 if "common_step_slider" in st.session_state:
-    s_val = st.session_state["common_step_slider"]
     st.session_state['sysA']['step_size'] = s_val
     st.session_state['sysB']['step_size'] = s_val
 
@@ -993,28 +1024,28 @@ man_scale = c2.number_input("Target Diagram Height [m]", value=st.session_state[
 st.session_state['sysA']['scale_manual'] = man_scale
 st.session_state['sysB']['scale_manual'] = man_scale
 
-c_mesh, c_step = st.columns(2)
-def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
-def_step = st.session_state['sysA'].get('step_size', 0.2)
-c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider")
-c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider")
+# --- STICKY RESULTS TOOLBAR ---
+# We use st.container() and inject a hidden marker div.
+# The CSS :has() selector will target this container and make it sticky.
+with st.container():
+    st.markdown('<div id="sticky-results-marker"></div>', unsafe_allow_html=True)
+    c_res_tool1, c_res_tool2, c_res_tool3 = st.columns([2, 2, 2])
 
-view_case = c4.selectbox("Load Case", view_options, index=v_idx, key="view_case_selector", on_change=set_view_case)
+    view_case = c_res_tool1.selectbox("Load Case", view_options, index=v_idx, key="view_case_selector", on_change=set_view_case)
 
-show_sys_mode = "Both"
-if view_case != "Vehicle Steps":
-    c_sys_tog, _ = st.columns([1,1])
-    with c_sys_tog:
+    show_sys_mode = "Both"
+    if view_case != "Vehicle Steps":
         tog_map = {"Both": "Both", "System A": st.session_state['sysA']['name'], "System B": st.session_state['sysB']['name']}
-        show_sys_mode = st.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle")
+        show_sys_mode = c_res_tool2.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle")
 
-st.write("") 
-curr_res_mode = st.session_state.get('result_mode', "Design (ULS)")
-res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
-try: res_idx = res_opts.index(curr_res_mode)
-except: res_idx = 0
-st.session_state['result_mode'] = st.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_main_ui")
-result_mode_val = st.session_state['result_mode']
+    curr_res_mode = st.session_state.get('result_mode', "Design (ULS)")
+    res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
+    try: res_idx = res_opts.index(curr_res_mode)
+    except: res_idx = 0
+    st.session_state['result_mode'] = c_res_tool3.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_main_ui")
+    result_mode_val = st.session_state['result_mode']
+
+# -----------------------------
 
 show_labels = c3.checkbox("Labels", value=True)
 
