@@ -65,7 +65,7 @@ def get_def():
     # Updated Defaults based on User Request
     I_def = calc_I(500)
     
-    # Attempt to load Class 100
+    # [cite_start]Attempt to load Class 100 [cite: 1]
     def_veh = load_vehicle_from_csv("Class 100")
     
     if def_veh:
@@ -105,6 +105,7 @@ def get_def():
         'vehicle_loads': veh_l_str, 
         'vehicle_space': veh_s_str,
         
+        # Default Vehicle B (Empty/Custom)
         'vehicleB': {'loads': [], 'spacing': []},
         'vehicleB_loads': "", 
         'vehicleB_space': "",
@@ -151,10 +152,6 @@ def get_clear(name_suffix, current_mode):
     }
 
 # --- INITIALIZATION WITH SPECIFIC DEFAULTS ---
-# Correct Convention:
-# Soil on LEFT (Outside Wall 0) -> Acts on face='L' -> Pushes Right (+X)
-# Soil on RIGHT (Outside Wall 1) -> Acts on face='R' -> Pushes Left (-X)
-
 if 'sysA' not in st.session_state: 
     # System A: 1 Span
     d = get_def()
@@ -284,12 +281,12 @@ with st.sidebar.expander("Reset Data", expanded=False):
             if mode == "A" or mode == "ALL":
                 current_mode = st.session_state['sysA']['mode']
                 data = {**get_def(), 'num_spans':1, 'name': "System A"}
-                # Re-apply A specific soil (CORRECTED)
+                # Re-apply A specific soil
                 data['soil'] = [
-                    {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, # Out (L) -> Push R
-                    {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, # In (R) -> Push L
-                    {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, # In (L) -> Push R
-                    {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}  # Out (R) -> Push L
+                    {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, 
+                    {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, 
+                    {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0}, 
+                    {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
                 ]
                 if action == "clear": data = get_clear("A", current_mode)
                 reset_system_state("sysA", data)
@@ -297,7 +294,7 @@ with st.sidebar.expander("Reset Data", expanded=False):
             if mode == "B" or mode == "ALL":
                 current_mode = st.session_state['sysB']['mode']
                 data = {**get_def(), 'num_spans':2, 'name': "System B"}
-                # Re-apply B specific soil (CORRECTED)
+                # Re-apply B specific soil
                 data['soil'] = [
                     {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0},
                     {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
@@ -535,7 +532,8 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         else:
             c2.text_input(f"I{i+1}", "See Profiler", disabled=True, key=f"{curr}_i{i}_dis")
 
-        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help="Self-weight" if i==0 else None)
+        # UPDATED SELFWEIGHT HELP
+        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help="Distributed load from permanent dead loads, such as structure selfweight, surfacing, soil and another permanent loads." if i==0 else None)
         
         # MATERIAL
         if is_ec:
@@ -575,7 +573,8 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
         
         sur = next((x for x in p['surcharge'] if x['wall_idx']==i), None)
         val_q = sur['q'] if sur else 0.0
-        new_q = c3.number_input(f"Surch. [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help="Surcharge" if i==0 else None)
+        # UPDATED SURCHARGE HELP
+        new_q = c3.number_input(f"Surch. [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help="Vehicle Surcharge, acting uniformly on the wall. Dynamic Factor is never added to surcharge load. For combination with vertical vehicle loads, see Analysis settings." if i==0 else None)
         
         if not is_super:
             p['surcharge'] = [x for x in p['surcharge'] if x['wall_idx'] != i]
@@ -619,70 +618,71 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
 
     # --- SECTION PROFILER ---
     st.markdown("---")
-    st.markdown("### 🛠️ Section Profiler (Advanced)")
-    st.caption("Configure variable stiffness, height profiles, or vertical alignment.")
-    
-    # Selector
-    elem_options = [f"Span {i+1}" for i in range(n_spans)] + ([f"Wall {i+1}" for i in range(n_spans+1)] if not is_super else [])
-    sel_el = st.selectbox("Edit Element:", elem_options, key=f"{curr}_prof_sel")
-    
-    # Parse Selection
-    is_span_selected = "Span" in sel_el
-    if is_span_selected:
-        idx = int(sel_el.split(" ")[1]) - 1
-        target_geom = p[f"span_geom_{idx}"]
-        target_simple_list = p['Is_list']
-    else:
-        idx = int(sel_el.split(" ")[1]) - 1
-        target_geom = p[f"wall_geom_{idx}"]
-        target_simple_list = p['Iw_list']
+    # CHANGED: Wrapped in Expander
+    with st.sidebar.expander("🛠️ Section Profiler (Advanced)", expanded=False):
+        st.caption("Configure variable stiffness, height profiles, or vertical alignment.")
         
-    c_p1, c_p2 = st.columns(2)
-    new_type = c_p1.radio("Definition Mode:", ["Inertia (I)", "Height (H)"], index=target_geom['type'], key=f"{curr}_prof_type", horizontal=True)
-    target_geom['type'] = 0 if "Inertia" in new_type else 1
-    
-    new_shape = c_p2.radio("Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], index=target_geom['shape'], key=f"{curr}_prof_shape", horizontal=True)
-    shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
-    target_geom['shape'] = shape_map[new_shape]
-    
-    vals = target_geom['vals']
-    c_v1, c_v2, c_v3 = st.columns(3)
-    
-    lbl_v = "I [m⁴]" if target_geom['type']==0 else "H [m]"
-    v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1")
-    
-    v2 = vals[1]
-    if target_geom['shape'] == 2:
-        v2 = c_v2.number_input(f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", key=f"{curr}_prof_v2")
-    
-    v3 = vals[2]
-    if target_geom['shape'] >= 1:
-        v3 = c_v3.number_input(f"End {lbl_v}", value=float(vals[2]), format="%.4f", key=f"{curr}_prof_v3")
+        # Selector
+        elem_options = [f"Span {i+1}" for i in range(n_spans)] + ([f"Wall {i+1}" for i in range(n_spans+1)] if not is_super else [])
+        sel_el = st.selectbox("Edit Element:", elem_options, key=f"{curr}_prof_sel")
         
-    target_geom['vals'] = [v1, v2, v3]
-    
-    # Update simple list (backward compat)
-    target_simple_list[idx] = v1 if target_geom['type']==0 else (1.0 * v1**3)/12.0
-
-    # --- ALIGNMENT SECTION (Spans Only) ---
-    if is_span_selected:
-        st.markdown("#### 📐 Alignment (Vertical Geometry)")
-        if 'align_type' not in target_geom: target_geom['align_type'] = 0
-        if 'incline_mode' not in target_geom: target_geom['incline_mode'] = 0
-        if 'incline_val' not in target_geom: target_geom['incline_val'] = 0.0
-
-        al_opts = ["Straight (Horizontal)", "Inclined"]
-        new_align = st.radio("Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, key=f"{curr}_align_t")
-        target_geom['align_type'] = al_opts.index(new_align)
-        
-        if target_geom['align_type'] == 1:
-            inc_opts = ["Slope (%)", "Delta Height (End - Start) [m]"]
-            new_inc_mode = st.radio("Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, key=f"{curr}_inc_m")
-            target_geom['incline_mode'] = inc_opts.index(new_inc_mode)
+        # Parse Selection
+        is_span_selected = "Span" in sel_el
+        if is_span_selected:
+            idx = int(sel_el.split(" ")[1]) - 1
+            target_geom = p[f"span_geom_{idx}"]
+            target_simple_list = p['Is_list']
+        else:
+            idx = int(sel_el.split(" ")[1]) - 1
+            target_geom = p[f"wall_geom_{idx}"]
+            target_simple_list = p['Iw_list']
             
-            lbl_inc = "Slope [%]" if target_geom['incline_mode'] == 0 else "Delta H [m]"
-            help_inc = "Positive slope/height goes UP. Negative goes DOWN."
-            target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", help=help_inc, key=f"{curr}_inc_v")
+        c_p1, c_p2 = st.columns(2)
+        new_type = c_p1.radio("Definition Mode:", ["Inertia (I)", "Height (H)"], index=target_geom['type'], key=f"{curr}_prof_type", horizontal=True)
+        target_geom['type'] = 0 if "Inertia" in new_type else 1
+        
+        new_shape = c_p2.radio("Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], index=target_geom['shape'], key=f"{curr}_prof_shape", horizontal=True)
+        shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
+        target_geom['shape'] = shape_map[new_shape]
+        
+        vals = target_geom['vals']
+        c_v1, c_v2, c_v3 = st.columns(3)
+        
+        lbl_v = "I [m⁴]" if target_geom['type']==0 else "H [m]"
+        v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1")
+        
+        v2 = vals[1]
+        if target_geom['shape'] == 2:
+            v2 = c_v2.number_input(f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", key=f"{curr}_prof_v2")
+        
+        v3 = vals[2]
+        if target_geom['shape'] >= 1:
+            v3 = c_v3.number_input(f"End {lbl_v}", value=float(vals[2]), format="%.4f", key=f"{curr}_prof_v3")
+            
+        target_geom['vals'] = [v1, v2, v3]
+        
+        # Update simple list (backward compat)
+        target_simple_list[idx] = v1 if target_geom['type']==0 else (1.0 * v1**3)/12.0
+
+        # --- ALIGNMENT SECTION (Spans Only) ---
+        if is_span_selected:
+            st.markdown("#### 📐 Alignment (Vertical Geometry)")
+            if 'align_type' not in target_geom: target_geom['align_type'] = 0
+            if 'incline_mode' not in target_geom: target_geom['incline_mode'] = 0
+            if 'incline_val' not in target_geom: target_geom['incline_val'] = 0.0
+
+            al_opts = ["Straight (Horizontal)", "Inclined"]
+            new_align = st.radio("Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, key=f"{curr}_align_t")
+            target_geom['align_type'] = al_opts.index(new_align)
+            
+            if target_geom['align_type'] == 1:
+                inc_opts = ["Slope (%)", "Delta Height (End - Start) [m]"]
+                new_inc_mode = st.radio("Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, key=f"{curr}_inc_m")
+                target_geom['incline_mode'] = inc_opts.index(new_inc_mode)
+                
+                lbl_inc = "Slope [%]" if target_geom['incline_mode'] == 0 else "Delta H [m]"
+                help_inc = "Positive slope/height goes UP. Negative goes DOWN."
+                target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", help=help_inc, key=f"{curr}_inc_v")
 
 
 # --- NEW BOUNDARY CONDITIONS TAB ---
@@ -762,13 +762,15 @@ with st.sidebar.expander("Vehicle Definitions", expanded=True):
     def handle_veh_inputs(prefix, key_class, key_loads, key_space, struct_key):
         # Allow default override via session state (from Reset/Init logic)
         sess_key = f"{curr}_{prefix}_class"
-        if sess_key not in st.session_state: st.session_state[sess_key] = "Custom"
         
-        # Sync Class 100 on First Load if needed
-        if st.session_state[sess_key] == "Class 100" and st.session_state[sess_key] in veh_data and not p[struct_key]['loads']:
+        # CHANGE: Differentiate default based on Prefix
+        default_class = "Class 100" if prefix == "A" else "Custom"
+        if sess_key not in st.session_state: st.session_state[sess_key] = default_class
+        
+        # Sync Class 100 on First Load if needed (Only for A)
+        if prefix == "A" and st.session_state[sess_key] == "Class 100" and st.session_state[sess_key] in veh_data and not p[struct_key]['loads']:
              p[key_loads] = veh_data["Class 100"]['loads']
              p[key_space] = veh_data["Class 100"]['spacing']
-             # trigger rerun is risky inside render loop, rely on user interaction or next frame
         
         sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key)
         input_key_l = f"{curr}_{prefix}_loads_input"
@@ -848,18 +850,7 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=True):
     st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
     st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
     
-    st.markdown("---")
-    # Result mode (ULS/SLS) doesn't affect Solver loop, but logically fits here
-    if "result_mode_radio_sidebar" in st.session_state: st.session_state['result_mode'] = st.session_state["result_mode_radio_sidebar"]
-    if 'result_mode' not in st.session_state: st.session_state['result_mode'] = "Design (ULS)"
-    
-    curr_res_mode = st.session_state['result_mode']
-    res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
-    try: res_idx = res_opts.index(curr_res_mode)
-    except: res_idx = 0
-    
-    st.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_radio_sidebar")
-
+    # RESULT TYPE REMOVED FROM HERE, MOVED TO MAIN UI
 
 if "common_mesh_slider" in st.session_state:
     m_val = st.session_state["common_mesh_slider"]
@@ -871,13 +862,23 @@ if "common_step_slider" in st.session_state:
     st.session_state['sysA']['step_size'] = s_val
     st.session_state['sysB']['step_size'] = s_val
 
+# --- ABOUT SECTION ---
+st.sidebar.markdown("---")
+with st.sidebar.expander("About", expanded=False):
+    st.markdown("**BriCoS v0.30**")
+    st.write("Author: Kasper Lindskov Fabricius")
+    st.write("Email: Kasper.LindskovFabricius@sweco.dk")
+    st.write("A specialized Finite Element Analysis (FEM) tool for rapid bridge analysis and comparison.")
+
 # --- EXECUTION & RESULTS ---
 view_options = ["Total Envelope", "Selfweight", "Soil", "Surcharge", "Vehicle Envelope", "Vehicle Steps"]
 def set_view_case(): st.session_state.keep_view_case = st.session_state.view_case_selector
 try: v_idx = view_options.index(st.session_state.keep_view_case)
 except ValueError: v_idx = 0
 
-result_mode_val = st.session_state['result_mode']
+# Result Mode Logic (MOVED TO MAIN)
+# Default initialization if not present
+if 'result_mode' not in st.session_state: st.session_state['result_mode'] = "Design (ULS)"
 
 # CALL SOLVER WRAPPED IN TRY/EXCEPT FOR STABILITY
 def safe_solve(params):
@@ -917,6 +918,15 @@ if view_case != "Vehicle Steps":
     with c_sys_tog:
         tog_map = {"Both": "Both", "System A": st.session_state['sysA']['name'], "System B": st.session_state['sysB']['name']}
         show_sys_mode = st.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle")
+
+# MOVED RESULT TYPE SELECTOR HERE
+st.write("") # Spacer
+curr_res_mode = st.session_state.get('result_mode', "Design (ULS)")
+res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
+try: res_idx = res_opts.index(curr_res_mode)
+except: res_idx = 0
+st.session_state['result_mode'] = st.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_main_ui")
+result_mode_val = st.session_state['result_mode']
 
 # Label Checkbox
 show_labels = c3.checkbox("Labels", value=True)
