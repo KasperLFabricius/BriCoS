@@ -1183,15 +1183,11 @@ with t3:
     st.subheader(f"Comparsion Summary ({view_case})")
     
     # ----------------------------------------------
-    # 1. SECTION FORCES / DEFORMATION (Comparison)
+    # 1. HELPER FUNCTIONS
     # ----------------------------------------------
-    st.markdown("##### Peak Section Forces & Deformations")
-    
-    # 1a. Helper to get clean max/min values from envelope results
     def get_peaks(r_dict, key_max, key_min):
         if not r_dict: return None, None
         
-        # Check if envelope or single step
         has_env = (key_max in r_dict)
         has_step = ('M' in r_dict) and not has_env
         
@@ -1203,7 +1199,6 @@ with t3:
             val_min = np.min(r_dict[key_min])
             found = True
         elif has_step:
-            # Map request to basic keys M, V, N, def_x, def_y
             base_k = key_max.replace("_max", "")
             if base_k in r_dict:
                 arr = r_dict[base_k]
@@ -1214,105 +1209,160 @@ with t3:
         if not found: return None, None
         return val_max, val_min
 
-    # 1b. Collect all Element IDs from both systems
-    all_elems = sorted(list(set(rA.keys()) | set(rB.keys())), key=lambda x: (x[0], int(x[1:])))
-    
-    # 1c. Comparison Logic (Increase = Red)
-    def calc_diff(val_a, val_b):
+    # Updated Algebraic Comparison Logic
+    def calc_diff(val_a, val_b, is_max_case=True):
         if val_a is None or val_b is None: return np.nan
-        # Diff based on Magnitude Increase
-        # Increase = Larger Absolute Value in B compared to A
-        abs_a = abs(val_a)
-        abs_b = abs(val_b)
         
-        if abs_a < 1e-6:
-            if abs_b < 1e-6: return 0.0
-            return 999.0 # Infinite increase
+        # Guard for zero division
+        denom = abs(val_a)
+        if denom < 1e-6:
+            if abs(val_b) < 1e-6: return 0.0
+            return 999.0 
         
-        return ((abs_b - abs_a) / abs_a) * 100.0
+        if is_max_case:
+            # For MAX: Algebraic Increase = Red.
+            # (B - A) > 0 -> Increase -> Red
+            # (B - A) < 0 -> Decrease -> Green
+            diff = (val_b - val_a)
+            return (diff / denom) * 100.0
+        else:
+            # For MIN: Algebraic Decrease (More Negative) = Red.
+            # (A - B) > 0 => A > B => B is smaller/more negative -> Red
+            diff = (val_a - val_b)
+            return (diff / denom) * 100.0
 
-    # 1d. Build Table Rows
-    comp_rows = []
+    # Styling: Positive = Red (Worse), Negative = Green (Better)
+    def color_diff(val):
+        if pd.isna(val): return ""
+        if val > 0.05: return 'color: red; font-weight: bold' 
+        if val < -0.05: return 'color: green; font-weight: bold' 
+        return 'color: gray'
+
+    all_elems = sorted(list(set(rA.keys()) | set(rB.keys())), key=lambda x: (x[0], int(x[1:])))
+
+    # ----------------------------------------------
+    # 2. SEPARATE TABLES GENERATION
+    # ----------------------------------------------
     
-    # Define metrics to compare
-    metrics = [
-        ("M_max", "M_min", "M [kNm]"),
-        ("V_max", "V_min", "V [kN]"),
-        ("N_max", "N_min", "N [kN]"),
-        ("def_x_max", "def_x_min", "Def_X [mm]"),
-        ("def_y_max", "def_y_min", "Def_Y [mm]")
-    ]
+    def render_summary_table(title, metrics_list, elem_filter=None):
+        st.markdown(f"##### {title}")
+        rows = []
+        
+        for eid in all_elems:
+            # Apply Element Filter (e.g., only Spans for Def Y)
+            if elem_filter:
+                if elem_filter == "Span" and not eid.startswith("S"): continue
+                if elem_filter == "Wall" and not eid.startswith("W"): continue
+                
+            row_dat = {"Element": eid}
+            dataA = rA.get(eid, {})
+            dataB = rB.get(eid, {})
+            
+            # If element not in system, skip row for that system? No, keep comparison as --
+            
+            for k_max, k_min, label in metrics_list:
+                is_def = "def" in k_max
+                scale = 1000.0 if is_def else 1.0
+                
+                a_mx, a_mn = get_peaks(dataA, k_max, k_min)
+                if a_mx is not None: a_mx *= scale; a_mn *= scale
+                
+                b_mx, b_mn = get_peaks(dataB, k_max, k_min)
+                if b_mx is not None: b_mx *= scale; b_mn *= scale
+                
+                d_mx = calc_diff(a_mx, b_mx, is_max_case=True)
+                d_mn = calc_diff(a_mn, b_mn, is_max_case=False)
+                
+                # Max Cols
+                row_dat[f"{label} (Max) A"] = f"{a_mx:.1f}" if a_mx is not None else "--"
+                row_dat[f"{label} (Max) B"] = f"{b_mx:.1f}" if b_mx is not None else "--"
+                row_dat[f"{label} (Max) %"] = d_mx 
+                
+                # Min Cols
+                row_dat[f"{label} (Min) A"] = f"{a_mn:.1f}" if a_mn is not None else "--"
+                row_dat[f"{label} (Min) B"] = f"{b_mn:.1f}" if b_mn is not None else "--"
+                row_dat[f"{label} (Min) %"] = d_mn
+            
+            rows.append(row_dat)
+            
+        if not rows:
+            st.caption("No elements found.")
+            return
+
+        df = pd.DataFrame(rows)
+        pct_cols = [c for c in df.columns if "%" in c]
+        fmt_dict = {c: "{:+.1f}%" for c in pct_cols}
+        
+        st.dataframe(
+            df.style.map(color_diff, subset=pct_cols).format(fmt_dict, na_rep="--"),
+            height=200, width='stretch'
+        )
+
+    # A. Bending Moment
+    render_summary_table("Bending Moment", [("M_max", "M_min", "M [kNm]")])
     
+    # B. Shear Force
+    render_summary_table("Shear Force", [("V_max", "V_min", "V [kN]")])
+    
+    # C. Normal Force
+    render_summary_table("Normal Force", [("N_max", "N_min", "N [kN]")])
+    
+    # D. Deformations (Special Filtering)
+    # Combined Table strategy: We iterate elements and pick correct def type
+    st.markdown("##### Deformations (Spans: Vertical, Walls: Horizontal)")
+    def_rows = []
     for eid in all_elems:
         row_dat = {"Element": eid}
         dataA = rA.get(eid, {})
         dataB = rB.get(eid, {})
         
-        for k_max, k_min, label in metrics:
-            # Scale Deformations
-            is_def = "def" in k_max
-            scale = 1000.0 if is_def else 1.0
-            
-            # Get A
-            a_mx, a_mn = get_peaks(dataA, k_max, k_min)
-            if a_mx is not None: a_mx *= scale; a_mn *= scale
-            
-            # Get B
-            b_mx, b_mn = get_peaks(dataB, k_max, k_min)
-            if b_mx is not None: b_mx *= scale; b_mn *= scale
-            
-            # Calculate Diff
-            d_mx = calc_diff(a_mx, b_mx)
-            d_mn = calc_diff(a_mn, b_mn)
-            
-            # Store in Row (Formatted)
-            # Max
-            row_dat[f"{label} (Max) A"] = f"{a_mx:.1f}" if a_mx is not None else "--"
-            row_dat[f"{label} (Max) B"] = f"{b_mx:.1f}" if b_mx is not None else "--"
-            row_dat[f"{label} (Max) %"] = d_mx 
-            
-            # Min
-            row_dat[f"{label} (Min) A"] = f"{a_mn:.1f}" if a_mn is not None else "--"
-            row_dat[f"{label} (Min) B"] = f"{b_mn:.1f}" if b_mn is not None else "--"
-            row_dat[f"{label} (Min) %"] = d_mn
-            
-        comp_rows.append(row_dat)
+        # Determine Type
+        is_wall = eid.startswith("W")
+        k_max = "def_x_max" if is_wall else "def_y_max"
+        k_min = "def_x_min" if is_wall else "def_y_min"
+        label = "Def X [mm]" if is_wall else "Def Y [mm]"
         
-    df_comp = pd.DataFrame(comp_rows)
-
-    # 1e. Styling Function
-    def color_diff(val):
-        if pd.isna(val): return ""
-        if val > 0.05: return 'color: red; font-weight: bold' # Increase -> Red
-        if val < -0.05: return 'color: green; font-weight: bold' # Decrease -> Green
-        return 'color: gray'
-
-    # Apply Style to all % columns
-    pct_cols = [c for c in df_comp.columns if "%" in c]
-    
-    # FIX: Use Styler.format instead of manual string conversion to avoid TypeError in map
-    format_dict = {c: "{:+.1f}%" for c in pct_cols}
-    
-    # Render with Style
-    st.dataframe(
-        df_comp.style.map(color_diff, subset=pct_cols).format(format_dict, na_rep="--"),
-        height=400,
-        width='stretch'
-    )
+        a_mx, a_mn = get_peaks(dataA, k_max, k_min)
+        if a_mx is not None: a_mx *= 1000; a_mn *= 1000
+        
+        b_mx, b_mn = get_peaks(dataB, k_max, k_min)
+        if b_mx is not None: b_mx *= 1000; b_mn *= 1000
+        
+        d_mx = calc_diff(a_mx, b_mx, True)
+        d_mn = calc_diff(a_mn, b_mn, False)
+        
+        row_dat[f"Def (Max) A"] = f"{a_mx:.1f}" if a_mx is not None else "--"
+        row_dat[f"Def (Max) B"] = f"{b_mx:.1f}" if b_mx is not None else "--"
+        row_dat[f"Def (Max) %"] = d_mx 
+        
+        row_dat[f"Def (Min) A"] = f"{a_mn:.1f}" if a_mn is not None else "--"
+        row_dat[f"Def (Min) B"] = f"{b_mn:.1f}" if b_mn is not None else "--"
+        row_dat[f"Def (Min) %"] = d_mn
+        
+        row_dat["Type"] = "Wall (Horiz)" if is_wall else "Span (Vert)"
+        def_rows.append(row_dat)
+        
+    if def_rows:
+        df_def = pd.DataFrame(def_rows)
+        # Reorder to put Type second
+        cols = ['Element', 'Type'] + [c for c in df_def.columns if c not in ['Element', 'Type']]
+        df_def = df_def[cols]
+        
+        pct_cols_d = [c for c in df_def.columns if "%" in c]
+        fmt_dict_d = {c: "{:+.1f}%" for c in pct_cols_d}
+        st.dataframe(
+            df_def.style.map(color_diff, subset=pct_cols_d).format(fmt_dict_d, na_rep="--"),
+            height=200, width='stretch'
+        )
     
     # ----------------------------------------------
-    # 2. REACTIONS (Comparison with Min/Max Envelope)
+    # 3. REACTIONS
     # ----------------------------------------------
-    st.markdown("##### Envelope Support Reactions (Min/Max)")
+    st.markdown("##### Envelope Support Reactions")
 
-    # 2a. Function to Calculate Reaction Envelope from Element Results
     def get_reaction_envelope(res_dict, nodes_dict):
-        # Result Structure: { NodeID: {'Rx_max':.., 'Rx_min':.., 'Ry_max':.. } }
         reacts = {}
         if not res_dict or not nodes_dict: return reacts
-        
-        # Identify Support Nodes (Frame: 100-110, Super: 200-210 with restraints)
-        # We scan all elements and check if ends are supports.
         
         for eid, dat in res_dict.items():
             if 'ni_id' not in dat or 'nj_id' not in dat: continue
@@ -1333,7 +1383,7 @@ with t3:
 
             c, s = dat['cx'], dat['cy']
             
-            # --- START NODE ---
+            # Start Node
             def get_val(key, idx):
                 if key in dat: return dat[key][idx] 
                 elif key.replace("_max","") in dat: 
@@ -1356,11 +1406,9 @@ with t3:
             
             y_start = nodes_dict[dat['ni_id']][1]
             is_supp_start = (y_start < -0.01) if p['mode'] == 'Frame' else (dat['ni_id'] >= 200) 
-            
-            if is_supp_start:
-                add_to_node(dat['ni_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
+            if is_supp_start: add_to_node(dat['ni_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
 
-            # --- END NODE ---
+            # End Node
             n_mx = get_val('N_max', -1); n_mn = get_val('N_min', -1)
             v_mx = get_val('V_max', -1); v_mn = get_val('V_min', -1)
             m_mx = get_val('M_max', -1); m_mn = get_val('M_min', -1)
@@ -1374,22 +1422,17 @@ with t3:
             
             y_end = nodes_dict[dat['nj_id']][1]
             is_supp_end = (y_end < -0.01) if p['mode'] == 'Frame' else (dat['nj_id'] >= 200)
-
-            if is_supp_end:
-                 add_to_node(dat['nj_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
+            if is_supp_end: add_to_node(dat['nj_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
                  
         return reacts
 
-    # 2b. Compute Reactions for A and B
     reactsA = get_reaction_envelope(rA, nodes_A)
     reactsB = get_reaction_envelope(rB, nodes_B)
     
-    # 2c. Build Reaction Table
     all_react_nodes = sorted(list(set(reactsA.keys()) | set(reactsB.keys())))
     r_rows = []
     
     for nid in all_react_nodes:
-        # Determine Label
         label = f"Node {nid}"
         if nid >= 200: label = f"Support {nid-200+1}"
         elif nid >= 100: label = f"Wall {nid-100+1} Base"
@@ -1404,26 +1447,23 @@ with t3:
                 valA = dA.get(key)
                 valB = dB.get(key)
                 
-                # Format Columns
                 col_A = f"{comp} ({bnd}) A"
                 col_B = f"{comp} ({bnd}) B"
                 col_P = f"{comp} ({bnd}) %"
                 
                 row[col_A] = f"{valA:.1f}" if valA is not None else "--"
                 row[col_B] = f"{valB:.1f}" if valB is not None else "--"
-                row[col_P] = calc_diff(valA, valB)
+                row[col_P] = calc_diff(valA, valB, is_max_case=(bnd=='max'))
         
         r_rows.append(row)
     
     if r_rows:
         df_react = pd.DataFrame(r_rows)
         pct_cols_r = [c for c in df_react.columns if "%" in c]
-        
-        # FIX: Format dict for reactions
-        format_dict_r = {c: "{:+.1f}%" for c in pct_cols_r}
+        fmt_dict_r = {c: "{:+.1f}%" for c in pct_cols_r}
             
         st.dataframe(
-            df_react.style.map(color_diff, subset=pct_cols_r).format(format_dict_r, na_rep="--"),
+            df_react.style.map(color_diff, subset=pct_cols_r).format(fmt_dict_r, na_rep="--"),
             width='stretch'
         )
     else:
