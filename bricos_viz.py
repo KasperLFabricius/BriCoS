@@ -2,9 +2,7 @@ import plotly.graph_objects as go
 import numpy as np
 import bricos_kernels as kernels
 
-# ==========================================
-# VISUALIZATION ENGINE
-# ==========================================
+# ... (Previous helper functions solve_annotations and _add_support_icon remain unchanged) ...
 
 def solve_annotations(annotations):
     """
@@ -133,13 +131,15 @@ def _add_support_icon(fig, x, y, supp_type, size, color='black'):
             hoverinfo='skip', showlegend=False
         ))
 
+
 def create_plotly_fig(
     nodes, sysA_data, sysB_data, type_base='M', target_height=2.0, title="", 
     show_A=True, show_B=True, annotate=True, load_case_name="", 
     name_A="System A", name_B="System B", 
     geom_A=None, geom_B=None,
     params_A=None, params_B=None,
-    show_supports=False, support_size=0.5
+    show_supports=False, support_size=0.5,
+    font_scale=1.0 
 ):
     fig = go.Figure()
     
@@ -198,6 +198,14 @@ def create_plotly_fig(
     ann_candidates = []
     legend_flags = {'struct': False, 'A': False, 'B': False}
 
+    # Font Sizes & Margin Logic
+    base_font_size = 12 * font_scale
+    marker_size = 10 * font_scale # Slightly smaller markers
+    
+    # Increase margins significantly if scaling font to prevent cut-off
+    margin_base = 30 * font_scale
+    top_margin = 50 * font_scale # Extra room for title
+    
     # --- DRAW SUPPORTS ---
     if show_supports:
         def render_system_supports(params, sys_nodes_dict, color_override):
@@ -216,7 +224,6 @@ def create_plotly_fig(
                 if sys_nodes_dict and nid in sys_nodes_dict:
                     pos_x, pos_y = sys_nodes_dict[nid]
                 else:
-                    # Fallback Position Calculation
                     current_x = 0.0
                     L_list = params.get('L_list', [])
                     for span_i in range(i):
@@ -245,7 +252,6 @@ def create_plotly_fig(
         sys_key = 'A' if is_sys_A else 'B'
         geom_source = geom_A if (is_sys_A and geom_A) else (geom_B if (not is_sys_A and geom_B) else sys_data)
 
-        # 3. Draw Structure
         x_struct, y_struct = [], []
         if geom_source:
             sorted_ids = sorted(geom_source.keys(), key=lambda x: int(x[1:]))
@@ -269,7 +275,6 @@ def create_plotly_fig(
             hoverinfo='skip', showlegend=show_struct
         ))
 
-        # 4. Draw Diagrams
         for eid, data in sys_data.items():
             if 'x' not in data: continue 
             
@@ -348,7 +353,6 @@ def create_plotly_fig(
                     name=f"{sys_name}", showlegend=show_leg,
                     customdata=custom_pos, hovertemplate=htemp_step
                 ))
-                # Fill to structure
                 fig.add_trace(go.Scatter(
                     x=np.concatenate([x_glob, x_plot_pos[::-1]]),
                     y=np.concatenate([y_glob, y_plot_pos[::-1]]),
@@ -356,7 +360,6 @@ def create_plotly_fig(
                     showlegend=False, hoverinfo='skip'
                 ))
 
-            # 5. LOADS VISUALIZATION
             if 'Envelope' not in load_case_name and 'loads' in data:
                 for load in data['loads']:
                     l_type = load['type']
@@ -378,7 +381,8 @@ def create_plotly_fig(
                         )
                         fig.add_annotation(
                             x=tail_x, y=tail_y, text=f"{abs(p_val):.1f} kN", 
-                            showarrow=False, yshift=10, font=dict(color='orange', size=11, weight="bold")
+                            showarrow=False, yshift=10 * font_scale, 
+                            font=dict(color='orange', size=marker_size, weight="bold")
                         )
 
                     elif load_case_name == "Selfweight" and l_type == 'distributed_trapezoid' and load.get('is_gravity', False):
@@ -398,7 +402,10 @@ def create_plotly_fig(
                             hoverinfo='skip', showlegend=False
                         ))
                         xm = (x_st + x_et) / 2; ym = (y_st + y_et) / 2
-                        fig.add_annotation(x=xm, y=ym, text=f"{q_val:.1f}", showarrow=False, font=dict(color='orange', size=11, weight="bold"), yshift=5)
+                        fig.add_annotation(
+                            x=xm, y=ym, text=f"{q_val:.1f}", showarrow=False, 
+                            font=dict(color='orange', size=marker_size, weight="bold"), yshift=5*font_scale
+                        )
 
                     elif load_case_name == "Soil" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
                         q_bot, q_top, x_s, L_load = load['params']
@@ -429,8 +436,14 @@ def create_plotly_fig(
                                 x=bx, y=by, ax=tx, ay=ty, xref='x', yref='y', axref='x', ayref='y',
                                 showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5, arrowcolor='orange', opacity=0.6
                             )
-                        fig.add_annotation(x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, font=dict(color='orange', size=10, weight="bold"))
-                        fig.add_annotation(x=t_x_top, y=t_y_top, text=f"{abs(q_top):.1f}", showarrow=False, font=dict(color='orange', size=10, weight="bold"))
+                        fig.add_annotation(
+                            x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, 
+                            font=dict(color='orange', size=marker_size*0.9, weight="bold")
+                        )
+                        fig.add_annotation(
+                            x=t_x_top, y=t_y_top, text=f"{abs(q_top):.1f}", showarrow=False, 
+                            font=dict(color='orange', size=marker_size*0.9, weight="bold")
+                        )
 
                     elif load_case_name == "Surcharge" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
                         q_bot, q_top, x_s, L_load = load['params']
@@ -458,9 +471,11 @@ def create_plotly_fig(
                                 x=bx, y=by, ax=tx, ay=ty, xref='x', yref='y', axref='x', ayref='y',
                                 showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5, arrowcolor='purple', opacity=0.6
                             )
-                        fig.add_annotation(x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, font=dict(color='purple', size=10, weight="bold"))
+                        fig.add_annotation(
+                            x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, 
+                            font=dict(color='purple', size=marker_size*0.9, weight="bold")
+                        )
 
-            # 6. ANNOTATIONS
             if annotate:
                 threshold = max_val * 0.05
                 if fill_mode:
@@ -496,18 +511,22 @@ def create_plotly_fig(
     for ann in solved:
         fig.add_annotation(
             x=ann['x'], y=ann['y'], text=ann['text'], showarrow=False,
-            font=dict(color=ann['color'], size=12, family="Arial", weight="bold"), 
+            font=dict(color=ann['color'], size=base_font_size, family="Arial", weight="bold"), 
             bgcolor="rgba(255,255,255,0.7)", bordercolor=ann['color'], borderwidth=1, borderpad=2
         )
 
     fig.update_layout(
-        title=title,
+        title=dict(text=title, font=dict(size=14*font_scale)),
         yaxis=dict(scaleanchor="x", scaleratio=1, visible=False),
         xaxis=dict(visible=False),
         plot_bgcolor='white',
-        margin=dict(l=10, r=10, t=30, b=10),
+        # INCREASED MARGINS TO PREVENT CUT-OFF
+        margin=dict(l=margin_base, r=margin_base, t=top_margin, b=margin_base),
         showlegend=True,
-        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02)
+        legend=dict(
+            orientation="v", yanchor="top", y=1, xanchor="left", x=1.02,
+            font=dict(size=10*font_scale)
+        )
     )
     
     return fig
