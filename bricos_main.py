@@ -329,72 +329,16 @@ if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 if st.session_state['sysA'].get('scale_manual', 0) < 0.1: st.session_state['sysA']['scale_manual'] = 2.0
 if st.session_state['sysB'].get('scale_manual', 0) < 0.1: st.session_state['sysB']['scale_manual'] = 2.0
 
-# --- MOVED: ABOUT SECTION ---
+# ---------------------------------------------
+# MOVED SECTIONS (TOP OF SIDEBAR)
+# ---------------------------------------------
+
+# --- ABOUT SECTION ---
 with st.sidebar.expander("About", expanded=False):
     st.markdown("**BriCoS v0.30**")
     st.write("Author: Kasper Lindskov Fabricius")
     st.write("Email: Kasper.LindskovFabricius@sweco.dk")
     st.write("A specialized Finite Element Analysis (FEM) tool for rapid bridge analysis and comparison.")
-
-# --- MOVED: ANALYSIS SETTINGS ---
-with st.sidebar.expander("Analysis & Result Settings", expanded=True):
-    help_dir = "Forward: Left to Right. Reverse: Right to Left (axles inverted). Both: Envelope of both directions."
-    curr_dir = st.session_state['sysA'].get('vehicle_direction', 'Forward')
-    dir_opts = ["Forward", "Reverse", "Both"]
-    idx_dir = dir_opts.index(curr_dir) if curr_dir in dir_opts else 0
-    
-    dir_sel = st.radio("Vehicle Direction", dir_opts, horizontal=True, index=idx_dir, key="veh_dir_radio_sidebar", help=help_dir)
-    st.session_state['sysA']['vehicle_direction'] = dir_sel
-    st.session_state['sysB']['vehicle_direction'] = dir_sel
-    
-    st.markdown("---")
-    help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
-    
-    is_sim = st.session_state['sysA'].get('combine_surcharge_vehicle', False)
-    combo_idx = 1 if is_sim else 0
-    
-    surch_sel = st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], index=combo_idx, horizontal=True, key="surcharge_combo_radio_sidebar", help=help_combo)
-    
-    is_simultaneous = (surch_sel == "Simultaneous (Vehicle + Surcharge)")
-    st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
-    st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
-
-    st.markdown("---")
-    st.markdown("**Calculation Precision**")
-    c_mesh, c_step = st.columns(2)
-    def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
-    def_step = st.session_state['sysA'].get('step_size', 0.2)
-    m_val = c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider")
-    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider")
-
-if "common_mesh_slider" in st.session_state:
-    st.session_state['sysA']['mesh_size'] = m_val
-    st.session_state['sysB']['mesh_size'] = m_val
-
-if "common_step_slider" in st.session_state:
-    st.session_state['sysA']['step_size'] = s_val
-    st.session_state['sysB']['step_size'] = s_val
-
-st.sidebar.header("Configuration")
-
-# --- STICKY SIDEBAR: ACTIVE SYSTEM & NAMES ---
-with st.sidebar.container():
-    st.markdown('<div id="sticky-sidebar-marker"></div>', unsafe_allow_html=True)
-    c_nA, c_nB = st.columns(2)
-    st.session_state['sysA']['name'] = c_nA.text_input("Name Sys A", st.session_state['sysA']['name'])
-    st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'])
-
-    sys_map = {"sysA": f"{st.session_state['sysA']['name']} (Blue)", "sysB": f"{st.session_state['sysB']['name']} (Red)"}
-    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True)
-
-    if active_sys_key == 'sysA':
-        st.markdown("""<style>[data-testid="stSidebar"] { background-color: #F0F8FF; }</style>""", unsafe_allow_html=True)
-    else:
-        st.markdown("""<style>[data-testid="stSidebar"] { background-color: #FFF5F5; }</style>""", unsafe_allow_html=True)
-
-curr = active_sys_key
-p = st.session_state[curr]
-# ---------------------------------------------
 
 # --- RESET DATA SECTION ---
 with st.sidebar.expander("Reset Data", expanded=False):
@@ -552,8 +496,69 @@ with st.sidebar.expander("Copy Data", expanded=False):
             st.session_state.copy_confirm_mode = None
             st.rerun()
 
-# --- MAIN INPUTS ---
-with st.sidebar.expander("Design Factors & Type", expanded=True):
+# --- ANALYSIS SETTINGS ---
+with st.sidebar.expander("Analysis & Result Settings", expanded=False):
+    help_dir = "Forward: Left to Right. Reverse: Right to Left (axles inverted). Both: Envelope of both directions."
+    curr_dir = st.session_state['sysA'].get('vehicle_direction', 'Forward')
+    dir_opts = ["Forward", "Reverse", "Both"]
+    idx_dir = dir_opts.index(curr_dir) if curr_dir in dir_opts else 0
+    
+    dir_sel = st.radio("Vehicle Direction", dir_opts, horizontal=True, index=idx_dir, key="veh_dir_radio_sidebar", help=help_dir)
+    st.session_state['sysA']['vehicle_direction'] = dir_sel
+    st.session_state['sysB']['vehicle_direction'] = dir_sel
+    
+    st.markdown("---")
+    help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
+    
+    is_sim = st.session_state['sysA'].get('combine_surcharge_vehicle', False)
+    combo_idx = 1 if is_sim else 0
+    
+    surch_sel = st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], index=combo_idx, horizontal=True, key="surcharge_combo_radio_sidebar", help=help_combo)
+    
+    is_simultaneous = (surch_sel == "Simultaneous (Vehicle + Surcharge)")
+    st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
+    st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
+
+    st.markdown("---")
+    st.markdown("**Calculation Precision**")
+    c_mesh, c_step = st.columns(2)
+    def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
+    def_step = st.session_state['sysA'].get('step_size', 0.2)
+    m_val = c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider")
+    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider")
+
+if "common_mesh_slider" in st.session_state:
+    st.session_state['sysA']['mesh_size'] = m_val
+    st.session_state['sysB']['mesh_size'] = m_val
+
+if "common_step_slider" in st.session_state:
+    st.session_state['sysA']['step_size'] = s_val
+    st.session_state['sysB']['step_size'] = s_val
+
+# ---------------------------------------------
+# STICKY SIDEBAR: ACTIVE SYSTEM & NAMES
+# ---------------------------------------------
+st.sidebar.header("Configuration")
+
+with st.sidebar.container():
+    st.markdown('<div id="sticky-sidebar-marker"></div>', unsafe_allow_html=True)
+    c_nA, c_nB = st.columns(2)
+    st.session_state['sysA']['name'] = c_nA.text_input("Name Sys A", st.session_state['sysA']['name'])
+    st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'])
+
+    sys_map = {"sysA": f"{st.session_state['sysA']['name']} (Blue)", "sysB": f"{st.session_state['sysB']['name']} (Red)"}
+    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True)
+
+    if active_sys_key == 'sysA':
+        st.markdown("""<style>[data-testid="stSidebar"] { background-color: #F0F8FF; }</style>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""<style>[data-testid="stSidebar"] { background-color: #FFF5F5; }</style>""", unsafe_allow_html=True)
+
+curr = active_sys_key
+p = st.session_state[curr]
+
+# --- MAIN INPUTS (REMAINING) ---
+with st.sidebar.expander("Design Factors & Type", expanded=False):
     help_mode = "Choose 'Frame' for full interaction (Walls + Slab) or 'Superstructure' for a simplified slab-on-supports analysis."
     new_mode_sel = st.selectbox("Model Type", ["Frame", "Superstructure"], index=0 if p['mode']=='Frame' else 1, key=f"{curr}_md_sel", help=help_mode)
     
@@ -636,7 +641,7 @@ with st.sidebar.expander("Design Factors & Type", expanded=True):
     
     phi_log_placeholder = st.empty()
 
-with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=True):
+with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
     n_spans = st.number_input("Number of Spans", 1, 10, p['num_spans'], key=f"{curr}_nsp")
     p['num_spans'] = n_spans
     
@@ -873,7 +878,7 @@ def get_vehicle_library():
     except: pass
     return options, data
 
-with st.sidebar.expander("Vehicle Definitions", expanded=True):
+with st.sidebar.expander("Vehicle Definitions", expanded=False):
     veh_options, veh_data = get_vehicle_library()
     
     def handle_veh_inputs(prefix, key_class, key_loads, key_space, struct_key):
@@ -961,8 +966,22 @@ if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
 has_res_A = (raw_res_A is not None) and (nodes_A is not None)
 has_res_B = (raw_res_B is not None) and (nodes_B is not None)
 
-c1, c2, c3, c4 = st.columns([1,1,1,2])
-man_scale = c2.number_input("Target Diagram Height [m]", value=st.session_state['sysA'].get('scale_manual', 2.0), format="%.2f")
+# --- VISUAL CONTROL SETTINGS ---
+# Unified 2-row layout as requested
+
+r1_col1, r1_col2 = st.columns([3, 1])
+with r1_col1:
+    man_scale = st.slider("Target Diagram Height [m]", 0.5, 10.0, float(st.session_state['sysA'].get('scale_manual', 2.0)), 0.1)
+with r1_col2:
+    show_labels = st.checkbox("Labels", value=True)
+
+r2_col1, r2_col2 = st.columns([3, 1])
+with r2_col1:
+    support_size = st.slider("Support Size", 0.1, 2.0, 0.5, 0.1)
+with r2_col2:
+    show_supports = st.checkbox("Show Supports", value=True)
+
+# Update Session State
 st.session_state['sysA']['scale_manual'] = man_scale
 st.session_state['sysB']['scale_manual'] = man_scale
 
@@ -986,8 +1005,6 @@ with st.container():
     result_mode_val = st.session_state['result_mode']
 
 # -----------------------------
-
-show_labels = c3.checkbox("Labels", value=True)
 
 res_A = solver.combine_results(raw_res_A, st.session_state['sysA'], result_mode_val) if has_res_A else {}
 res_B = solver.combine_results(raw_res_B, st.session_state['sysB'], result_mode_val) if has_res_B else {}
@@ -1087,13 +1104,44 @@ with t1:
             show_A_step = (step_view_sys == "Both" or step_view_sys == "System A")
             show_B_step = (step_view_sys == "Both" or step_view_sys == "System B")
             st.subheader("Bending Moment [kNm]")
-            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_M_step")
+            st.plotly_chart(viz.create_plotly_fig(
+                nodes_A, rA, rB, 'M', man_scale, "", 
+                show_A_step, show_B_step, show_labels, view_case, 
+                name_A, name_B, 
+                geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+                params_A=st.session_state['sysA'], params_B=st.session_state['sysB'],
+                show_supports=show_supports, support_size=support_size
+            ), width='stretch', key="chart_M_step")
+            
             st.subheader("Shear Force [kN]")
-            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_V_step")
+            st.plotly_chart(viz.create_plotly_fig(
+                nodes_A, rA, rB, 'V', man_scale, "", 
+                show_A_step, show_B_step, show_labels, view_case, 
+                name_A, name_B, 
+                geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+                params_A=st.session_state['sysA'], params_B=st.session_state['sysB'],
+                show_supports=show_supports, support_size=support_size
+            ), width='stretch', key="chart_V_step")
+            
             st.subheader("Normal Force [kN]")
-            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'N', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_N_step")
+            st.plotly_chart(viz.create_plotly_fig(
+                nodes_A, rA, rB, 'N', man_scale, "", 
+                show_A_step, show_B_step, show_labels, view_case, 
+                name_A, name_B, 
+                geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+                params_A=st.session_state['sysA'], params_B=st.session_state['sysB'],
+                show_supports=show_supports, support_size=support_size
+            ), width='stretch', key="chart_N_step")
+            
             st.subheader("Deformation [mm]")
-            st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A_step, show_B_step, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_D_step")
+            st.plotly_chart(viz.create_plotly_fig(
+                nodes_A, rA, rB, 'Def', man_scale, "", 
+                show_A_step, show_B_step, show_labels, view_case, 
+                name_A, name_B, 
+                geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+                params_A=st.session_state['sysA'], params_B=st.session_state['sysB'],
+                show_supports=show_supports, support_size=support_size
+            ), width='stretch', key="chart_D_step")
     else:
         show_A = (show_sys_mode == "Both" or show_sys_mode == "System A")
         show_B = (show_sys_mode == "Both" or show_sys_mode == "System B")
@@ -1107,13 +1155,44 @@ with t1:
              if (not rA) and (not rB): st.warning(f"⚠️ No results found for **{view_case}**.")
 
              st.subheader("Bending Moment [kNm]")
-             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'M', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_M")
+             st.plotly_chart(viz.create_plotly_fig(
+                 nodes_A, rA, rB, 'M', man_scale, "", 
+                 show_A, show_B, show_labels, view_case, 
+                 name_A, name_B, 
+                 geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+                 params_A=st.session_state['sysA'], params_B=st.session_state['sysB'],
+                 show_supports=show_supports, support_size=support_size
+             ), width='stretch', key="chart_M")
+             
              st.subheader("Shear Force [kN]")
-             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'V', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_V")
+             st.plotly_chart(viz.create_plotly_fig(
+                 nodes_A, rA, rB, 'V', man_scale, "", 
+                 show_A, show_B, show_labels, view_case, 
+                 name_A, name_B, 
+                 geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+                 params_A=st.session_state['sysA'], params_B=st.session_state['sysB'],
+                 show_supports=show_supports, support_size=support_size
+             ), width='stretch', key="chart_V")
+             
              st.subheader("Normal Force [kN]")
-             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'N', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_N")
+             st.plotly_chart(viz.create_plotly_fig(
+                 nodes_A, rA, rB, 'N', man_scale, "", 
+                 show_A, show_B, show_labels, view_case, 
+                 name_A, name_B, 
+                 geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+                 params_A=st.session_state['sysA'], params_B=st.session_state['sysB'],
+                 show_supports=show_supports, support_size=support_size
+             ), width='stretch', key="chart_N")
+             
              st.subheader("Deformation [mm]")
-             st.plotly_chart(viz.create_plotly_fig(nodes_A, rA, rB, 'Def', man_scale, "", show_A, show_B, show_labels, view_case, name_A, name_B, geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight')), width='stretch', key="chart_D")
+             st.plotly_chart(viz.create_plotly_fig(
+                 nodes_A, rA, rB, 'Def', man_scale, "", 
+                 show_A, show_B, show_labels, view_case, 
+                 name_A, name_B, 
+                 geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+                 params_A=st.session_state['sysA'], params_B=st.session_state['sysB'],
+                 show_supports=show_supports, support_size=support_size
+             ), width='stretch', key="chart_D")
 
 with t2:
     st.markdown(f"### Detailed Data ({view_case})")

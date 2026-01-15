@@ -30,7 +30,128 @@ def solve_annotations(annotations):
         ann['y'] = result_arr[i, 1]
     return annotations
 
-def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=2.0, title="", show_A=True, show_B=True, annotate=True, load_case_name="", name_A="System A", name_B="System B", geom_A=None, geom_B=None):
+def _add_support_icon(fig, x, y, supp_type, size, color='black'):
+    """
+    Helper to draw classical boundary condition icons at (x,y).
+    """
+    s = size
+    line_width = 2.5  # Slightly thicker than geometry
+    
+    # 1. FIXED SUPPORT
+    # Icon: Horizontal line at node + hatching underneath
+    if supp_type == 'Fixed':
+        # Main rigid plate
+        fig.add_trace(go.Scatter(
+            x=[x - s, x + s], 
+            y=[y, y],
+            mode='lines',
+            line=dict(color=color, width=line_width),
+            hoverinfo='skip', showlegend=False
+        ))
+        # Hatching (5 lines at 45 degrees)
+        h_spacing = (2 * s) / 4.0
+        h_height = s * 0.6
+        for i in range(5):
+            hx_start = (x - s) + i * h_spacing
+            fig.add_trace(go.Scatter(
+                x=[hx_start, hx_start - h_height * 0.5],
+                y=[y, y - h_height],
+                mode='lines',
+                line=dict(color=color, width=1.5),
+                hoverinfo='skip', showlegend=False
+            ))
+
+    # 2. PINNED SUPPORT
+    # Icon: Triangle pointing to node
+    elif supp_type == 'Pinned':
+        fig.add_trace(go.Scatter(
+            x=[x, x - s/1.5, x + s/1.5, x],
+            y=[y, y - s, y - s, y],
+            mode='lines',
+            fill='toself', fillcolor='white', # clear fill to hide geometry behind
+            line=dict(color=color, width=line_width),
+            hoverinfo='skip', showlegend=False
+        ))
+        # Optional: Small circle at hinge
+        fig.add_trace(go.Scatter(
+            x=[x], y=[y], mode='markers',
+            marker=dict(color='white', line=dict(color=color, width=1.5), size=4),
+            hoverinfo='skip', showlegend=False
+        ))
+
+    # 3. ROLLER (X-Free)
+    # Icon: Triangle + 2 Circles underneath (Wheels)
+    elif supp_type == 'Roller (X-Free)':
+        # Triangle
+        fig.add_trace(go.Scatter(
+            x=[x, x - s/1.5, x + s/1.5, x],
+            y=[y, y - s, y - s, y],
+            mode='lines',
+            fill='toself', fillcolor='white',
+            line=dict(color=color, width=line_width),
+            hoverinfo='skip', showlegend=False
+        ))
+        # Wheels (Circles)
+        wheel_r = s * 0.2
+        wheel_y = y - s - wheel_r
+        fig.add_trace(go.Scatter(
+            x=[x - s/3.0, x + s/3.0],
+            y=[wheel_y, wheel_y],
+            mode='markers',
+            marker=dict(symbol='circle-open', color=color, size=6, line=dict(width=1.5)),
+            hoverinfo='skip', showlegend=False
+        ))
+        # Ground line under wheels
+        ground_y = wheel_y - wheel_r
+        fig.add_trace(go.Scatter(
+            x=[x - s, x + s],
+            y=[ground_y, ground_y],
+            mode='lines',
+            line=dict(color=color, width=1),
+            hoverinfo='skip', showlegend=False
+        ))
+    
+    # 4. ROLLER (Y-Free) or SLIDER
+    elif supp_type == 'Roller (Y-Free)':
+        # Vertical Roller Guide
+        fig.add_trace(go.Scatter(
+            x=[x, x], y=[y, y], 
+            mode='markers', 
+            marker=dict(symbol='square-open', color=color, size=10, line=dict(width=2)),
+            hoverinfo='skip', showlegend=False
+        ))
+        # Guide lines
+        fig.add_trace(go.Scatter(
+             x=[x - s/2, x - s/2], y=[y - s, y + s],
+             mode='lines', line=dict(color=color, width=1),
+             hoverinfo='skip', showlegend=False
+        ))
+        fig.add_trace(go.Scatter(
+             x=[x + s/2, x + s/2], y=[y - s, y + s],
+             mode='lines', line=dict(color=color, width=1),
+             hoverinfo='skip', showlegend=False
+        ))
+
+    # 5. CUSTOM / OTHER
+    else:
+        # Box to represent custom spring
+        fig.add_trace(go.Scatter(
+            x=[x - s/2, x + s/2, x + s/2, x - s/2, x - s/2],
+            y=[y, y, y - s, y - s, y],
+            mode='lines',
+            line=dict(color=color, width=line_width, dash='dot'),
+            hoverinfo='skip', showlegend=False
+        ))
+
+def create_plotly_fig(
+    nodes, sysA_data, sysB_data, type_base='M', target_height=2.0, title="", 
+    show_A=True, show_B=True, annotate=True, load_case_name="", 
+    name_A="System A", name_B="System B", 
+    geom_A=None, geom_B=None,
+    # New Parameters
+    params_A=None, params_B=None,
+    show_supports=False, support_size=0.5
+):
     fig = go.Figure()
     
     # --- 1. DETERMINE SCALING FACTOR (DIAGRAMS) ---
@@ -57,7 +178,6 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
     if max_val > 1e-5: scale = target_height / max_val
 
     # --- 2. DETERMINE SCALING FACTOR (LOADS) ---
-    # We scan all loads to ensure visuals are proportional to the largest load of their type.
     max_P_veh = 1.0
     max_q_sw = 1.0
     max_q_soil = 1.0
@@ -72,28 +192,88 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                     params = load.get('params', [])
                     
                     if not params: continue
-                    
-                    # Vehicle Point Loads
                     if l_type == 'point': 
                         max_P_veh = max(max_P_veh, abs(params[0]))
-                    
-                    # Dist Loads
                     elif l_type == 'distributed_trapezoid':
                         q_max = max(abs(params[0]), abs(params[1])) if len(params) > 1 else abs(params[0])
-                        
-                        if load.get('is_gravity', False): 
-                            max_q_sw = max(max_q_sw, q_max)
-                        elif load_case_name == "Surcharge":
-                            max_q_surch = max(max_q_surch, q_max)
-                        else:
-                            max_q_soil = max(max_q_soil, q_max)
+                        if load.get('is_gravity', False): max_q_sw = max(max_q_sw, q_max)
+                        elif load_case_name == "Surcharge": max_q_surch = max(max_q_surch, q_max)
+                        else: max_q_soil = max(max_q_soil, q_max)
 
-    # Unit Label Map
     unit_map = {'M': 'kNm', 'V': 'kN', 'N': 'kN', 'Def': 'mm'}
     unit = unit_map.get(type_base, '')
     
     ann_candidates = []
     legend_flags = {'struct': False, 'A': False, 'B': False}
+
+    # --- DRAW SUPPORTS (UPDATED LOGIC) ---
+    if show_supports:
+        
+        def render_system_supports(params, sys_nodes_dict, color_override):
+            if not params: return
+            supp_list = params.get('supports', [])
+            mode = params.get('mode', 'Frame')
+            num_spans = params.get('num_spans', 1)
+            num_supp = num_spans + 1
+            
+            # Determine Node IDs for Supports
+            # Frame: Bottom nodes are 100, 101...
+            # Superstructure: Nodes are 200, 201...
+            base_idx = 100 if mode == 'Frame' else 200
+            
+            for i in range(num_supp):
+                nid = base_idx + i
+                
+                # Check if this node exists in the passed node dict
+                # CRITICAL FIX: If node not found, try to infer position from geometry input
+                # This handles cases where sysA has nodes but we are rendering sysB's supports
+                # and sysB nodes were not passed into `nodes` argument (which usually only holds active geom nodes)
+                
+                pos_x, pos_y = None, None
+                
+                if sys_nodes_dict and nid in sys_nodes_dict:
+                    pos_x, pos_y = sys_nodes_dict[nid]
+                else:
+                    # Fallback Logic: Re-calculate theoretical position
+                    # 1. Calculate X position based on spans
+                    current_x = 0.0
+                    L_list = params.get('L_list', [])
+                    for span_i in range(i):
+                        if span_i < len(L_list): current_x += L_list[span_i]
+                    
+                    # 2. Calculate Y position
+                    # For Frame: Y = -H
+                    # For Superstructure: Y = 0 (Simplified)
+                    current_y = 0.0
+                    if mode == 'Frame':
+                        h_list = params.get('h_list', [])
+                        if i < len(h_list): current_y = -h_list[i]
+                    
+                    pos_x, pos_y = current_x, current_y
+                
+                # Get Config
+                s_type = 'Fixed'
+                if i < len(supp_list):
+                    s_type = supp_list[i].get('type', 'Fixed')
+                else:
+                    if mode == 'Frame': s_type = 'Fixed'
+                    else: s_type = 'Pinned' if i==0 else 'Roller (X-Free)'
+                
+                # Render
+                _add_support_icon(fig, pos_x, pos_y, s_type, support_size, color_override)
+
+        # Render Logic:
+        # If Show A is active, draw A's supports in Blue/Black
+        # If Show B is active, draw B's supports in Red
+        # Note: nodes argument usually contains the union or the active system nodes. 
+        # Ideally, we should pass nodes_A and nodes_B separately, but currently we receive `nodes`.
+        # The fallback logic above handles cases where a node ID might be missing from the combined dict.
+        
+        if show_A and params_A:
+            render_system_supports(params_A, nodes, 'blue') # A is default/blue
+        
+        if show_B and params_B:
+            render_system_supports(params_B, nodes, 'red') # B is red to distinguish
 
     def add_traces(sys_data, sys_name, color, line_style, offset_dir):
         if not sys_data: return
@@ -101,22 +281,21 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
         is_sys_A = (sys_name == name_A)
         sys_key = 'A' if is_sys_A else 'B'
         
-        # Use geometry source for structure drawing
         geom_source = geom_A if (is_sys_A and geom_A) else (geom_B if (not is_sys_A and geom_B) else sys_data)
 
-        # 3. Draw Structure (Geometry)
+        # 3. Draw Structure
         x_struct, y_struct = [], []
-        sorted_ids = sorted(geom_source.keys(), key=lambda x: int(x[1:]))
-        
-        for eid in sorted_ids:
-            if eid not in geom_source: continue
-            dat = geom_source[eid]
-            ni, nj = dat['ni'], dat['nj']
-            x_struct.extend([ni[0], nj[0], None])
-            y_struct.extend([ni[1], nj[1], None])
+        if geom_source:
+            sorted_ids = sorted(geom_source.keys(), key=lambda x: int(x[1:]))
+            for eid in sorted_ids:
+                if eid not in geom_source: continue
+                dat = geom_source[eid]
+                ni, nj = dat['ni'], dat['nj']
+                x_struct.extend([ni[0], nj[0], None])
+                y_struct.extend([ni[1], nj[1], None])
         
         show_struct = False
-        if not legend_flags['struct']:
+        if not legend_flags['struct'] and x_struct:
             show_struct = True
             legend_flags['struct'] = True
             
@@ -128,7 +307,7 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
             hoverinfo='skip', showlegend=show_struct
         ))
 
-        # 4. Draw Diagrams & Loads
+        # 4. Draw Diagrams
         for eid, data in sys_data.items():
             if 'x' not in data: continue 
             
@@ -140,7 +319,6 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
             x_glob = ni[0] + c * x_local
             y_glob = ni[1] + s * x_local
             
-            # Diagram Values
             vals_pos = None; vals_neg = None; fill_mode = False
             inv = 1.0 
             
@@ -214,6 +392,7 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                     name=f"{sys_name}", showlegend=show_leg,
                     customdata=custom_pos, hovertemplate=htemp_step
                 ))
+                # Fill to structure
                 fig.add_trace(go.Scatter(
                     x=np.concatenate([x_glob, x_plot_pos[::-1]]),
                     y=np.concatenate([y_glob, y_plot_pos[::-1]]),
@@ -226,20 +405,14 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                 for load in data['loads']:
                     l_type = load['type']
                     
-                    # --- A. VEHICLE STEPS (Point Loads) ---
                     if load_case_name == "Vehicle Steps" and l_type == 'point':
                         p_val = load['params'][0]
                         lx = load['params'][1]
-                        
-                        bas_x = ni[0] + c * lx
-                        bas_y = ni[1] + s * lx
-                        dx, dy = 0.0, -1.0 # Gravity Down
-                        
+                        bas_x = ni[0] + c * lx; bas_y = ni[1] + s * lx
+                        dx, dy = 0.0, -1.0 
                         base_len = 2.0
                         tail_len = base_len * (abs(p_val) / max_P_veh)
-                        
-                        tail_x = bas_x - dx * tail_len
-                        tail_y = bas_y - dy * tail_len
+                        tail_x = bas_x - dx * tail_len; tail_y = bas_y - dy * tail_len
                         
                         fig.add_annotation(
                             x=bas_x, y=bas_y, ax=tail_x, ay=tail_y,
@@ -252,19 +425,13 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                             showarrow=False, yshift=10, font=dict(color='orange', size=10, weight="bold")
                         )
 
-                    # --- B. SELFWEIGHT (Trapezoid, Scaled) ---
                     elif load_case_name == "Selfweight" and l_type == 'distributed_trapezoid' and load.get('is_gravity', False):
                         q_val = load['params'][0]
-                        
                         nx, ny = -s, c
-                        
-                        # Scale Height proportional to Max SW
                         h_vis = 0.6 * (abs(q_val) / max_q_sw)
                         if h_vis < 0.1: h_vis = 0.1
-                        
                         x_start = ni[0]; y_start = ni[1]
                         x_end = ni[0] + c * L; y_end = ni[1] + s * L
-                        
                         x_st = x_start + nx * h_vis; y_st = y_start + ny * h_vis
                         x_et = x_end + nx * h_vis; y_et = y_end + ny * h_vis
                         
@@ -277,41 +444,21 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                         xm = (x_st + x_et) / 2; ym = (y_st + y_et) / 2
                         fig.add_annotation(x=xm, y=ym, text=f"{q_val:.1f}", showarrow=False, font=dict(color='orange', size=10), yshift=5)
 
-                    # --- C. SOIL LOAD (Corrected Direction & Scaled) ---
                     elif load_case_name == "Soil" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
                         q_bot, q_top, x_s, L_load = load['params']
-                        
                         nx, ny = -s, c
-                        
-                        # Global Scaling
-                        target_width = 1.5 # Max visual width in meters
+                        target_width = 1.5 
                         w_bot = target_width * (abs(q_bot) / max_q_soil)
                         w_top = target_width * (abs(q_top) / max_q_soil)
                         
-                        b_x_bot = ni[0] + c * x_s
-                        b_y_bot = ni[1] + s * x_s
-                        b_x_top = ni[0] + c * (x_s + L_load)
-                        b_y_top = ni[1] + s * (x_s + L_load)
-                        
-                        # Direction Logic Correction:
-                        # Solver Force Direction: q > 0 (Right/+X), q < 0 (Left/-X).
-                        # Normal Vector (nx, ny): Points Left (-X) for vertical wall.
-                        # We want to draw the block on the SOURCE side.
-                        # If Pushing Right (q>0), Source is Left. We want draw_dir = Left (Normal).
-                        # If Pushing Left (q<0), Source is Right. We want draw_dir = Right (-Normal).
+                        b_x_bot = ni[0] + c * x_s; b_y_bot = ni[1] + s * x_s
+                        b_x_top = ni[0] + c * (x_s + L_load); b_y_top = ni[1] + s * (x_s + L_load)
                         
                         dir_sign = 1.0 if q_bot >= 0 else -1.0
+                        draw_dir_x = dir_sign * nx; draw_dir_y = dir_sign * ny
                         
-                        # Fix: draw_dir aligned with Normal * sign. 
-                        # +1 (Right Push) * Normal (Left) = Left. Correct.
-                        # -1 (Left Push) * Normal (Left) = Right. Correct.
-                        draw_dir_x = dir_sign * nx
-                        draw_dir_y = dir_sign * ny
-                        
-                        t_x_bot = b_x_bot + draw_dir_x * w_bot
-                        t_y_bot = b_y_bot + draw_dir_y * w_bot
-                        t_x_top = b_x_top + draw_dir_x * w_top
-                        t_y_top = b_y_top + draw_dir_y * w_top
+                        t_x_bot = b_x_bot + draw_dir_x * w_bot; t_y_bot = b_y_bot + draw_dir_y * w_bot
+                        t_x_top = b_x_top + draw_dir_x * w_top; t_y_top = b_y_top + draw_dir_y * w_top
                         
                         fig.add_trace(go.Scatter(
                             x=[b_x_bot, b_x_top, t_x_top, t_x_bot, b_x_bot],
@@ -319,7 +466,6 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                             fill='toself', fillcolor='orange', opacity=0.4, mode='none',
                             hoverinfo='skip', showlegend=False
                         ))
-                        # Arrows
                         for k in [0.25, 0.5, 0.75]:
                             bx = b_x_bot + k*(b_x_top - b_x_bot); by = b_y_bot + k*(b_y_top - b_y_bot)
                             tx = t_x_bot + k*(t_x_top - t_x_bot); ty = t_y_bot + k*(t_y_top - t_y_bot)
@@ -327,28 +473,19 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                                 x=bx, y=by, ax=tx, ay=ty, xref='x', yref='y', axref='x', ayref='y',
                                 showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1, arrowcolor='orange', opacity=0.6
                             )
-                        # Labels
                         fig.add_annotation(x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, font=dict(color='orange', size=9))
                         fig.add_annotation(x=t_x_top, y=t_y_top, text=f"{abs(q_top):.1f}", showarrow=False, font=dict(color='orange', size=9))
 
-                    # --- D. SURCHARGE (New, Scaled) ---
                     elif load_case_name == "Surcharge" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
                         q_bot, q_top, x_s, L_load = load['params']
                         nx, ny = -s, c
-                        
-                        # Scaling
                         target_width = 1.0 
                         w_vis = target_width * (abs(q_bot) / max_q_surch)
                         if w_vis < 0.1: w_vis = 0.1
-
                         b_x_bot = ni[0] + c * x_s; b_y_bot = ni[1] + s * x_s
                         b_x_top = ni[0] + c * (x_s + L_load); b_y_top = ni[1] + s * (x_s + L_load)
-                        
-                        # Same Direction Logic as Soil
                         dir_sign = 1.0 if q_bot >= 0 else -1.0
-                        draw_dir_x = dir_sign * nx
-                        draw_dir_y = dir_sign * ny
-                        
+                        draw_dir_x = dir_sign * nx; draw_dir_y = dir_sign * ny
                         t_x_bot = b_x_bot + draw_dir_x * w_vis; t_y_bot = b_y_bot + draw_dir_y * w_vis
                         t_x_top = b_x_top + draw_dir_x * w_vis; t_y_top = b_y_top + draw_dir_y * w_vis
                         
@@ -358,7 +495,6 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                             fill='toself', fillcolor='purple', opacity=0.4, mode='none',
                             hoverinfo='skip', showlegend=False
                         ))
-                         # Arrows
                         for k in [0.5]:
                             bx = b_x_bot + k*(b_x_top - b_x_bot); by = b_y_bot + k*(b_y_top - b_y_bot)
                             tx = t_x_bot + k*(t_x_top - t_x_bot); ty = t_y_bot + k*(t_y_top - t_y_bot)
@@ -368,8 +504,7 @@ def create_plotly_fig(nodes, sysA_data, sysB_data, type_base='M', target_height=
                             )
                         fig.add_annotation(x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, font=dict(color='purple', size=9))
 
-
-            # 6. ANNOTATIONS (Max/Min)
+            # 6. ANNOTATIONS
             if annotate:
                 threshold = max_val * 0.05
                 if fill_mode:
