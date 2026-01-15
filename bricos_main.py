@@ -329,6 +329,52 @@ if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 if st.session_state['sysA'].get('scale_manual', 0) < 0.1: st.session_state['sysA']['scale_manual'] = 2.0
 if st.session_state['sysB'].get('scale_manual', 0) < 0.1: st.session_state['sysB']['scale_manual'] = 2.0
 
+# --- MOVED: ABOUT SECTION ---
+with st.sidebar.expander("About", expanded=False):
+    st.markdown("**BriCoS v0.30**")
+    st.write("Author: Kasper Lindskov Fabricius")
+    st.write("Email: Kasper.LindskovFabricius@sweco.dk")
+    st.write("A specialized Finite Element Analysis (FEM) tool for rapid bridge analysis and comparison.")
+
+# --- MOVED: ANALYSIS SETTINGS ---
+with st.sidebar.expander("Analysis & Result Settings", expanded=True):
+    help_dir = "Forward: Left to Right. Reverse: Right to Left (axles inverted). Both: Envelope of both directions."
+    curr_dir = st.session_state['sysA'].get('vehicle_direction', 'Forward')
+    dir_opts = ["Forward", "Reverse", "Both"]
+    idx_dir = dir_opts.index(curr_dir) if curr_dir in dir_opts else 0
+    
+    dir_sel = st.radio("Vehicle Direction", dir_opts, horizontal=True, index=idx_dir, key="veh_dir_radio_sidebar", help=help_dir)
+    st.session_state['sysA']['vehicle_direction'] = dir_sel
+    st.session_state['sysB']['vehicle_direction'] = dir_sel
+    
+    st.markdown("---")
+    help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
+    
+    is_sim = st.session_state['sysA'].get('combine_surcharge_vehicle', False)
+    combo_idx = 1 if is_sim else 0
+    
+    surch_sel = st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], index=combo_idx, horizontal=True, key="surcharge_combo_radio_sidebar", help=help_combo)
+    
+    is_simultaneous = (surch_sel == "Simultaneous (Vehicle + Surcharge)")
+    st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
+    st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
+
+    st.markdown("---")
+    st.markdown("**Calculation Precision**")
+    c_mesh, c_step = st.columns(2)
+    def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
+    def_step = st.session_state['sysA'].get('step_size', 0.2)
+    m_val = c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider")
+    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider")
+
+if "common_mesh_slider" in st.session_state:
+    st.session_state['sysA']['mesh_size'] = m_val
+    st.session_state['sysB']['mesh_size'] = m_val
+
+if "common_step_slider" in st.session_state:
+    st.session_state['sysA']['step_size'] = s_val
+    st.session_state['sysB']['step_size'] = s_val
+
 st.sidebar.header("Configuration")
 
 # --- STICKY SIDEBAR: ACTIVE SYSTEM & NAMES ---
@@ -892,53 +938,6 @@ with st.sidebar.expander("Vehicle Definitions", expanded=True):
     st.markdown("**Vehicle B**")
     handle_veh_inputs("B", f"{curr}_vehB_class", 'vehicleB_loads', 'vehicleB_space', 'vehicleB')
 
-# --- ANALYSIS SETTINGS ---
-with st.sidebar.expander("Analysis & Result Settings", expanded=True):
-    help_dir = "Forward: Left to Right. Reverse: Right to Left (axles inverted). Both: Envelope of both directions."
-    curr_dir = st.session_state['sysA'].get('vehicle_direction', 'Forward')
-    dir_opts = ["Forward", "Reverse", "Both"]
-    idx_dir = dir_opts.index(curr_dir) if curr_dir in dir_opts else 0
-    
-    dir_sel = st.radio("Vehicle Direction", dir_opts, horizontal=True, index=idx_dir, key="veh_dir_radio_sidebar", help=help_dir)
-    st.session_state['sysA']['vehicle_direction'] = dir_sel
-    st.session_state['sysB']['vehicle_direction'] = dir_sel
-    
-    st.markdown("---")
-    help_combo = "Define how the Traffic Surcharge (on walls) and the Main Vehicle (on deck) interact.\n- Exclusive: Load is max(Vehicle, Surcharge).\n- Simultaneous: Load is Vehicle + Surcharge."
-    
-    is_sim = st.session_state['sysA'].get('combine_surcharge_vehicle', False)
-    combo_idx = 1 if is_sim else 0
-    
-    surch_sel = st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], index=combo_idx, horizontal=True, key="surcharge_combo_radio_sidebar", help=help_combo)
-    
-    is_simultaneous = (surch_sel == "Simultaneous (Vehicle + Surcharge)")
-    st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
-    st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
-
-    st.markdown("---")
-    st.markdown("**Calculation Precision**")
-    c_mesh, c_step = st.columns(2)
-    def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
-    def_step = st.session_state['sysA'].get('step_size', 0.2)
-    m_val = c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider")
-    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider")
-
-if "common_mesh_slider" in st.session_state:
-    st.session_state['sysA']['mesh_size'] = m_val
-    st.session_state['sysB']['mesh_size'] = m_val
-
-if "common_step_slider" in st.session_state:
-    st.session_state['sysA']['step_size'] = s_val
-    st.session_state['sysB']['step_size'] = s_val
-
-# --- ABOUT SECTION ---
-st.sidebar.markdown("---")
-with st.sidebar.expander("About", expanded=False):
-    st.markdown("**BriCoS v0.30**")
-    st.write("Author: Kasper Lindskov Fabricius")
-    st.write("Email: Kasper.LindskovFabricius@sweco.dk")
-    st.write("A specialized Finite Element Analysis (FEM) tool for rapid bridge analysis and comparison.")
-
 # --- EXECUTION & RESULTS ---
 view_options = ["Total Envelope", "Selfweight", "Soil", "Surcharge", "Vehicle Envelope", "Vehicle Steps"]
 def set_view_case(): st.session_state.keep_view_case = st.session_state.view_case_selector
@@ -1217,7 +1216,7 @@ with t3:
         denom = abs(val_a)
         if denom < 1e-6:
             if abs(val_b) < 1e-6: return 0.0
-            return 999.0 
+            return 9999.0 # Placeholder for Infinity
         
         if is_max_case:
             # For MAX: Algebraic Increase = Red.
@@ -1237,6 +1236,16 @@ with t3:
         if val > 0.05: return 'color: red; font-weight: bold' 
         if val < -0.05: return 'color: green; font-weight: bold' 
         return 'color: gray'
+
+    # FORMATTING FUNCTION FOR CAP
+    def fmt_pct_cap(val):
+        if pd.isna(val): return "--"
+        # Defensive check: ensure val is numeric before comparing
+        if not isinstance(val, (int, float)): return str(val)
+        
+        if val > 999.0: return ">999%"
+        if val < -999.0: return "<-999%"
+        return "{:+.1f}%".format(val)
 
     all_elems = sorted(list(set(rA.keys()) | set(rB.keys())), key=lambda x: (x[0], int(x[1:])))
 
@@ -1291,10 +1300,10 @@ with t3:
 
         df = pd.DataFrame(rows)
         pct_cols = [c for c in df.columns if "%" in c]
-        fmt_dict = {c: "{:+.1f}%" for c in pct_cols}
         
+        # Apply formatting ONLY to percentage columns using subset
         st.dataframe(
-            df.style.map(color_diff, subset=pct_cols).format(fmt_dict, na_rep="--"),
+            df.style.map(color_diff, subset=pct_cols).format(fmt_pct_cap, subset=pct_cols, na_rep="--"),
             height=200, width='stretch'
         )
 
@@ -1349,9 +1358,9 @@ with t3:
         df_def = df_def[cols]
         
         pct_cols_d = [c for c in df_def.columns if "%" in c]
-        fmt_dict_d = {c: "{:+.1f}%" for c in pct_cols_d}
+        # Apply formatting ONLY to percentage columns using subset
         st.dataframe(
-            df_def.style.map(color_diff, subset=pct_cols_d).format(fmt_dict_d, na_rep="--"),
+            df_def.style.map(color_diff, subset=pct_cols_d).format(fmt_pct_cap, subset=pct_cols_d, na_rep="--"),
             height=200, width='stretch'
         )
     
@@ -1460,10 +1469,10 @@ with t3:
     if r_rows:
         df_react = pd.DataFrame(r_rows)
         pct_cols_r = [c for c in df_react.columns if "%" in c]
-        fmt_dict_r = {c: "{:+.1f}%" for c in pct_cols_r}
             
+        # Apply formatting ONLY to percentage columns using subset
         st.dataframe(
-            df_react.style.map(color_diff, subset=pct_cols_r).format(fmt_dict_r, na_rep="--"),
+            df_react.style.map(color_diff, subset=pct_cols_r).format(fmt_pct_cap, subset=pct_cols_r, na_rep="--"),
             width='stretch'
         )
     else:
