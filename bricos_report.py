@@ -49,7 +49,7 @@ class BricosReportGenerator:
         self.elements.append(Paragraph("1. System Configuration & Geometry", self.styles['SwecoSubHeader']))
         self._add_system_input_summary("System A", self.params_A, self.raw_A)
         
-        # Forced Page Break after System A summary as requested
+        # Forced Page Break after System A summary
         self.elements.append(PageBreak())
         
         self._add_system_input_summary("System B", self.params_B, self.raw_B)
@@ -82,7 +82,7 @@ class BricosReportGenerator:
         # 6. Critical Vehicle Steps
         self.elements.append(PageBreak())
         self.elements.append(Paragraph("5. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
-        self.elements.append(Paragraph("Vehicle positions causing peak effects in each span element, separated by system.", self.styles['SwecoSmall']))
+        self.elements.append(Paragraph("Vehicle positions causing peak effects per span, ordered by: Min M, Max M, Min V, Max V.", self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
         self._add_smart_vehicle_steps()
 
@@ -230,7 +230,7 @@ class BricosReportGenerator:
 
         # 3. SUPPORTS
         self.elements.append(Spacer(1, 0.2*cm))
-        supp_data = [["Support Node", "Type", "Stiffness (Kx, Ky, Km)"]]
+        supp_data = [["Support Node", "Type", "Stiffness (Kx, Ky, Km) [kN/m, kN/m, kNm/rad]"]]
         has_supp = False
         supp_list = p.get('supports', [])
         num_expected = p['num_spans'] + 1
@@ -358,92 +358,88 @@ class BricosReportGenerator:
         self.elements.append(Spacer(1, 0.5*cm))
 
     def _add_smart_vehicle_steps(self):
-        # This function must scan each system independently and plot ONLY that system's critical steps.
-        
-        # --- Helper for Scanning & Plotting ---
-        def process_system(params, raw_data, sys_label, sys_nodes):
-            steps = raw_data.get('Vehicle Steps A', [])
-            if not steps: return
-            
-            num_spans = params['num_spans']
-            step_map = {} # idx -> {desc:[], types: set}
-            
-            # Scan Spans
-            for i in range(num_spans):
-                eid = f"S{i+1}"
-                max_M, idx_max_M = -1e9, -1
-                min_M, idx_min_M = 1e9, -1
-                max_V, idx_max_V = -1e9, -1
-                min_V, idx_min_V = 1e9, -1
-                
-                found_span = False
-                for idx, step in enumerate(steps):
-                    res = step['res']
-                    if eid in res:
-                        found_span = True
-                        m_arr = res[eid]['M']; v_arr = res[eid]['V']
-                        mx_m = np.max(m_arr); mn_m = np.min(m_arr)
-                        mx_v = np.max(v_arr); mn_v = np.min(v_arr)
-                        
-                        if mx_m > max_M: max_M = mx_m; idx_max_M = idx
-                        if mn_m < min_M: min_M = mn_m; idx_min_M = idx
-                        if mx_v > max_V: max_V = mx_v; idx_max_V = idx
-                        if mn_v < min_V: min_V = mn_v; idx_min_V = idx
-                
-                if not found_span: continue
-                
-                def reg(idx, desc, type_code):
-                    if idx == -1: return
-                    if idx not in step_map: step_map[idx] = {'desc': [], 'types': set()}
-                    step_map[idx]['desc'].append(desc)
-                    step_map[idx]['types'].add(type_code)
+        # Process System A
+        self._process_system_span_by_span(self.params_A, self.raw_A, "System A", self.nodes_A)
+        self.elements.append(Spacer(1, 0.5*cm))
+        # Process System B
+        self._process_system_span_by_span(self.params_B, self.raw_B, "System B", self.nodes_B)
 
-                reg(idx_max_M, f"Max M ({eid})", 'M')
-                reg(idx_min_M, f"Min M ({eid})", 'M')
-                reg(idx_max_V, f"Max V ({eid})", 'V')
-                reg(idx_min_V, f"Min V ({eid})", 'V')
+    def _process_system_span_by_span(self, params, raw_data, sys_label, sys_nodes):
+        steps = raw_data.get('Vehicle Steps A', [])
+        if not steps: return
+
+        self.elements.append(Paragraph(f"<b>{sys_label} ({params.get('name')})</b>", self.styles['Heading4']))
+        
+        num_spans = params['num_spans']
+        
+        for i in range(num_spans):
+            eid = f"S{i+1}"
             
-            if not step_map: return
+            # 1. FIND CRITICAL INDICES
+            max_M, idx_max_M = -1e15, -1
+            min_M, idx_min_M = 1e15, -1
+            max_V, idx_max_V = -1e15, -1
+            min_V, idx_min_V = 1e15, -1
             
-            self.elements.append(Paragraph(f"<b>{sys_label} ({params.get('name')})</b>", self.styles['Heading4']))
+            found_data = False
+            for idx, step in enumerate(steps):
+                res = step['res']
+                if eid in res:
+                    found_data = True
+                    m_arr = res[eid]['M']; v_arr = res[eid]['V']
+                    mx_m = np.max(m_arr); mn_m = np.min(m_arr)
+                    mx_v = np.max(v_arr); mn_v = np.min(v_arr)
+                    
+                    if mx_m > max_M: max_M = mx_m; idx_max_M = idx
+                    if mn_m < min_M: min_M = mn_m; idx_min_M = idx
+                    if mx_v > max_V: max_V = mx_v; idx_max_V = idx
+                    if mn_v < min_V: min_V = mn_v; idx_min_V = idx
             
-            sorted_steps = sorted(step_map.keys())
-            for idx in sorted_steps:
-                info = step_map[idx]
-                desc_str = ", ".join(info['desc'])
+            if not found_data: continue
+            
+            self.elements.append(Paragraph(f"<b>Element {eid}</b>", self.styles['SwecoBody']))
+            
+            # 2. DEFINE REQUESTED ORDER
+            # Format: (Index, Type Code, Description Title)
+            tasks = [
+                (idx_min_M, 'M', f"Min Moment ({eid})"),
+                (idx_max_M, 'M', f"Max Moment ({eid})"),
+                (idx_min_V, 'V', f"Min Shear ({eid})"),
+                (idx_max_V, 'V', f"Max Shear ({eid})")
+            ]
+            
+            processed_checks = [] # Avoid duplicates if exactly same step and type (optional, but requested order implies listing all)
+            
+            for idx, type_code, title in tasks:
+                if idx == -1: continue
+                
                 step = steps[idx]
                 x_loc = step['x']
                 
-                self.elements.append(Paragraph(f"Position X = {x_loc:.2f} m (Step {idx}) - Critical for: {desc_str}", self.styles['SwecoCell']))
+                full_title = f"{title} @ X={x_loc:.2f}m"
+                self.elements.append(Paragraph(f"Step {idx}: {full_title}", self.styles['SwecoCell']))
                 
-                for type_code in sorted(list(info['types'])):
-                    title_map = {'M': "Bending Moment [kNm]", 'V': "Shear Force [kN]"}
-                    try:
-                        # KEY: Show A=True, Show B=False (if system A)
-                        is_A = (sys_label == "System A")
-                        
-                        fig = viz.create_plotly_fig(
-                            sys_nodes, 
-                            step['res'] if is_A else {}, # A Data
-                            step['res'] if not is_A else {}, # B Data
-                            type_base=type_code, 
-                            title=f"{title_map.get(type_code,'')} @ X={x_loc:.2f}m",
-                            load_case_name="Vehicle Steps",
-                            name_A=self.params_A['name'], name_B=self.params_B['name'],
-                            geom_A=self.raw_A.get('Selfweight'), geom_B=self.raw_B.get('Selfweight'),
-                            show_A=is_A, show_B=(not is_A),
-                            params_A=self.params_A, params_B=self.params_B,
-                            show_supports=True,
-                            font_scale=1.5 
-                        )
-                        self._add_fig_image(fig)
-                    except: pass
-                self.elements.append(Spacer(1, 0.3*cm))
-        
-        # EXECUTE SCAN FOR BOTH
-        process_system(self.params_A, self.raw_A, "System A", self.nodes_A)
-        self.elements.append(Spacer(1, 0.5*cm))
-        process_system(self.params_B, self.raw_B, "System B", self.nodes_B)
+                try:
+                    is_A = (sys_label == "System A")
+                    
+                    fig = viz.create_plotly_fig(
+                        sys_nodes, 
+                        step['res'] if is_A else {}, # A Data
+                        step['res'] if not is_A else {}, # B Data
+                        type_base=type_code, 
+                        title=full_title,
+                        load_case_name="Vehicle Steps",
+                        name_A=self.params_A['name'], name_B=self.params_B['name'],
+                        geom_A=self.raw_A.get('Selfweight'), geom_B=self.raw_B.get('Selfweight'),
+                        show_A=is_A, show_B=(not is_A),
+                        params_A=self.params_A, params_B=self.params_B,
+                        show_supports=True,
+                        font_scale=1.5
+                    )
+                    self._add_fig_image(fig)
+                except Exception as e:
+                    pass # Skip plot if error
+                self.elements.append(Spacer(1, 0.2*cm))
 
     def _add_plot_set(self, res_A, res_B, case_name, geom_A, geom_B):
         types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'), 

@@ -198,13 +198,17 @@ def create_plotly_fig(
     ann_candidates = []
     legend_flags = {'struct': False, 'A': False, 'B': False}
 
-    # Font Sizes & Margin Logic
-    base_font_size = 12 * font_scale
-    marker_size = 10 * font_scale # Slightly smaller markers
+    # --- FONT SIZING & LAYOUT ADJUSTMENTS ---
+    # Adjusted to prevent 'huge' text in PDF reports while keeping readability.
+    base_font_size = 10 * font_scale
+    marker_size = 8 * font_scale
     
-    # Increase margins significantly if scaling font to prevent cut-off
-    margin_base = 30 * font_scale
-    top_margin = 50 * font_scale # Extra room for title
+    # Specialized font size for dense vehicle loads
+    veh_load_font_size = 10 * (1 + (font_scale - 1) * 0.4) 
+    
+    # Margin fixed (not scaled) to ensure plot area doesn't shrink in PDF
+    margin_base = 30
+    top_margin = 40 
     
     # --- DRAW SUPPORTS ---
     if show_supports:
@@ -361,7 +365,8 @@ def create_plotly_fig(
                 ))
 
             if 'Envelope' not in load_case_name and 'loads' in data:
-                for load in data['loads']:
+                # Enumerate to handle staggering
+                for i_load, load in enumerate(data['loads']):
                     l_type = load['type']
                     
                     if load_case_name == "Vehicle Steps" and l_type == 'point':
@@ -369,8 +374,11 @@ def create_plotly_fig(
                         lx = load['params'][1]
                         bas_x = ni[0] + c * lx; bas_y = ni[1] + s * lx
                         dx, dy = 0.0, -1.0 
+                        
                         base_len = 2.0
-                        tail_len = base_len * (abs(p_val) / max_P_veh)
+                        # Enforce Minimum Tail Length to prevent overlap with diagram line
+                        tail_len = max(base_len * (abs(p_val) / max_P_veh), 1.0) 
+                        
                         tail_x = bas_x - dx * tail_len; tail_y = bas_y - dy * tail_len
                         
                         fig.add_annotation(
@@ -379,10 +387,20 @@ def create_plotly_fig(
                             showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2.5, 
                             arrowcolor='orange', opacity=1.0
                         )
+                        
+                        # --- STAGGER LOGIC ---
+                        # Alternate yshift based on index (even/odd) with SIGNIFICANT gap
+                        is_staggered = (i_load % 2 == 1)
+                        # Increased separation: 15 vs 45 (scaled) to ensure vertical clearance
+                        shift_val = (25 if is_staggered else 10) * font_scale
+                        
+                        # Round to nearest whole number
+                        load_text = f"{int(round(abs(p_val)))} kN"
+                        
                         fig.add_annotation(
-                            x=tail_x, y=tail_y, text=f"{abs(p_val):.1f} kN", 
-                            showarrow=False, yshift=10 * font_scale, 
-                            font=dict(color='orange', size=marker_size, weight="bold")
+                            x=tail_x, y=tail_y, text=load_text, 
+                            showarrow=False, yshift=shift_val, 
+                            font=dict(color='orange', size=veh_load_font_size, weight="bold")
                         )
 
                     elif load_case_name == "Selfweight" and l_type == 'distributed_trapezoid' and load.get('is_gravity', False):
