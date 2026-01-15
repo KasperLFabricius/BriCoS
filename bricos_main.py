@@ -81,8 +81,8 @@ def load_vehicle_from_csv(target_name):
                 s_str = str(row.iloc[0]['Spacing'])
                 
                 # Parse to arrays
-                l_arr = [float(x) for x in l_str.split(',')]
-                s_arr = [float(x) for x in s_str.split(',')]
+                l_arr = [float(x) for x in l_str.split(',') if x.strip()]
+                s_arr = [float(x) for x in s_str.split(',') if x.strip()]
                 
                 return {
                     'loads': l_arr, 'spacing': s_arr,
@@ -271,6 +271,20 @@ def force_ui_update(sys_key, data):
             st.session_state[f"{sys_key}_ky_{i}"] = supp['k'][1]
             st.session_state[f"{sys_key}_km_{i}"] = supp['k'][2]
 
+def clean_transient_keys():
+    """
+    Removes temporary UI keys (especially for Profiler and Viz) to prevent 
+    stale widget states from overwriting loaded data on re-run.
+    """
+    keys_to_clear = []
+    for k in st.session_state.keys():
+        # Clear Profiler transient keys (prof_type, prof_shape, etc.)
+        if "_prof_" in k or "_align_t" in k or "_inc_" in k:
+            keys_to_clear.append(k)
+    
+    for k in keys_to_clear:
+        del st.session_state[k]
+
 # --- INITIALIZATION WITH SPECIFIC DEFAULTS ---
 if 'sysA' not in st.session_state: 
     # System A: 1 Span
@@ -425,14 +439,28 @@ with st.sidebar.expander("Reset Data", expanded=False):
 
 # --- FILE OPERATIONS ---
 with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
+    # Initialize report keys if missing to ensure they exist for saving
+    rep_keys = ['rep_pno', 'rep_pname', 'rep_rev', 'rep_author', 'rep_check', 'rep_appr', 'rep_comm']
+    for rk in rep_keys:
+        if rk not in st.session_state: st.session_state[rk] = ""
+
     def to_csv():
         rows = []
+        # Save Systems
         for sys_name in ['sysA', 'sysB']:
             data = st.session_state[sys_name]
             for k, v in data.items():
                 if k == 'backup': continue 
                 val_str = json.dumps(v, default=str)
                 rows.append({'System': sys_name, 'Parameter': k, 'Value': val_str})
+        
+        # Save Global / Report Settings
+        global_keys = rep_keys + ['result_mode']
+        for gk in global_keys:
+            if gk in st.session_state:
+                val_str = json.dumps(st.session_state[gk], default=str)
+                rows.append({'System': 'Global', 'Parameter': gk, 'Value': val_str})
+
         df = pd.DataFrame(rows)
         return df.to_csv(index=False).encode('utf-8')
 
@@ -443,13 +471,20 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
         try:
             df_load = pd.read_csv(uploaded_file)
             if 'System' in df_load.columns and 'Parameter' in df_load.columns:
+                
+                # Clean up transient UI keys (Profiler/Viz) to prevent stale state
+                clean_transient_keys()
+                
                 for _, row in df_load.iterrows():
                     sys_n = row['System']
-                    if sys_n in ['sysA', 'sysB']:
-                        try:
-                            val = json.loads(row['Value'])
+                    try:
+                        val = json.loads(row['Value'])
+                        if sys_n in ['sysA', 'sysB']:
                             st.session_state[sys_n][row['Parameter']] = val
-                        except: pass
+                        elif sys_n == 'Global':
+                            # Restore global/report settings directly to session state
+                            st.session_state[row['Parameter']] = val
+                    except: pass
                 
                 force_ui_update('sysA', st.session_state['sysA'])
                 force_ui_update('sysB', st.session_state['sysB'])
@@ -549,18 +584,19 @@ with st.sidebar.expander("Report Generation", expanded=False):
     if 'rep_appr' not in st.session_state: st.session_state.rep_appr = ""
     if 'rep_comm' not in st.session_state: st.session_state.rep_comm = ""
 
-    st.session_state.rep_pno = st.text_input("Project No.", st.session_state.rep_pno)
-    st.session_state.rep_pname = st.text_input("Project Name", st.session_state.rep_pname)
+    # Corrected: Only using key= to bind, removing conflicting assignment
+    st.text_input("Project No.", key="rep_pno")
+    st.text_input("Project Name", key="rep_pname")
     
     c_r1, c_r2 = st.columns(2)
-    st.session_state.rep_rev = c_r1.text_input("Revision", st.session_state.rep_rev)
-    st.session_state.rep_author = c_r2.text_input("Author", st.session_state.rep_author)
+    c_r1.text_input("Revision", key="rep_rev")
+    c_r2.text_input("Author", key="rep_author")
     
     c_r3, c_r4 = st.columns(2)
-    st.session_state.rep_check = c_r3.text_input("Checker", st.session_state.rep_check)
-    st.session_state.rep_appr = c_r4.text_input("Approver", st.session_state.rep_appr)
+    c_r3.text_input("Checker", key="rep_check")
+    c_r4.text_input("Approver", key="rep_appr")
     
-    st.session_state.rep_comm = st.text_area("Comments", st.session_state.rep_comm, height=100)
+    st.text_area("Comments", height=100, key="rep_comm")
     
     if st.button("Generate PDF Report", type="primary"):
         with st.spinner("Rendering Report (this may take a moment)..."):
@@ -773,7 +809,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         
         sur = next((x for x in p['surcharge'] if x['wall_idx']==i), None)
         val_q = sur['q'] if sur else 0.0
-        new_q = c3.number_input(f"Surch. [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help="Vehicle Surcharge" if i==0 else None)
+        new_q = c3.number_input(f"Lat. Load [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help="Vehicle Surcharge / Lateral Load" if i==0 else None)
         
         if not is_super:
             p['surcharge'] = [x for x in p['surcharge'] if x['wall_idx'] != i]
@@ -976,8 +1012,9 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         msg = ""
         try:
             if p[key_loads].strip():
-                l_arr = [float(x) for x in p[key_loads].split(',')]
-                s_arr = [float(x) for x in p[key_space].split(',')]
+                # Safe Parsing to prevent crashes on trailing commas
+                l_arr = [float(x) for x in p[key_loads].split(',') if x.strip()]
+                s_arr = [float(x) for x in p[key_space].split(',') if x.strip()]
                 if len(l_arr) != len(s_arr): msg = "Error: Mismatch in number of Loads vs Spacings."
                 elif len(s_arr) > 0 and s_arr[0] != 0: msg = "Error: First spacing value must be 0."
                 elif len(l_arr) == 0: msg = "Empty."
@@ -1080,17 +1117,23 @@ veh_key_res = ""
 
 if view_case == "Vehicle Steps":
     st.markdown("---")
+    
+    # ISSUE H FIX: Only show Reverse option if available
     is_both_active = (st.session_state['sysA']['vehicle_direction'] == 'Both')
+    is_reverse_only = (st.session_state['sysA']['vehicle_direction'] == 'Reverse')
     step_dir_suffix = ""
     
     if is_both_active:
         c_veh_tog, c_dir_tog, c_step_slide, c_step_tog = st.columns([1, 1, 2, 1])
         step_dir_sel = c_dir_tog.radio("Step Direction:", ["Forward", "Reverse"], horizontal=True, key="step_dir_radio")
         if step_dir_sel == "Reverse": step_dir_suffix = "_Rev"
-    else:
-        if st.session_state['sysA']['vehicle_direction'] == 'Reverse':
-             step_dir_suffix = "_Rev"
+    elif is_reverse_only:
         c_veh_tog, c_step_slide, c_step_tog = st.columns([1, 2, 1])
+        step_dir_suffix = "_Rev"
+    else:
+        # Forward Only
+        c_veh_tog, c_step_slide, c_step_tog = st.columns([1, 2, 1])
+        # step_dir_suffix remains ""
     
     def set_anim_veh(): st.session_state.keep_active_veh_step = st.session_state.anim_veh_radio
     try: av_idx = ["Vehicle A", "Vehicle B"].index(st.session_state.keep_active_veh_step)
