@@ -4,8 +4,11 @@ import numpy as np
 import json
 import copy
 import os
+import io # Added for Report Buffer
+
 import bricos_solver as solver
 import bricos_viz as viz
+import bricos_report # New Report Module
 
 # ==========================================
 # UI SETUP & CONFIGURATION
@@ -534,6 +537,59 @@ if "common_mesh_slider" in st.session_state:
 if "common_step_slider" in st.session_state:
     st.session_state['sysA']['step_size'] = s_val
     st.session_state['sysB']['step_size'] = s_val
+
+# --- REPORT GENERATION (NEW) ---
+with st.sidebar.expander("Report Generation", expanded=False):
+    # Initialize report keys if missing
+    if 'rep_pno' not in st.session_state: st.session_state.rep_pno = ""
+    if 'rep_pname' not in st.session_state: st.session_state.rep_pname = ""
+    if 'rep_rev' not in st.session_state: st.session_state.rep_rev = "A"
+    if 'rep_author' not in st.session_state: st.session_state.rep_author = ""
+    if 'rep_check' not in st.session_state: st.session_state.rep_check = ""
+    if 'rep_appr' not in st.session_state: st.session_state.rep_appr = ""
+    if 'rep_comm' not in st.session_state: st.session_state.rep_comm = ""
+
+    st.session_state.rep_pno = st.text_input("Project No.", st.session_state.rep_pno)
+    st.session_state.rep_pname = st.text_input("Project Name", st.session_state.rep_pname)
+    
+    c_r1, c_r2 = st.columns(2)
+    st.session_state.rep_rev = c_r1.text_input("Revision", st.session_state.rep_rev)
+    st.session_state.rep_author = c_r2.text_input("Author", st.session_state.rep_author)
+    
+    c_r3, c_r4 = st.columns(2)
+    st.session_state.rep_check = c_r3.text_input("Checker", st.session_state.rep_check)
+    st.session_state.rep_appr = c_r4.text_input("Approver", st.session_state.rep_appr)
+    
+    st.session_state.rep_comm = st.text_area("Comments", st.session_state.rep_comm, height=100)
+    
+    if st.button("Generate PDF Report", type="primary"):
+        with st.spinner("Rendering Report (this may take a moment)..."):
+            buffer = io.BytesIO()
+            meta = {
+                'proj_no': st.session_state.rep_pno,
+                'proj_name': st.session_state.rep_pname,
+                'rev': st.session_state.rep_rev,
+                'author': st.session_state.rep_author,
+                'checker': st.session_state.rep_check,
+                'approver': st.session_state.rep_appr,
+                'comments': st.session_state.rep_comm
+            }
+            try:
+                rep_gen = bricos_report.BricosReportGenerator(buffer, meta, st.session_state)
+                rep_gen.generate()
+                buffer.seek(0)
+                st.session_state['report_buffer'] = buffer
+                st.success("Report Generated!")
+            except Exception as e:
+                st.error(f"Report Generation Failed: {e}")
+    
+    if 'report_buffer' in st.session_state:
+        st.download_button(
+            label="Download Report PDF",
+            data=st.session_state['report_buffer'],
+            file_name=f"BriCoS_Report_{st.session_state.rep_pno}.pdf",
+            mime="application/pdf"
+        )
 
 # ---------------------------------------------
 # STICKY SIDEBAR: ACTIVE SYSTEM & NAMES
