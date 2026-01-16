@@ -21,7 +21,7 @@ st.set_page_config(layout="wide", page_title="BriCoS v0.30")
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem; padding-bottom: 3rem;}
-    div[data-testid="stExpander"] div[role="button"] p {font-size: 1rem; font-weight: bold;}\r
+    div[data-testid="stExpander"] div[role="button"] p {font-size: 1rem; font-weight: bold;}
     .stSelectbox label { font-size: 0.9rem; font-weight: bold; }
     
     /* Sticky Sidebar Container */
@@ -146,15 +146,18 @@ def get_def():
         'gamma_veh': 1.4, 'gamma_vehB': 1.05, 
         'phi': 1.0, 'scale_manual': 2.0,
         'phi_mode': 'Calculate',
-        'mesh_size': 0.5, 'step_size': 0.2,
+        
+        # UPDATED DEFAULTS --------------------------
+        'mesh_size': 0.2,  # Changed from 0.5
+        'step_size': 0.2,
+        'vehicle_direction': 'Both', # Changed from 'Forward'
+        'use_shear_def': True,       # Changed from False
+        'b_eff': 3.0,                # Changed from 1.0
+        # -------------------------------------------
+        
         'name': 'System',
         'last_mode': 'Frame',
         'combine_surcharge_vehicle': False,
-        'vehicle_direction': 'Forward',
-
-        # Shear Deformations (Issue J)
-        'use_shear_def': False,
-        'b_eff': 1.0,
         'nu': 0.2
     }
 
@@ -757,7 +760,8 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     if gj_sel == "Custom": p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust")
     else: p['gamma_j'] = float(gj_sel)
 
-    gam_opts = [0.56, 1.0, 1.05, 1.25, 1.40]
+    # Added 1.20 to options
+    gam_opts = [0.56, 1.0, 1.05, 1.20, 1.25, 1.40]
     c_ga, c_gb = st.columns(2)
     gam_valA = p.get('gamma_veh', 1.0)
     idx_gamA = gam_opts.index(gam_valA) if gam_valA in gam_opts else len(gam_opts)
@@ -1216,7 +1220,17 @@ if view_case == "Vehicle Steps":
                 step_data = s_list[idx]['res']
                 out = {}
                 for k, v in step_data.items():
+                    # Scale loads for visualization
+                    scaled_loads = []
+                    if 'loads' in v:
+                        for l in v['loads']:
+                            new_l = copy.deepcopy(l)
+                            if new_l['params']:
+                                new_l['params'][0] *= f_factor
+                            scaled_loads.append(new_l)
+
                     out[k] = {**v, 
+                        'loads': scaled_loads,
                         'M':v['M']*f_factor, 'V':v['V']*f_factor, 'N':v['N']*f_factor, 
                         'M_max':v['M']*f_factor, 'M_min':v['M']*f_factor,
                         'V_max':v['V']*f_factor, 'V_min':v['V']*f_factor,
