@@ -9,6 +9,10 @@ from reportlab.lib.units import cm, mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 
+# Graphics Imports for Vehicle Diagram
+from reportlab.graphics.shapes import Drawing, Line, String, Polygon, Group
+from reportlab.graphics import renderPDF
+
 import bricos_solver as solver
 import bricos_viz as viz
 
@@ -162,6 +166,77 @@ class BricosReportGenerator:
             self.elements.append(Paragraph(self.meta['comments'], self.styles['SwecoBody']))
             self.elements.append(Spacer(1, 1*cm))
 
+    def _draw_vehicle_stick_model(self, loads, spacing, width=400, height=80):
+        """
+        Generates a ReportLab Drawing object representing the vehicle axle arrangement.
+        """
+        d = Drawing(width, height)
+        
+        # Data validation
+        if not loads or len(loads) == 0:
+            d.add(String(width/2, height/2, "No Load Data", textAnchor='middle', fontSize=10, fillColor=colors.gray))
+            return d
+            
+        cum_dist = np.cumsum(spacing)
+        total_len = cum_dist[-1]
+        
+        # Scaling
+        # Add 10% margins on sides
+        draw_w = width * 0.8
+        margin_x = width * 0.1
+        
+        if total_len < 0.1:
+            scale_x = 0
+            offset_x = width / 2
+        else:
+            scale_x = draw_w / total_len
+            offset_x = margin_x
+            
+        y_axle_line = height * 0.4
+        arrow_len = height * 0.25
+        
+        # Draw Base Line
+        d.add(Line(margin_x - 10, y_axle_line, width - margin_x + 10, y_axle_line, strokeColor=colors.black, strokeWidth=1))
+        
+        # Draw Axles
+        for i, load_val in enumerate(loads):
+            x_pos = offset_x + (cum_dist[i] if total_len > 0.1 else 0) * scale_x
+            
+            # Load Arrow (pointing down to axle line)
+            # Arrow head
+            p = Polygon(points=[x_pos, y_axle_line, x_pos-3, y_axle_line+6, x_pos+3, y_axle_line+6], fillColor=colors.red, strokeWidth=0)
+            d.add(p)
+            # Arrow shaft
+            d.add(Line(x_pos, y_axle_line, x_pos, y_axle_line + arrow_len, strokeColor=colors.red, strokeWidth=2))
+            
+            # Load Label
+            label = f"{load_val}t"
+            d.add(String(x_pos, y_axle_line + arrow_len + 5, label, textAnchor='middle', fontSize=8, fillColor=colors.red))
+            
+            # Axle Circle
+            d.add(Group(Polygon(points=[x_pos-2, y_axle_line-2, x_pos+2, y_axle_line-2, x_pos+2, y_axle_line+2, x_pos-2, y_axle_line+2], 
+                                fillColor=colors.black, strokeWidth=0))) # Simple square marker for axle
+
+        # Draw Dimensions (Spacing)
+        dim_y = y_axle_line - 15
+        for i in range(len(spacing)):
+            if i == 0: continue # Skip first 0 spacing
+            dist = spacing[i]
+            x_prev = offset_x + cum_dist[i-1] * scale_x
+            x_curr = offset_x + cum_dist[i] * scale_x
+            
+            # Dimension Line
+            d.add(Line(x_prev, dim_y, x_curr, dim_y, strokeColor=colors.blue, strokeWidth=0.5))
+            # Ticks
+            d.add(Line(x_prev, dim_y-2, x_prev, dim_y+2, strokeColor=colors.blue, strokeWidth=0.5))
+            d.add(Line(x_curr, dim_y-2, x_curr, dim_y+2, strokeColor=colors.blue, strokeWidth=0.5))
+            
+            # Label
+            mid_x = (x_prev + x_curr) / 2
+            d.add(String(mid_x, dim_y - 8, f"{dist}m", textAnchor='middle', fontSize=7, fillColor=colors.blue))
+            
+        return d
+
     def _add_system_input_summary(self, sys_label, p, raw_res):
         self.elements.append(Paragraph(f"<b>{sys_label} ({p.get('name', '')})</b> - {p['mode']}", self.styles['Heading3']))
         
@@ -268,7 +343,7 @@ class BricosReportGenerator:
             t = self._make_std_table(soil_table, [2*cm, 2*cm, 3*cm, 3*cm, 3*cm])
             self.elements.append(KeepTogether([t]))
 
-        # 5. VEHICLES
+        # 5. VEHICLES (Updated with Stick Diagram)
         self.elements.append(Spacer(1, 0.2*cm))
         def add_veh_table(key, title_suffix):
             veh = p.get(key, {})
@@ -276,12 +351,15 @@ class BricosReportGenerator:
             v_spac = veh.get('spacing', [])
             if v_loads:
                 self.elements.append(Paragraph(f"Vehicle {title_suffix}:", self.styles['SwecoSmall']))
-                p_loads = Paragraph(str(v_loads), self.styles['SwecoCell'])
-                p_spac = Paragraph(str(v_spac), self.styles['SwecoCell'])
-                v_data = [["Parameter", "Values"], ["Axle Loads [t]", p_loads], ["Spacing [m]", p_spac]]
-                t = self._make_std_table(v_data, [3*cm, 12*cm])
-                self.elements.append(KeepTogether([t]))
-                self.elements.append(Spacer(1, 0.1*cm))
+                
+                # Create stick diagram
+                # Using 14cm width to fit nicely on page
+                drawing = self._draw_vehicle_stick_model(v_loads, v_spac, width=400, height=60)
+                
+                # We can't easily embed drawing inside Table with current layout without flowable issues
+                # So we render it as a separate block immediately after title
+                self.elements.append(drawing)
+                self.elements.append(Spacer(1, 0.3*cm))
 
         add_veh_table('vehicle', "A")
         add_veh_table('vehicleB', "B")

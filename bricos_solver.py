@@ -1,39 +1,106 @@
 import streamlit as st
 import numpy as np
 import copy
-import bricos_kernels as kernels  # Importing the renamed kernel module
+import bricos_kernels as kernels
 
 # ==========================================
 # 1. CORE FEM CLASSES & FUNCTIONS
 # ==========================================
 
 class FrameElement:
-    def __init__(self, node_i, node_j, E, geom_data):
-        # geom_data expects: {'type': 0(I)/1(H), 'shape': 0(Const)/1(Lin)/2(3pt), 'vals': [v1, v2, v3]}
-        # Fallback for legacy simple inputs:
+    def __init__(self, node_i, node_j, E, geom_data, shear_config):
+        # geom_data: {'type': 0(I)/1(H), 'shape': 0(Const)/1(Lin)/2(3pt), 'vals': [v1, v2, v3]}
+        # shear_config: {'use': bool, 'b_eff': float, 'nu': float}
+        
+        # Calculate Geometry
+        dx = node_j[0] - node_i[0]
+        dy = node_j[1] - node_i[1]
+        self.L_calc = np.sqrt(dx**2 + dy**2)
+        if self.L_calc < 1e-6: self.L_calc = 1e-6
+        
+        # --- PROPERTIES & GEOMETRY ESTIMATION ---
+        vals = np.array(geom_data.get('vals', [1.0, 1.0, 1.0]), dtype=np.float64)
+        v_type = int(geom_data.get('type', 0)) # 0=Input I, 1=Input H
+        
+        # Defaults
+        b_eff = shear_config.get('b_eff', 1.0)
+        if b_eff < 0.01: b_eff = 1.0
+        
+        if v_type == 1:
+            # Input was H (Height). Assume width = 1.0m (Standard Strip)
+            # This preserves the specific "Height Input" logic
+            h_avg = np.mean(vals)
+            I_avg = (1.0 * h_avg**3) / 12.0
+            A_approx = h_avg * 1.0
+        else:
+            # Input was I (Inertia).
+            # FIX: Do NOT assume rigid (1e4). Estimate A from I assuming rectangular section.
+            # I = b * h^3 / 12  =>  h = (12 * I / b)^(1/3)
+            # A = b * h
+            I_avg = np.mean(vals)
+            h_est = (12.0 * I_avg / b_eff)**(1.0/3.0)
+            A_approx = b_eff * h_est
+
+        # --- SHEAR DEFORMATION LOGIC ---
+        phi_s = 0.0
+        G_val = 0.0
+        # For shear area, we use the estimated h (or actual h)
+        h_shear_calc = (12.0 * I_avg / b_eff)**(1.0/3.0)
+        As_avg = (5.0/6.0) * b_eff * h_shear_calc
+
+        if shear_config.get('use', False):
+            nu = shear_config.get('nu', 0.2)
+            G_val = float(E) / (2.0 * (1.0 + nu))
+            
+            denom = (G_val * As_avg * self.L_calc**2)
+            if denom > 1e-9:
+                phi_s = (12.0 * float(E) * I_avg) / denom
+
+        # --- KERNEL SELECTION ---
+        
+        # Fallback for simple/legacy inputs treated as Constant
         if 'I' in geom_data and 'vals' not in geom_data:
             I_val = float(geom_data['I'])
+            
+            # Re-estimate A for this specific I
+            h_est_loc = (12.0 * I_val / b_eff)**(1.0/3.0)
+            A_loc = b_eff * h_est_loc
+            
+            # Re-calc specific phi
+            phi_s_specific = 0.0
+            if shear_config.get('use', False):
+                As_local = (5.0/6.0) * b_eff * h_est_loc
+                denom = (G_val * As_local * self.L_calc**2)
+                if denom > 1e-9:
+                    phi_s_specific = (12.0 * float(E) * I_val) / denom
+
             k_loc, k_glob, T, L, cx, cy = kernels.jit_beam_matrices(
-                node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_val, 1e4
+                node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_val, float(A_loc), phi_s_specific
             )
             self.E = E
-            self.I = I_val # Stored for reference, though true stiffness is in k
+            self.I = I_val 
         else:
             # Advanced / Variable Section Path
-            vals = np.array(geom_data.get('vals', [1.0, 1.0, 1.0]), dtype=np.float64)
             shape = int(geom_data.get('shape', 0))
-            v_type = int(geom_data.get('type', 0)) # 0=Input I, 1=Input H
             
-            # Approximate Area for Axial terms (less critical for beam bending, using avg)
-            v_avg = np.mean(vals)
-            A_approx = (v_avg * 1.0) if v_type == 1 else 1e4 # If H input, A=H*1.0
-            
-            k_loc, k_glob, T, L, cx, cy = kernels.jit_non_prismatic_matrices(
-                node_i[0], node_i[1], node_j[0], node_j[1], float(E), 
-                shape, v_type, vals, float(A_approx)
-            )
+            # If shape is Constant (0), use the fast prismatic kernel
+            if shape == 0:
+                if v_type == 1: I_c = (1.0 * vals[0]**3) / 12.0
+                else: I_c = vals[0]
+                
+                k_loc, k_glob, T, L, cx, cy = kernels.jit_beam_matrices(
+                    node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_c, float(A_approx), phi_s
+                )
+                self.I = I_c
+            else:
+                # Variable Section -> Numerical Integration in Kernel
+                k_loc, k_glob, T, L, cx, cy = kernels.jit_non_prismatic_matrices(
+                    node_i[0], node_i[1], node_j[0], node_j[1], float(E), float(G_val),
+                    shape, v_type, vals, float(A_approx), float(As_avg)
+                )
+                self.I = vals[0] if v_type == 0 else (vals[0]**3)/12
+
             self.E = E
-            self.I = vals[0] if v_type == 0 else (vals[0]**3)/12 # Approx for ref
 
         self.k_local = k_loc
         self.k_global = k_glob
@@ -43,17 +110,13 @@ class FrameElement:
         self.cy = cy
 
     def get_fixed_end_forces(self, load_type, params):
-        # NOTE: Exact FEF for non-prismatic requires integrating M(x)/EI(x).
-        # For v0.30 stability, we use standard prismatic FEF approximations.
-        # The global stiffness matrix will correctly handle the redistribution 
-        # of forces to stiffer regions.
         if load_type == 'point':
             return kernels.jit_fef_point(params[0], params[1], self.L)
         elif load_type == 'distributed_trapezoid':
             return kernels.jit_fef_trapezoid(params[0], params[1], params[2], params[3], self.L)
         return np.zeros(6)
 
-def build_stiffness_matrix(nodes, elements, restraints_stiffness):
+def build_stiffness_matrix(nodes, elements, restraints_stiffness, shear_config):
     node_keys = sorted(nodes.keys())
     node_map = {nid: i for i, nid in enumerate(node_keys)}
     NDOF = 3 * len(nodes)
@@ -63,20 +126,17 @@ def build_stiffness_matrix(nodes, elements, restraints_stiffness):
     # 1. Assemble Element Stiffness
     for el_data in elements:
         ni_id, nj_id = el_data['nodes']
-        # Pass the whole dict as geom_data
-        el = FrameElement(nodes[ni_id], nodes[nj_id], el_data['E'], el_data)
+        el = FrameElement(nodes[ni_id], nodes[nj_id], el_data['E'], el_data, shear_config)
         elem_objects.append(el)
         idx_i, idx_j = node_map[ni_id]*3, node_map[nj_id]*3
         indices = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
         K_global[np.ix_(indices, indices)] += el.k_global
         
     # 2. Apply Boundary Springs / Restraints
-    # restraints_stiffness is a dict: {node_id: [kx, ky, km]}
     for nid, stiff in restraints_stiffness.items():
         if nid in node_map:
             idx = node_map[nid]*3
             for i in range(3):
-                # Add spring stiffness to the diagonal (Penalty Method / Direct Stiffness)
                 if stiff[i] is not None: 
                     K_global[idx+i, idx+i] += stiff[i]
                 
@@ -98,16 +158,12 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
         active_loads = loads_map.get(i, [])
         
         for load in active_loads:
-            # PROJECT GLOBAL Y LOAD TO LOCAL Y if Gravity
-            # P_local = P_global * cos(alpha) = P_global * el.cx
             p_raw = load['params']
             p_final = list(p_raw)
-            
             if load.get('is_gravity', False):
                 p_final[0] *= el.cx
                 if load['type'] == 'distributed_trapezoid':
                     p_final[1] *= el.cx
-            
             f_start += el.get_fixed_end_forces(load['type'], p_final)
             
         load_arr = np.zeros((len(active_loads), 5))
@@ -115,12 +171,9 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
             p_raw = load['params']
             val_1 = p_raw[0]
             val_2 = p_raw[1] if len(p_raw) > 1 else 0.0
-            
-            # Apply same projection for internal force integration
             if load.get('is_gravity', False):
                 val_1 *= el.cx
                 val_2 *= el.cx
-            
             p = load['params']
             if load['type'] == 'point':
                 load_arr[k, :] = [1, val_1, p[1], 0.0, 0.0]
@@ -168,7 +221,7 @@ def get_safe_error_result():
     }
 
 # ==========================================
-# 2. MAIN SOLVER CONTROLLER (Strategy 5 Integrated)
+# 2. MAIN SOLVER CONTROLLER
 # ==========================================
 
 @st.cache_data(show_spinner=False)
@@ -188,19 +241,15 @@ def run_raw_analysis(params, phi_val_override=None):
         comp_desc = []
         
         if params['mode'] == 'Frame':
-            # --- FIX: Use FULL HEIGHT for Frame Legs (ignore soil embedment for Phi) ---
-            # Left Wall (Index 0)
             h_left_total = params['h_list'][0]
             lengths_for_phi.append(h_left_total)
             comp_desc.append(f"LeftLeg({h_left_total:.2f}m)")
             
-            # Spans
             for i in range(params['num_spans']):
                 L = params['L_list'][i]
                 lengths_for_phi.append(L)
                 comp_desc.append(f"Span{i+1}({L:.2f}m)")
             
-            # Right Wall (Index num_spans)
             end_idx = params['num_spans']
             h_right_total = params['h_list'][end_idx]
             lengths_for_phi.append(h_right_total)
@@ -256,126 +305,90 @@ def run_raw_analysis(params, phi_val_override=None):
     E_spans = params.get('E_span_list', [E_default] * num_spans)
     E_walls = params.get('E_wall_list', [E_default] * num_supp)
     
-    # NEW: Detect new geometry keys, fallback to lists if missing
     def get_geom_data(idx, prefix_list_key, prefix_new_key):
-        # Check if new advanced structure exists
-        # E.g., params['span_geom_0'] = {'type':1, 'shape':1, 'vals':[...]}
         adv_key = f"{prefix_new_key}_{idx}"
         if adv_key in params:
             return params[adv_key]
-        
-        # Legacy Fallback
         val = params[prefix_list_key][idx]
         return {'I': val}
 
-    # --- GEOMETRY CONSTRUCTION WITH VERTICAL ALIGNMENT ---
-    # Store top nodes separately to attach spans and walls
+    # --- GEOMETRY CONSTRUCTION ---
     top_node_coords = {} 
     
     curr_x = 0.0
     curr_y = 0.0
     
-    # Pre-calculate span nodes (Top Chord)
-    top_node_coords[0] = (0.0, 0.0) # Start at 0,0
+    top_node_coords[0] = (0.0, 0.0) 
     
     for i in range(num_spans):
         L_horiz = params['L_list'][i]
-        
-        # Fetch Geometry data for this span
         g_data = get_geom_data(i, 'Is_list', 'span_geom')
-        
-        # Determine Vertical Rise (dy)
         d_y = 0.0
         align_type = g_data.get('align_type', 0)
         
-        if align_type == 1: # Inclined
+        if align_type == 1:
             mode = g_data.get('incline_mode', 0)
             val = float(g_data.get('incline_val', 0.0))
-            if mode == 0: # Slope (%)
-                d_y = (val / 100.0) * L_horiz
-            else: # Delta H
-                d_y = val
+            if mode == 0: d_y = (val / 100.0) * L_horiz
+            else: d_y = val
         
         next_x = curr_x + L_horiz
         next_y = curr_y + d_y
-        
         top_node_coords[i+1] = (next_x, next_y)
-        
         curr_x = next_x
         curr_y = next_y
 
-    # --- CRITICAL FIX: Skip Zero Length Elements to prevent Solver Crash ---
-    # If a user clears input, lengths become 0.0. Trying to create an element
-    # with L=0 results in ZeroDivisionError in the kernel.
-    # We filter and only build Valid elements.
-    
     TOLERANCE = 1e-4
 
     if params['mode'] == 'Frame':
         for i in range(num_supp):
             h = params['h_list'][i]
-            
-            # --- GUARD: Skip if Wall Height is effectively zero ---
             if h < TOLERANCE: continue
-
             nid_b, nid_t = 100+i, 200+i
-            
-            # Use pre-calced top coordinate
             t_x, t_y = top_node_coords[i]
-            
-            nodes[nid_b] = (t_x, t_y - h) # Base is height H below deck profile
+            nodes[nid_b] = (t_x, t_y - h)
             nodes[nid_t] = (t_x, t_y)
-            
             if i < len(supports_cfg): k_vec = supports_cfg[i]['k']
             else: k_vec = [1e14, 1e14, 1e14] 
-            
             restraints[nid_b] = k_vec
-            
             e_val = E_walls[i] if i < len(E_walls) else E_default
-            
-            # Use Wall Geometry
             g_data = get_geom_data(i, 'Iw_list', 'wall_geom')
-            
             elems_base.append({
                 'id': f'W{i+1}', 'nodes': (nid_b, nid_t),
                 'E': e_val, **g_data
             })
-            
     else: # Superstructure
         for i in range(num_supp):
             nid_t = 200+i
             t_x, t_y = top_node_coords[i]
             nodes[nid_t] = (t_x, t_y)
-            
             if i < len(supports_cfg): k_vec = supports_cfg[i]['k']
             else:
                 if i == 0: k_vec = [1e14, 1e14, 0.0]
                 else: k_vec = [0.0, 1e14, 0.0]
-                
             restraints[nid_t] = k_vec
 
     for i in range(num_spans):
-        # --- GUARD: Skip if Span Length is effectively zero ---
         if params['L_list'][i] < TOLERANCE: continue
-
         nid_s, nid_e = 200+i, 200+i+1
         e_val = E_spans[i] if i < len(E_spans) else E_default
-        
-        # Use Span Geometry
         g_data = get_geom_data(i, 'Is_list', 'span_geom')
-        
         elems_base.append({
             'id': f'S{i+1}', 'nodes': (nid_s, nid_e),
             'E': e_val, **g_data
         })
 
-    # --- FINAL GUARD: If no elements were created (e.g. Cleared Data), Abort ---
     if len(elems_base) == 0:
         return get_safe_error_result(), {}, "No valid structural elements defined (Length/Height > 0)."
 
-    K_glob, node_map, elem_objects, NDOF = build_stiffness_matrix(nodes, elems_base, restraints)
+    shear_config = {
+        'use': params.get('use_shear_def', False),
+        'b_eff': params.get('b_eff', 1.0),
+        'nu': params.get('nu', 0.2)
+    }
+
+    K_glob, node_map, elem_objects, NDOF = build_stiffness_matrix(nodes, elems_base, restraints, shear_config)
     
-    # --- SOLVER STABILITY CHECK ---
     try:
         K_inv = np.linalg.inv(K_glob)
     except np.linalg.LinAlgError:
@@ -386,16 +399,12 @@ def run_raw_analysis(params, phi_val_override=None):
         for idx, load_list in loads_dict.items():
             el = elem_objects[idx]
             for load in load_list:
-                # PROJECT GLOBAL Y LOAD TO LOCAL Y if Gravity
-                # P_local = P_global * cos(alpha) = P_global * el.cx
                 p_raw = load['params']
                 p_final = list(p_raw)
-                
                 if load.get('is_gravity', False):
                     p_final[0] *= el.cx
                     if load['type'] == 'distributed_trapezoid':
                         p_final[1] *= el.cx
-                
                 f_loc = el.get_fixed_end_forces(load['type'], p_final)
                 f_glob = el.T.T @ f_loc
                 ni, nj = elems_base[idx]['nodes']
@@ -408,17 +417,12 @@ def run_raw_analysis(params, phi_val_override=None):
     sw_loads_map = {}
     for i in range(num_spans):
         if params['sw_list'][i] != 0:
-            # We need to find the correct index in elem_objects corresponding to span i
-            # Since we filter out zero-length elements, the index is not just i + offset.
-            # We search by ID.
             target_id = f'S{i+1}'
-            # Find index in elems_base
             found_idx = -1
             for k, el_info in enumerate(elems_base):
                 if el_info['id'] == target_id:
                     found_idx = k
                     break
-            
             if found_idx != -1:
                 val = params['sw_list'][i]
                 sw_loads_map[found_idx] = [{'type': 'distributed_trapezoid', 'is_gravity': True, 'params': [val, val, 0, elem_objects[found_idx].L]}]
@@ -434,7 +438,6 @@ def run_raw_analysis(params, phi_val_override=None):
                     if el_info['id'] == target_id:
                         found_idx = k
                         break
-                
                 if found_idx != -1:
                     sign = 1.0 if s['face'] == 'L' else -1.0 
                     if found_idx not in soil_loads_map: soil_loads_map[found_idx] = []
@@ -453,7 +456,6 @@ def run_raw_analysis(params, phi_val_override=None):
                     if el_info['id'] == target_id:
                         found_idx = k
                         break
-
                 if found_idx != -1:
                     sign = 1.0 if sur['face'] == 'L' else -1.0
                     if found_idx not in surch_loads_map: surch_loads_map[found_idx] = []
@@ -480,23 +482,14 @@ def run_raw_analysis(params, phi_val_override=None):
     veh_env_A = get_empty_env()
     veh_env_B = get_empty_env()
     
-    # --- STRATEGY 5 IMPLEMENTATION (With Direction Control) ---
     def run_stepping(vehicle_key, env_to_fill):
         v_loads_raw = np.array(params[vehicle_key]['loads']) * 9.81
         v_dists_raw = np.cumsum(params[vehicle_key]['spacing'])
         
-        # Determine Direction Mode
-        veh_dir = params.get('vehicle_direction', 'Forward') # Forward, Reverse, Both
-        
-        directions_to_run = []
-        if veh_dir == 'Both': directions_to_run = ['Forward', 'Reverse']
-        else: directions_to_run = [veh_dir]
+        veh_dir = params.get('vehicle_direction', 'Forward')
+        directions_to_run = ['Forward', 'Reverse'] if veh_dir == 'Both' else [veh_dir]
         
         steps_out = {'Forward': [], 'Reverse': []}
-        
-        # PREPARE DATA FOR BATCH KERNELS ONCE
-        # NOTE: We must rebuild span info mapping because indices in elem_objects 
-        # might have shifted due to filtering out zero-length elements.
         
         sp_start_x = []
         sp_lens = []
@@ -506,7 +499,6 @@ def run_raw_analysis(params, phi_val_override=None):
         
         for sp_i in range(num_spans):
             target_id = f'S{sp_i+1}'
-            # Find this span in active elements
             el_idx = -1
             for k, el_info in enumerate(elems_base):
                 if el_info['id'] == target_id:
@@ -514,20 +506,13 @@ def run_raw_analysis(params, phi_val_override=None):
                     break
             
             if el_idx != -1:
-                # L = params['L_list'][sp_i] # This is horizontal
                 true_L = elem_objects[el_idx].L
-                
                 sp_start_x.append(c_x)
                 sp_lens.append(true_L)
                 sp_el_indices.append(el_idx)
                 sp_elems_info.append((c_x, true_L, el_idx))
                 c_x += true_L
-            else:
-                # Span was filtered out (L=0). 
-                # We skip it in the stepping path logic.
-                pass
 
-        # Convert lists to numpy arrays for Numba
         sp_start_x = np.array(sp_start_x, dtype=np.float64)
         sp_lens = np.array(sp_lens, dtype=np.float64)
         sp_el_indices = np.array(sp_el_indices, dtype=np.int32)
@@ -555,22 +540,18 @@ def run_raw_analysis(params, phi_val_override=None):
         S_matrices = kernels.jit_precompute_stress_recovery(n_elems, n_pts_kernel, el_L, el_k_local)
         env_results_accum = np.zeros((n_elems, n_pts_kernel, 10))
         
-        # Flag to clear envelope on first run only
         is_first_run = True
 
         for current_dir in directions_to_run:
             if len(v_loads_raw) == 0: continue
             
-            # Setup Path and Distances based on Direction
             max_d = max(v_dists_raw) if len(v_dists_raw) > 0 else 0
             step_val = params.get('step_size', 0.2)
             
             if current_dir == 'Forward':
-                # Standard L -> R
                 x_steps = np.arange(-max_d-1.0, total_structure_len + max_d + 1.0, step_val)
                 v_dists_run = v_dists_raw
             else:
-                # Reverse R -> L
                 x_steps = np.arange(total_structure_len + max_d + 1.0, -max_d-1.0, -step_val)
                 v_dists_run = -v_dists_raw
                 
@@ -584,7 +565,6 @@ def run_raw_analysis(params, phi_val_override=None):
                 x_chunk = x_steps[start_idx:end_idx]
                 n_chunk = len(x_chunk)
                 
-                # Only reset envelope if it is the very first chunk of the very first direction run
                 is_init_chunk = (is_first_run and start_idx == 0)
                 
                 F_chunk = kernels.jit_build_batch_F(NDOF, n_chunk, x_chunk, v_loads_raw, v_dists_run, sp_start_x, sp_lens, sp_el_indices, el_L, el_T, el_dof_indices)
@@ -600,10 +580,7 @@ def run_raw_analysis(params, phi_val_override=None):
                     is_init_chunk
                 )
                 
-                # Extract steps for visualization
                 for i_local in range(n_chunk):
-                    # Visualization subsampling to avoid memory overload
-                    # if global_i % 5 != 0: continue 
                     x_front = x_chunk[i_local]
                     D_step = D_chunk[:, i_local]
                     step_loads_map = {}
@@ -616,7 +593,6 @@ def run_raw_analysis(params, phi_val_override=None):
                             if 0 <= local_x <= L_span:
                                 P_val = v_loads_raw[ax_i]
                                 if el_idx not in step_loads_map: step_loads_map[el_idx] = []
-                                # Vehicle is Gravity
                                 load_p = {'type': 'point', 'is_gravity': True, 'params': [P_val, local_x]}
                                 step_loads_map[el_idx].append(load_p)
                                 has_loads = True
@@ -626,9 +602,8 @@ def run_raw_analysis(params, phi_val_override=None):
                         v_steps_res_list.append({'x': x_front, 'res': step_res})
             
             steps_out[current_dir] = v_steps_res_list
-            is_first_run = False # Subsequent directions (Reverse) or chunks should NOT reset envelope
+            is_first_run = False 
 
-        # Apply Envelope Accumulator to Output Dict
         if len(v_loads_raw) > 0 and env_to_fill:
             for k in range(n_elems):
                 eid = elems_base[k]['id']
@@ -661,7 +636,7 @@ def run_raw_analysis(params, phi_val_override=None):
         'Surcharge': res_surch,
         'Vehicle Envelope A': veh_env_A,
         'Vehicle Envelope B': veh_env_B,
-        'Vehicle Steps A': steps_A['Forward'], # Legacy key for simple forward
+        'Vehicle Steps A': steps_A['Forward'],
         'Vehicle Steps A_Rev': steps_A['Reverse'],
         'Vehicle Steps B': steps_B['Forward'],
         'Vehicle Steps B_Rev': steps_B['Reverse'],

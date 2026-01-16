@@ -6,7 +6,12 @@ from numba import jit, prange
 # ==========================================
 
 @jit(nopython=True, cache=True)
-def jit_beam_matrices(xi, yi, xj, yj, E, I, A):
+def jit_beam_matrices(xi, yi, xj, yj, E, I, A, phi_s):
+    """
+    Calculates 2D Frame element stiffness matrix (local & global).
+    Supports Timoshenko Shear Deformation via phi_s parameter.
+    phi_s = (12 * E * I) / (G * As * L^2) [0.0 for Euler-Bernoulli]
+    """
     dx = xj - xi
     dy = yj - yi
     L = np.sqrt(dx**2 + dy**2)
@@ -15,12 +20,23 @@ def jit_beam_matrices(xi, yi, xj, yj, E, I, A):
     cx = dx / L
     cy = dy / L
     
-    k = E * I / L**3
-    w1 = E * A / L
-    w2 = 12 * k
-    w3 = 6 * L * k
-    w4 = 4 * L**2 * k
-    w5 = 2 * L**2 * k
+    # Timoshenko / Euler-Bernoulli Coefficients
+    # Common factor includes (1 + phi_s) in denominator for bending terms
+    # w_bend_base = E * I / (L^3 * (1 + phi_s))
+    
+    phi_term = 1.0 + phi_s
+    k_bend = (E * I) / (L**3 * phi_term)
+    
+    w1 = E * A / L             # Axial (EA/L)
+    w2 = 12.0 * k_bend         # 12EI / L^3(1+phi)
+    w3 = 6.0 * L * k_bend      # 6EI / L^2(1+phi)
+    
+    # Rotational terms differ in Timoshenko
+    # 4EI -> (4 + phi) * EI / L(1+phi) = (4+phi) * L^2 * k_bend
+    w4 = (4.0 + phi_s) * L**2 * k_bend
+    
+    # 2EI -> (2 - phi) * EI / L(1+phi) = (2-phi) * L^2 * k_bend
+    w5 = (2.0 - phi_s) * L**2 * k_bend
     
     k_local = np.array([
         [w1, 0, 0, -w1, 0, 0],
@@ -78,9 +94,10 @@ def get_I_at_x(x, L, vals, shape_mode, val_mode):
         return v
 
 @jit(nopython=True, cache=True)
-def jit_non_prismatic_matrices(xi, yi, xj, yj, E, shape_mode, val_mode, geom_vals, A_avg):
+def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_vals, A_avg, As_avg):
     """
     Calculates Stiffness Matrix for non-prismatic beam using Flexibility Method Integration.
+    Now includes Shear Deformation Flexibility terms if G > 0.
     """
     dx = xj - xi
     dy = yj - yi
@@ -94,6 +111,16 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, shape_mode, val_mode, geom_val
     
     # Flexibility Terms: f11 (rot_i due to M_i), f22 (rot_j due to M_j), f12
     f11 = 0.0; f22 = 0.0; f12 = 0.0
+    
+    # Pre-calculate Shear Flexibility Constant (approx for variable section using As_avg)
+    # Unit Shear V from Unit M = 1/L.
+    # Energy = Integral [ (V*V)/(G*As) ] dx = Integral [ 1/(L^2 G As) ] dx
+    # If G is provided (Timoshenko), we add this to the flex matrix.
+    shear_flex_term = 0.0
+    if G > 1e-3 and As_avg > 1e-6:
+        # f_shear = Integral(0->L) of (1/L * 1/L) / (G * As) dx
+        # Simplification: Use As_avg. Integral = L / (L^2 * G * As_avg) = 1 / (L * G * As_avg)
+        shear_flex_term = 1.0 / (L * G * As_avg)
     
     for i in range(n_int):
         x = i * d_step
@@ -113,8 +140,15 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, shape_mode, val_mode, geom_val
         fac = weight * d_step / EI
         f11 += m1 * m1 * fac
         f22 += m2 * m2 * fac
-        f12 += m1 * m2 * fac # Correction: f12 is symmetric
+        f12 += m1 * m2 * fac
         
+    # Add Shear Flexibility
+    # Unit V for M1 is -1/L, Unit V for M2 is +1/L
+    # f11 += shear_flex; f22 += shear_flex; f12 -= shear_flex
+    f11 += shear_flex_term
+    f22 += shear_flex_term
+    f12 -= shear_flex_term # V1*V2 is negative product
+    
     # Flexibility Matrix F = [[f11, f12], [f12, f22]]
     # Stiffness K_rot = inv(F)
     det = f11 * f22 - f12 * f12
@@ -126,25 +160,9 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, shape_mode, val_mode, geom_val
     
     # Build 6x6 Local Stiffness
     # F_y_i = (M_i + M_j) / L
-    # We construct equilibrium from the rotational stiffnesses
-    # K matrix structure:
-    #      u1  v1   r1   u2   v2   r2
-    # u1 [ A   0    0   -A    0    0 ]
-    # v1 [ 0   B    C    0   -B    D ]
-    # r1 [ 0   C    E    0   -C    F ] ...
-    
     w_A = E * A_avg / L
     
-    # Rotational terms derived from K_rot
-    # r1_force_from_r1 = k11
-    # r1_force_from_r2 = k12
-    # r2_force_from_r2 = k22
-    
     # Shear forces from moment equilibrium: V = (Mi + Mj)/L
-    # v1 due to r1: (k11 + k12)/L
-    # v1 due to r2: (k12 + k22)/L
-    # v1 due to v1: (v1_r1 + v1_r2)/L ... wait, sum moments.
-    
     q1 = (k11 + k12) / L
     q2 = (k12 + k22) / L
     q3 = (q1 + q2) / L
@@ -233,14 +251,6 @@ def jit_fef_trapezoid(q_s, q_e, h_s, h_e, L):
     f[4] = F_equiv[2]
     f[5] = F_equiv[3]
     return f
-
-# --- NEW: NON-PRISMATIC FEF ---
-# Note: For v0.30 stability, we approximate FEF using the standard prismatic formulas 
-# but utilizing the stiffness matrix derived from the variable section for distribution.
-# Doing exact FEF integration for variable I requires M0(x) for every load case 
-# integrated against 1/EI(x). To maintain Numba performance and code stability, 
-# we stick to standard FEF generation for the local force vector, but the 
-# global K matrix will correctly attract more moment to stiffer sections.
 
 @jit(nopython=True, cache=True)
 def jit_internal_forces(L, f_start, num_pts, load_data):

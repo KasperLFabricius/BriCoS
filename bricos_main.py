@@ -150,7 +150,12 @@ def get_def():
         'name': 'System',
         'last_mode': 'Frame',
         'combine_surcharge_vehicle': False,
-        'vehicle_direction': 'Forward'
+        'vehicle_direction': 'Forward',
+
+        # Shear Deformations (Issue J)
+        'use_shear_def': False,
+        'b_eff': 1.0,
+        'nu': 0.2
     }
 
 def get_clear(name_suffix, current_mode):
@@ -189,7 +194,12 @@ def get_clear(name_suffix, current_mode):
         'name': f"System {name_suffix}",
         'last_mode': current_mode,
         'combine_surcharge_vehicle': False,
-        'vehicle_direction': 'Forward'
+        'vehicle_direction': 'Forward',
+        
+        # Shear Deformations (Issue J)
+        'use_shear_def': False,
+        'b_eff': 1.0,
+        'nu': 0.2
     }
 
 # --- FORCE UPDATE HELPER ---
@@ -206,6 +216,11 @@ def force_ui_update(sys_key, data):
     st.session_state[f"{sys_key}_phiv"] = data.get('phi', 1.0)
     st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
     
+    # Shear Deformation Keys
+    st.session_state[f"{sys_key}_use_shear"] = data.get('use_shear_def', False)
+    st.session_state[f"{sys_key}_beff"] = data.get('b_eff', 1.0)
+    st.session_state[f"{sys_key}_nu"] = data.get('nu', 0.2)
+
     # 2. Factors
     st.session_state[f"{sys_key}_gg_cust"] = data.get('gamma_g', 1.0)
     st.session_state[f"{sys_key}_gj_cust"] = data.get('gamma_j', 1.0)
@@ -337,6 +352,11 @@ for sys_k in ['sysA', 'sysB']:
     if 'E_custom_wall' not in st.session_state[sys_k]: st.session_state[sys_k]['E_custom_wall'] = [33.0]*11
     if 'E_span_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_span_list'] = [33e6]*10
     if 'E_wall_list' not in st.session_state[sys_k]: st.session_state[sys_k]['E_wall_list'] = [33e6]*11
+    
+    # Timoshenko Migration
+    if 'use_shear_def' not in st.session_state[sys_k]: st.session_state[sys_k]['use_shear_def'] = False
+    if 'b_eff' not in st.session_state[sys_k]: st.session_state[sys_k]['b_eff'] = 1.0
+    if 'nu' not in st.session_state[sys_k]: st.session_state[sys_k]['nu'] = 0.2
     
     st.session_state[sys_k].pop('k_rot', None)
     st.session_state[sys_k].pop('k_rot_super', None)
@@ -556,6 +576,36 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     is_simultaneous = (surch_sel == "Simultaneous (Vehicle + Surcharge)")
     st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
     st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
+
+    st.markdown("---")
+    # --- SHEAR DEFORMATION SETTINGS (Issue J) ---
+    st.markdown("**Shear Deformations (Timoshenko)**")
+    
+    help_shear = "Enables shear deformation consideration in the stiffness matrix. Recommended for deep beams and piers."
+    
+    # We use System A's value as the 'driver' for the shared sidebar control, but we must update both.
+    # To handle potential desync, we prefer a single widget updating both.
+    use_shear = st.checkbox("Enable Shear Deformations", value=st.session_state['sysA'].get('use_shear_def', False), key="shear_toggle_sidebar", help=help_shear)
+    
+    st.session_state['sysA']['use_shear_def'] = use_shear
+    st.session_state['sysB']['use_shear_def'] = use_shear
+
+    col_beff, col_nu = st.columns(2)
+    
+    help_beff = "Effective shear width [m]. Typically web thickness or width of rectangular section. Affects Shear Area (As = 5/6 * b_eff * h)."
+    help_nu = "Poisson's Ratio (ν). Used to calculate Shear Modulus G = E / (2*(1+ν))."
+    
+    # Shared input values from Sys A
+    val_beff = st.session_state['sysA'].get('b_eff', 1.0)
+    val_nu = st.session_state['sysA'].get('nu', 0.2)
+    
+    new_beff = col_beff.number_input("Effective Width (b_eff) [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar")
+    new_nu = col_nu.number_input("Poisson's Ratio (ν)", value=float(val_nu), min_value=0.0, max_value=0.5, step=0.05, help=help_nu, key="nu_input_sidebar")
+    
+    st.session_state['sysA']['b_eff'] = new_beff
+    st.session_state['sysB']['b_eff'] = new_beff
+    st.session_state['sysA']['nu'] = new_nu
+    st.session_state['sysB']['nu'] = new_nu
 
     st.markdown("---")
     st.markdown("**Calculation Precision**")
