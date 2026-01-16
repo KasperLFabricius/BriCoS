@@ -205,10 +205,11 @@ def get_clear(name_suffix, current_mode):
         'nu': 0.2
     }
 
-# --- FORCE UPDATE HELPER ---
+# --- FORCE UPDATE HELPER (FIXED FOR SYNC ISSUES) ---
 def force_ui_update(sys_key, data):
     """
     Explicitly synchronizes the Streamlit session_state keys with the provided data dict.
+    Updated to ensure Shear settings, Profiler data, and Global Analysis settings persist correctly.
     """
     
     # 1. Main Config Keys
@@ -219,19 +220,33 @@ def force_ui_update(sys_key, data):
     st.session_state[f"{sys_key}_phiv"] = data.get('phi', 1.0)
     st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
     
-    # Shear Deformation Keys
-    st.session_state[f"{sys_key}_use_shear"] = data.get('use_shear_def', False)
-    st.session_state[f"{sys_key}_beff"] = data.get('b_eff', 1.0)
-    st.session_state[f"{sys_key}_nu"] = data.get('nu', 0.2)
-
-    # 2. Factors
+    # 2. Shear Deformation Keys & Analysis Settings
+    # We must update the shared sidebar widgets (which default to Sys A, but here we update active)
+    # Note: Global sliders (common_*) are shared, but sidebar inputs like shear_toggle_sidebar need care.
+    # Since sidebar inputs are shared, we prioritize System A for the initial UI state if available.
+    
+    if sys_key == "sysA":
+        st.session_state["shear_toggle_sidebar"] = data.get('use_shear_def', False)
+        st.session_state["beff_input_sidebar"] = data.get('b_eff', 1.0)
+        st.session_state["nu_input_sidebar"] = data.get('nu', 0.2)
+        st.session_state["common_mesh_slider"] = data.get('mesh_size', 0.5)
+        st.session_state["common_step_slider"] = data.get('step_size', 0.2)
+    
+    # 3. Factors
     st.session_state[f"{sys_key}_gg_cust"] = data.get('gamma_g', 1.0)
     st.session_state[f"{sys_key}_gj_cust"] = data.get('gamma_j', 1.0)
     st.session_state[f"{sys_key}_gamA_cust"] = data.get('gamma_veh', 1.0)
     st.session_state[f"{sys_key}_gamB_cust"] = data.get('gamma_vehB', 1.0)
 
-    # 3. Spans
+    # 4. Spans & Profiler Keys (Pre-population)
     nsp = data.get('num_spans', 1)
+    
+    # Helper to map integer shapes to UI strings
+    shape_map_rev = {0: "Constant", 1: "Linear (Taper)", 2: "3-Point (Start/Mid/End)"}
+    type_map_rev = {0: "Inertia (I)", 1: "Height (H)"}
+    align_map_rev = {0: "Straight (Horizontal)", 1: "Inclined"}
+    inc_mode_rev = {0: "Slope (%)", 1: "Delta Height (End - Start) [m]"}
+    
     for i in range(10): 
         if i < len(data['L_list']): st.session_state[f"{sys_key}_l{i}"] = data['L_list'][i]
         if i < len(data['Is_list']): st.session_state[f"{sys_key}_i{i}"] = data['Is_list'][i]
@@ -240,13 +255,43 @@ def force_ui_update(sys_key, data):
         if i < len(data['E_custom_span']): st.session_state[f"{sys_key}_Eman_s{i}"] = data['E_custom_span'][i]
         st.session_state[f"{sys_key}_i{i}_dis"] = "See Profiler"
 
-    # 4. Walls
+        # Sync Profiler Widgets (Spans)
+        geom_key = f"span_geom_{i}"
+        if geom_key in data:
+            g = data[geom_key]
+            el_name = f"Span {i+1}"
+            st.session_state[f"{sys_key}_prof_type_{el_name}"] = type_map_rev.get(g.get('type', 0), "Inertia (I)")
+            st.session_state[f"{sys_key}_prof_shape_{el_name}"] = shape_map_rev.get(g.get('shape', 0), "Constant")
+            
+            vals = g.get('vals', [0.0, 0.0, 0.0])
+            st.session_state[f"{sys_key}_prof_v1_{el_name}"] = vals[0]
+            st.session_state[f"{sys_key}_prof_v2_{el_name}"] = vals[1]
+            st.session_state[f"{sys_key}_prof_v3_{el_name}"] = vals[2]
+            
+            st.session_state[f"{sys_key}_align_t_{el_name}"] = align_map_rev.get(g.get('align_type', 0), "Straight (Horizontal)")
+            st.session_state[f"{sys_key}_inc_m_{el_name}"] = inc_mode_rev.get(g.get('incline_mode', 0), "Slope (%)")
+            st.session_state[f"{sys_key}_inc_v_{el_name}"] = g.get('incline_val', 0.0)
+
+    # 5. Walls & Profiler Keys (Pre-population)
     for i in range(11):
         if i < len(data['h_list']): st.session_state[f"{sys_key}_h{i}"] = data['h_list'][i]
         if i < len(data['Iw_list']): st.session_state[f"{sys_key}_iw{i}"] = data['Iw_list'][i]
         if i < len(data['fck_wall_list']): st.session_state[f"{sys_key}_fck_w{i}"] = data['fck_wall_list'][i]
         if i < len(data['E_custom_wall']): st.session_state[f"{sys_key}_Eman_w{i}"] = data['E_custom_wall'][i]
         
+        # Sync Profiler Widgets (Walls)
+        geom_key = f"wall_geom_{i}"
+        if geom_key in data:
+            g = data[geom_key]
+            el_name = f"Wall {i+1}"
+            st.session_state[f"{sys_key}_prof_type_{el_name}"] = type_map_rev.get(g.get('type', 0), "Inertia (I)")
+            st.session_state[f"{sys_key}_prof_shape_{el_name}"] = shape_map_rev.get(g.get('shape', 0), "Constant")
+            
+            vals = g.get('vals', [0.0, 0.0, 0.0])
+            st.session_state[f"{sys_key}_prof_v1_{el_name}"] = vals[0]
+            st.session_state[f"{sys_key}_prof_v2_{el_name}"] = vals[1]
+            st.session_state[f"{sys_key}_prof_v3_{el_name}"] = vals[2]
+
         surch_val = 0.0
         for s in data.get('surcharge', []):
             if s['wall_idx'] == i: surch_val = s['q']
@@ -269,7 +314,7 @@ def force_ui_update(sys_key, data):
         st.session_state[f"{sys_key}_sqrb{i}"] = qR_b
         st.session_state[f"{sys_key}_sqrt{i}"] = qR_t
 
-    # 5. Vehicles
+    # 6. Vehicles
     st.session_state[f"{sys_key}_A_loads_input"] = data.get('vehicle_loads', "")
     st.session_state[f"{sys_key}_A_space_input"] = data.get('vehicle_space', "")
     st.session_state[f"{sys_key}_B_loads_input"] = data.get('vehicleB_loads', "")
@@ -278,7 +323,7 @@ def force_ui_update(sys_key, data):
     if f"{sys_key}_vehA_class" in st.session_state: del st.session_state[f"{sys_key}_vehA_class"]
     if f"{sys_key}_vehB_class" in st.session_state: del st.session_state[f"{sys_key}_vehB_class"]
     
-    # 6. Supports
+    # 7. Supports
     prefix = f"{sys_key}_"
     supp_keys = [k for k in st.session_state.keys() if k.startswith(prefix) and "_k" in k]
     for k in supp_keys: del st.session_state[k]
