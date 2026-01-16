@@ -21,7 +21,7 @@ st.set_page_config(layout="wide", page_title="BriCoS v0.30")
 st.markdown("""
 <style>
     .block-container {padding-top: 1rem; padding-bottom: 3rem;}
-    div[data-testid="stExpander"] div[role="button"] p {font-size: 1rem; font-weight: bold;}
+    div[data-testid="stExpander"] div[role="button"] p {font-size: 1rem; font-weight: bold;}\r
     .stSelectbox label { font-size: 0.9rem; font-weight: bold; }
     
     /* Sticky Sidebar Container */
@@ -912,10 +912,11 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             target_simple_list = p['Iw_list']
             
         c_p1, c_p2 = st.columns(2)
-        new_type = c_p1.radio("Definition Mode:", ["Inertia (I)", "Height (H)"], index=target_geom['type'], key=f"{curr}_prof_type", horizontal=True)
+        # ISSUE K FIX: Appending sel_el to keys to ensure widget state refreshes on selection change
+        new_type = c_p1.radio("Definition Mode:", ["Inertia (I)", "Height (H)"], index=target_geom['type'], key=f"{curr}_prof_type_{sel_el}", horizontal=True)
         target_geom['type'] = 0 if "Inertia" in new_type else 1
         
-        new_shape = c_p2.radio("Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], index=target_geom['shape'], key=f"{curr}_prof_shape", horizontal=True)
+        new_shape = c_p2.radio("Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], index=target_geom['shape'], key=f"{curr}_prof_shape_{sel_el}", horizontal=True)
         shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
         target_geom['shape'] = shape_map[new_shape]
         
@@ -923,15 +924,15 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         c_v1, c_v2, c_v3 = st.columns(3)
         
         lbl_v = "I [m⁴]" if target_geom['type']==0 else "H [m]"
-        v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1")
+        v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1_{sel_el}")
         
         v2 = vals[1]
         if target_geom['shape'] == 2:
-            v2 = c_v2.number_input(f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", key=f"{curr}_prof_v2")
+            v2 = c_v2.number_input(f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", key=f"{curr}_prof_v2_{sel_el}")
         
         v3 = vals[2]
         if target_geom['shape'] >= 1:
-            v3 = c_v3.number_input(f"End {lbl_v}", value=float(vals[2]), format="%.4f", key=f"{curr}_prof_v3")
+            v3 = c_v3.number_input(f"End {lbl_v}", value=float(vals[2]), format="%.4f", key=f"{curr}_prof_v3_{sel_el}")
             
         target_geom['vals'] = [v1, v2, v3]
         
@@ -944,17 +945,17 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             if 'incline_val' not in target_geom: target_geom['incline_val'] = 0.0
 
             al_opts = ["Straight (Horizontal)", "Inclined"]
-            new_align = st.radio("Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, key=f"{curr}_align_t")
+            new_align = st.radio("Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, key=f"{curr}_align_t_{sel_el}")
             target_geom['align_type'] = al_opts.index(new_align)
             
             if target_geom['align_type'] == 1:
                 inc_opts = ["Slope (%)", "Delta Height (End - Start) [m]"]
-                new_inc_mode = st.radio("Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, key=f"{curr}_inc_m")
+                new_inc_mode = st.radio("Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, key=f"{curr}_inc_m_{sel_el}")
                 target_geom['incline_mode'] = inc_opts.index(new_inc_mode)
                 
                 lbl_inc = "Slope [%]" if target_geom['incline_mode'] == 0 else "Delta H [m]"
                 help_inc = "Positive slope/height goes UP. Negative goes DOWN."
-                target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", help=help_inc, key=f"{curr}_inc_v")
+                target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", help=help_inc, key=f"{curr}_inc_v_{sel_el}")
 
 
 # --- BOUNDARY CONDITIONS TAB ---
