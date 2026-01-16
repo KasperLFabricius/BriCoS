@@ -5,6 +5,7 @@ import json
 import copy
 import os
 import io # Added for Report Buffer
+import sys
 
 import bricos_solver as solver
 import bricos_viz as viz
@@ -15,6 +16,17 @@ import bricos_report # New Report Module
 # ==========================================
 
 st.set_page_config(layout="wide", page_title="BriCoS v0.30")
+
+# --- PATH HELPER FOR EXE ---
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # --- CSS FOR STICKY CONTROLS & LAYOUT ---
 # Updated to use :has() selector for robust container targeting
@@ -53,8 +65,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- LOGO DISPLAY ---
-if os.path.exists("logo.png"):
-    st.sidebar.image("logo.png", width='stretch')
+logo_path = resource_path("logo.png")
+if os.path.exists(logo_path):
+    st.sidebar.image(logo_path, width='stretch')
 
 st.title("BriCoS v0.30 - Bridge Comparison Software")
 
@@ -73,8 +86,9 @@ def calc_I(h_mm):
 def load_vehicle_from_csv(target_name):
     """Attempts to read a specific vehicle from CSV. Returns dict or None."""
     try:
-        if os.path.exists("vehicles.csv"):
-            df = pd.read_csv("vehicles.csv")
+        csv_path = resource_path("vehicles.csv")
+        if os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
             # Strip whitespace from columns
             df.columns = [c.strip() for c in df.columns]
             
@@ -1069,7 +1083,8 @@ def get_vehicle_library():
     options = ["Custom"]
     data = {}
     try:
-        df_v = pd.read_csv("vehicles.csv")
+        csv_path = resource_path("vehicles.csv")
+        df_v = pd.read_csv(csv_path)
         if 'Name' in df_v.columns and 'Loads' in df_v.columns and 'Spacing' in df_v.columns:
             for idx, row in df_v.iterrows():
                 v_name = row['Name']
