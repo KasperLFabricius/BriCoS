@@ -63,6 +63,10 @@ if 'keep_view_case' not in st.session_state: st.session_state.keep_view_case = "
 if 'keep_active_veh_step' not in st.session_state: st.session_state.keep_active_veh_step = "Vehicle A"
 if 'keep_step_view_sys' not in st.session_state: st.session_state.keep_step_view_sys = "System A"
 
+# --- GLOBAL LOCK STATE ---
+# Lock inputs if a report is generated and waiting in buffer to ensure consistency
+ui_locked = 'report_buffer' in st.session_state
+
 def calc_I(h_mm):
     return (1.0 * (h_mm/1000.0)**3) / 12.0
 
@@ -433,25 +437,25 @@ with st.sidebar.expander("Reset Data", expanded=False):
     c_res, c_clr = st.columns(2)
     with c_res:
         st.caption("Restore Defaults")
-        if st.button("Restore A"):
+        if st.button("Restore A", disabled=ui_locked):
             st.session_state.reset_mode, st.session_state.reset_action = "A", "restore"
             st.rerun()
-        if st.button("Restore B"):
+        if st.button("Restore B", disabled=ui_locked):
             st.session_state.reset_mode, st.session_state.reset_action = "B", "restore"
             st.rerun()
-        if st.button("Restore All"):
+        if st.button("Restore All", disabled=ui_locked):
             st.session_state.reset_mode, st.session_state.reset_action = "ALL", "restore"
             st.rerun()
 
     with c_clr:
         st.caption("Clear Data (Zero)")
-        if st.button("Clear A"):
+        if st.button("Clear A", disabled=ui_locked):
             st.session_state.reset_mode, st.session_state.reset_action = "A", "clear"
             st.rerun()
-        if st.button("Clear B"):
+        if st.button("Clear B", disabled=ui_locked):
             st.session_state.reset_mode, st.session_state.reset_action = "B", "clear"
             st.rerun()
-        if st.button("Clear All"):
+        if st.button("Clear All", disabled=ui_locked):
             st.session_state.reset_mode, st.session_state.reset_action = "ALL", "clear"
             st.rerun()
         
@@ -460,7 +464,7 @@ with st.sidebar.expander("Reset Data", expanded=False):
         st.warning(f"⚠️ {action_text} {st.session_state.reset_mode}? Unsaved data will be lost.")
         
         c_yes, c_no = st.columns(2)
-        if c_yes.button("Confirm Action"):
+        if c_yes.button("Confirm Action", disabled=ui_locked):
             mode = st.session_state.reset_mode
             action = st.session_state.reset_action
             
@@ -534,7 +538,7 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
 
     st.download_button("Download Configuration (.csv)", to_csv(), "brico_config.csv", "text/csv")
 
-    uploaded_file = st.file_uploader("Upload Configuration (.csv)", type="csv", key=f"uploader_{st.session_state.uploader_key}")
+    uploaded_file = st.file_uploader("Upload Configuration (.csv)", type="csv", key=f"uploader_{st.session_state.uploader_key}", disabled=ui_locked)
     if uploaded_file is not None:
         try:
             df_load = pd.read_csv(uploaded_file)
@@ -567,17 +571,17 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
 with st.sidebar.expander("Copy Data", expanded=False):
     if 'copy_confirm_mode' not in st.session_state: st.session_state.copy_confirm_mode = None
     c_cp1, c_cp2 = st.columns(2)
-    if c_cp1.button("Copy A → B"):
+    if c_cp1.button("Copy A → B", disabled=ui_locked):
         st.session_state.copy_confirm_mode = "A2B"
         st.rerun()
-    if c_cp2.button("Copy B → A"):
+    if c_cp2.button("Copy B → A", disabled=ui_locked):
         st.session_state.copy_confirm_mode = "B2A"
         st.rerun()
 
     if st.session_state.copy_confirm_mode == "A2B":
         st.warning("⚠️ Overwrite System B?")
         c_yes, c_no = st.columns(2)
-        if c_yes.button("Confirm"):
+        if c_yes.button("Confirm", disabled=ui_locked):
             nm = st.session_state['sysB']['name']
             st.session_state['sysB'] = copy.deepcopy(st.session_state['sysA'])
             st.session_state['sysB']['name'] = nm
@@ -591,7 +595,7 @@ with st.sidebar.expander("Copy Data", expanded=False):
     elif st.session_state.copy_confirm_mode == "B2A":
         st.warning("⚠️ Overwrite System A?")
         c_yes, c_no = st.columns(2)
-        if c_yes.button("Confirm"):
+        if c_yes.button("Confirm", disabled=ui_locked):
             nm = st.session_state['sysA']['name']
             st.session_state['sysA'] = copy.deepcopy(st.session_state['sysB'])
             st.session_state['sysA']['name'] = nm
@@ -609,7 +613,7 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     dir_opts = ["Forward", "Reverse", "Both"]
     idx_dir = dir_opts.index(curr_dir) if curr_dir in dir_opts else 0
     
-    dir_sel = st.radio("Vehicle Direction", dir_opts, horizontal=True, index=idx_dir, key="veh_dir_radio_sidebar", help=help_dir)
+    dir_sel = st.radio("Vehicle Direction", dir_opts, horizontal=True, index=idx_dir, key="veh_dir_radio_sidebar", help=help_dir, disabled=ui_locked)
     st.session_state['sysA']['vehicle_direction'] = dir_sel
     st.session_state['sysB']['vehicle_direction'] = dir_sel
     
@@ -619,7 +623,7 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     is_sim = st.session_state['sysA'].get('combine_surcharge_vehicle', False)
     combo_idx = 1 if is_sim else 0
     
-    surch_sel = st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], index=combo_idx, horizontal=True, key="surcharge_combo_radio_sidebar", help=help_combo)
+    surch_sel = st.radio("Surcharge Combination", ["Exclusive (Vehicle OR Surcharge)", "Simultaneous (Vehicle + Surcharge)"], index=combo_idx, horizontal=True, key="surcharge_combo_radio_sidebar", help=help_combo, disabled=ui_locked)
     
     is_simultaneous = (surch_sel == "Simultaneous (Vehicle + Surcharge)")
     st.session_state['sysA']['combine_surcharge_vehicle'] = is_simultaneous
@@ -633,7 +637,7 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     
     # We use System A's value as the 'driver' for the shared sidebar control, but we must update both.
     # To handle potential desync, we prefer a single widget updating both.
-    use_shear = st.checkbox("Enable Shear Deformations", value=st.session_state['sysA'].get('use_shear_def', False), key="shear_toggle_sidebar", help=help_shear)
+    use_shear = st.checkbox("Enable Shear Deformations", value=st.session_state['sysA'].get('use_shear_def', False), key="shear_toggle_sidebar", help=help_shear, disabled=ui_locked)
     
     st.session_state['sysA']['use_shear_def'] = use_shear
     st.session_state['sysB']['use_shear_def'] = use_shear
@@ -647,8 +651,8 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     val_beff = st.session_state['sysA'].get('b_eff', 1.0)
     val_nu = st.session_state['sysA'].get('nu', 0.2)
     
-    new_beff = col_beff.number_input("Effective Width (b_eff) [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar")
-    new_nu = col_nu.number_input("Poisson's Ratio (ν)", value=float(val_nu), min_value=0.0, max_value=0.5, step=0.05, help=help_nu, key="nu_input_sidebar")
+    new_beff = col_beff.number_input("Effective Width (b_eff) [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
+    new_nu = col_nu.number_input("Poisson's Ratio (ν)", value=float(val_nu), min_value=0.0, max_value=0.5, step=0.05, help=help_nu, key="nu_input_sidebar", disabled=ui_locked)
     
     st.session_state['sysA']['b_eff'] = new_beff
     st.session_state['sysB']['b_eff'] = new_beff
@@ -660,8 +664,8 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     c_mesh, c_step = st.columns(2)
     def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
     def_step = st.session_state['sysA'].get('step_size', 0.2)
-    m_val = c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider")
-    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider")
+    m_val = c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider", disabled=ui_locked)
+    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider", disabled=ui_locked)
 
 if "common_mesh_slider" in st.session_state:
     st.session_state['sysA']['mesh_size'] = m_val
@@ -714,6 +718,7 @@ with st.sidebar.expander("Report Generation", expanded=False):
                 buffer.seek(0)
                 st.session_state['report_buffer'] = buffer
                 st.success("Report Generated!")
+                st.rerun() # Rerun to lock UI
             except Exception as e:
                 st.error(f"Report Generation Failed: {e}")
     
@@ -724,6 +729,9 @@ with st.sidebar.expander("Report Generation", expanded=False):
             file_name=f"BriCoS_Report_{st.session_state.rep_pno}.pdf",
             mime="application/pdf"
         )
+        if st.button("Clear Report & Unlock UI"):
+            del st.session_state['report_buffer']
+            st.rerun()
 
 # ---------------------------------------------
 # STICKY SIDEBAR: ACTIVE SYSTEM & NAMES
@@ -733,8 +741,8 @@ st.sidebar.header("Configuration")
 with st.sidebar.container():
     st.markdown('<div id="sticky-sidebar-marker"></div>', unsafe_allow_html=True)
     c_nA, c_nB = st.columns(2)
-    st.session_state['sysA']['name'] = c_nA.text_input("Name Sys A", st.session_state['sysA']['name'])
-    st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'])
+    st.session_state['sysA']['name'] = c_nA.text_input("Name Sys A", st.session_state['sysA']['name'], disabled=ui_locked)
+    st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'], disabled=ui_locked)
 
     sys_map = {"sysA": f"{st.session_state['sysA']['name']} (Blue)", "sysB": f"{st.session_state['sysB']['name']} (Red)"}
     active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True)
@@ -750,7 +758,7 @@ p = st.session_state[curr]
 # --- MAIN INPUTS (REMAINING) ---
 with st.sidebar.expander("Design Factors & Type", expanded=False):
     help_mode = "Choose 'Frame' for full interaction (Walls + Slab) or 'Superstructure' for a simplified slab-on-supports analysis."
-    new_mode_sel = st.selectbox("Model Type", ["Frame", "Superstructure"], index=0 if p['mode']=='Frame' else 1, key=f"{curr}_md_sel", help=help_mode)
+    new_mode_sel = st.selectbox("Model Type", ["Frame", "Superstructure"], index=0 if p['mode']=='Frame' else 1, key=f"{curr}_md_sel", help=help_mode, disabled=ui_locked)
     
     old_mode = p.get('last_mode', 'Frame')
     if old_mode != new_mode_sel:
@@ -777,14 +785,14 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
         st.rerun()
     
     help_mat = "Choose method for Elastic Modulus (E) definition:\n- Eurocode: Calculate E from f_ck (Ecm = 22 * (fcm/10)^0.3)\n- Manual: Enter E directly in GPa."
-    e_mode = st.radio("Material Definition", ["Eurocode (f_ck)", "Manual (E-Modulus)"], horizontal=True, index=0 if p['e_mode']=='Eurocode' else 1, key=f"{curr}_emode", help=help_mat)
+    e_mode = st.radio("Material Definition", ["Eurocode (f_ck)", "Manual (E-Modulus)"], horizontal=True, index=0 if p['e_mode']=='Eurocode' else 1, key=f"{curr}_emode", help=help_mat, disabled=ui_locked)
     p['e_mode'] = "Eurocode" if "Eurocode" in e_mode else "Manual"
 
     help_kfi = "Consequence Class Factor (KFI) applied to all loads."
     kfi_opts = [0.9, 1.0, 1.1]
     curr_kfi = p.get('KFI', 1.0)
     idx_kfi = kfi_opts.index(curr_kfi) if curr_kfi in kfi_opts else 1
-    p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", help=help_kfi)
+    p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", help=help_kfi, disabled=ui_locked)
     
     gg_opts = [0.9, 1.0, 1.10, 1.25]
     c_gg, c_gj = st.columns(2)
@@ -792,8 +800,8 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     idx_gg = gg_opts.index(gg_val) if gg_val in gg_opts else len(gg_opts)
     
     help_gg = "Partial factor for permanent self-weight loads."
-    gg_sel = c_gg.selectbox(r"$\gamma_{g}$ (Self-weight)", gg_opts + ["Custom"], index=min(idx_gg, len(gg_opts)), key=f"{curr}_gg_sel", help=help_gg)
-    if gg_sel == "Custom": p['gamma_g'] = c_gg.number_input(r"Custom $\gamma_{g}$", value=float(gg_val), key=f"{curr}_gg_cust")
+    gg_sel = c_gg.selectbox(r"$\gamma_{g}$ (Self-weight)", gg_opts + ["Custom"], index=min(idx_gg, len(gg_opts)), key=f"{curr}_gg_sel", help=help_gg, disabled=ui_locked)
+    if gg_sel == "Custom": p['gamma_g'] = c_gg.number_input(r"Custom $\gamma_{g}$", value=float(gg_val), key=f"{curr}_gg_cust", disabled=ui_locked)
     else: p['gamma_g'] = float(gg_sel)
 
     gj_opts = [1.0, 1.1]
@@ -801,8 +809,8 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     idx_gj = gj_opts.index(gj_val) if gj_val in gj_opts else len(gj_opts)
     
     help_gj = "Partial factor for permanent soil loads (Earth Pressure)."
-    gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts + ["Custom"], index=min(idx_gj, len(gj_opts)), key=f"{curr}_gj_sel", help=help_gj)
-    if gj_sel == "Custom": p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust")
+    gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts + ["Custom"], index=min(idx_gj, len(gj_opts)), key=f"{curr}_gj_sel", help=help_gj, disabled=ui_locked)
+    if gj_sel == "Custom": p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust", disabled=ui_locked)
     else: p['gamma_j'] = float(gj_sel)
 
     # Added 1.20 to options
@@ -812,28 +820,28 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     idx_gamA = gam_opts.index(gam_valA) if gam_valA in gam_opts else len(gam_opts)
     
     help_gamA = "Partial factor for variable traffic loads (Vehicle A)."
-    gam_selA = c_ga.selectbox(r"$\gamma_{veh,A}$", gam_opts + ["Custom"], index=min(idx_gamA, len(gam_opts)), key=f"{curr}_gamA_sel", help=help_gamA)
-    if gam_selA == "Custom": p['gamma_veh'] = c_ga.number_input(r"Custom $\gamma_{A}$", value=float(gam_valA), key=f"{curr}_gamA_cust")
+    gam_selA = c_ga.selectbox(r"$\gamma_{veh,A}$", gam_opts + ["Custom"], index=min(idx_gamA, len(gam_opts)), key=f"{curr}_gamA_sel", help=help_gamA, disabled=ui_locked)
+    if gam_selA == "Custom": p['gamma_veh'] = c_ga.number_input(r"Custom $\gamma_{A}$", value=float(gam_valA), key=f"{curr}_gamA_cust", disabled=ui_locked)
     else: p['gamma_veh'] = float(gam_selA)
 
     gam_valB = p.get('gamma_vehB', 1.0)
     idx_gamB = gam_opts.index(gam_valB) if gam_valB in gam_opts else len(gam_opts)
     
     help_gamB = "Partial factor for variable traffic loads (Vehicle B)."
-    gam_selB = c_gb.selectbox(r"$\gamma_{veh,B}$", gam_opts + ["Custom"], index=min(idx_gamB, len(gam_opts)), key=f"{curr}_gamB_sel", help=help_gamB)
-    if gam_selB == "Custom": p['gamma_vehB'] = c_gb.number_input(r"Custom $\gamma_{B}$", value=float(gam_valB), key=f"{curr}_gamB_cust")
+    gam_selB = c_gb.selectbox(r"$\gamma_{veh,B}$", gam_opts + ["Custom"], index=min(idx_gamB, len(gam_opts)), key=f"{curr}_gamB_sel", help=help_gamB, disabled=ui_locked)
+    if gam_selB == "Custom": p['gamma_vehB'] = c_gb.number_input(r"Custom $\gamma_{B}$", value=float(gam_valB), key=f"{curr}_gamB_cust", disabled=ui_locked)
     else: p['gamma_vehB'] = float(gam_selB)
 
     help_phi = "Dynamic Amplification Factor calculation method. Manual allows fixed input; Calculate uses Eurocode logic based on span lengths."
-    phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", help=help_phi)
+    phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", help=help_phi, disabled=ui_locked)
     p['phi_mode'] = phi_mode
     if phi_mode == "Manual":
-        p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv")
+        p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv", disabled=ui_locked)
     
     phi_log_placeholder = st.empty()
 
 with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
-    n_spans = st.number_input("Number of Spans", 1, 10, p['num_spans'], key=f"{curr}_nsp")
+    n_spans = st.number_input("Number of Spans", 1, 10, p['num_spans'], key=f"{curr}_nsp", disabled=ui_locked)
     p['num_spans'] = n_spans
     
     is_ec = (p['e_mode'] == 'Eurocode')
@@ -858,27 +866,27 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
 
     for i in range(n_spans):
         c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
-        p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", help="Length of Span" if i==0 else None)
+        p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", help="Length of Span" if i==0 else None, disabled=ui_locked)
         
         s_geom = get_geom_ui_data('span_geom', i, p['Is_list'][i])
         is_adv = (s_geom['shape'] != 0) or (s_geom['type'] != 0) or (s_geom.get('align_type', 0) != 0)
         
         if not is_adv:
-            val = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help="Inertia" if i==0 else None)
+            val = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help="Inertia" if i==0 else None, disabled=ui_locked)
             p['Is_list'][i] = val
             s_geom['vals'] = [val, val, val]
         else:
             c2.text_input(f"I{i+1}", "See Profiler", disabled=True, key=f"{curr}_i{i}_dis")
 
-        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help="Distributed load from permanent dead loads." if i==0 else None)
+        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", help="Distributed load from permanent dead loads." if i==0 else None, disabled=ui_locked)
         
         if is_ec:
-            val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_span_list'][i]), key=f"{curr}_fck_s{i}", help=help_mat_col if i==0 else None)
+            val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_span_list'][i]), key=f"{curr}_fck_s{i}", help=help_mat_col if i==0 else None, disabled=ui_locked)
             p['fck_span_list'][i] = val_in
             E_gpa = 22.0 * ((val_in + 8)/10.0)**0.3
             p['E_span_list'][i] = E_gpa * 1e6
         else:
-            val_in = c4.number_input(f"{lbl_mat}", value=float(p['E_custom_span'][i]), key=f"{curr}_Eman_s{i}", help=help_mat_col if i==0 else None)
+            val_in = c4.number_input(f"{lbl_mat}", value=float(p['E_custom_span'][i]), key=f"{curr}_Eman_s{i}", help=help_mat_col if i==0 else None, disabled=ui_locked)
             p['E_custom_span'][i] = val_in
             p['E_span_list'][i] = val_in * 1e6
         
@@ -894,13 +902,13 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
     for i in range(n_spans + 1):
         st.caption(f"Wall {i+1}")
         c1, c2, c3, c4 = st.columns([1,1,1,1])
-        p['h_list'][i] = c1.number_input(f"H [m]", value=float(p['h_list'][i]), disabled=is_super, key=f"{curr}_h{i}", help="Wall Height" if i==0 else None)
+        p['h_list'][i] = c1.number_input(f"H [m]", value=float(p['h_list'][i]), disabled=(is_super or ui_locked), key=f"{curr}_h{i}", help="Wall Height" if i==0 else None)
         
         w_geom = get_geom_ui_data('wall_geom', i, p['Iw_list'][i])
         is_adv_w = (w_geom['shape'] != 0) or (w_geom['type'] != 0)
 
         if not is_adv_w:
-            val_w = c2.number_input(f"I [m⁴]", value=float(p['Iw_list'][i]), format="%.4f", disabled=is_super, key=f"{curr}_iw{i}", help="Inertia" if i==0 else None)
+            val_w = c2.number_input(f"I [m⁴]", value=float(p['Iw_list'][i]), format="%.4f", disabled=(is_super or ui_locked), key=f"{curr}_iw{i}", help="Inertia" if i==0 else None)
             p['Iw_list'][i] = val_w
             w_geom['vals'] = [val_w, val_w, val_w]
         else:
@@ -908,7 +916,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         
         sur = next((x for x in p['surcharge'] if x['wall_idx']==i), None)
         val_q = sur['q'] if sur else 0.0
-        new_q = c3.number_input(f"Lat. Load [kN/m]", value=float(val_q), disabled=is_super, key=f"{curr}_sq{i}", help="Vehicle Surcharge / Lateral Load" if i==0 else None)
+        new_q = c3.number_input(f"Lat. Load [kN/m]", value=float(val_q), disabled=(is_super or ui_locked), key=f"{curr}_sq{i}", help="Vehicle Surcharge / Lateral Load" if i==0 else None)
         
         if not is_super:
             p['surcharge'] = [x for x in p['surcharge'] if x['wall_idx'] != i]
@@ -916,12 +924,12 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
                 p['surcharge'].append({'wall_idx':i, 'face':'R', 'q':new_q, 'h':p['h_list'][i]})
 
         if is_ec:
-            val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_wall_list'][i]), disabled=is_super, key=f"{curr}_fck_w{i}", help=help_mat_col if i==0 else None)
+            val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_wall_list'][i]), disabled=(is_super or ui_locked), key=f"{curr}_fck_w{i}", help=help_mat_col if i==0 else None)
             p['fck_wall_list'][i] = val_in
             E_gpa = 22.0 * ((val_in + 8)/10.0)**0.3
             p['E_wall_list'][i] = E_gpa * 1e6
         else:
-            val_in = c4.number_input(f"{lbl_mat}", value=float(p['E_custom_wall'][i]), disabled=is_super, key=f"{curr}_Eman_w{i}", help=help_mat_col if i==0 else None)
+            val_in = c4.number_input(f"{lbl_mat}", value=float(p['E_custom_wall'][i]), disabled=(is_super or ui_locked), key=f"{curr}_Eman_w{i}", help=help_mat_col if i==0 else None)
             p['E_custom_wall'][i] = val_in
             p['E_wall_list'][i] = val_in * 1e6
 
@@ -930,13 +938,13 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         
         c_sl, c_sr = st.columns(2)
         
-        h_L = c_sl.number_input("H_soil_left [m]", value=ex_SoilLeft['h'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_shl{i}", help="Soil on Left Face (Pushing Right)")
-        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_SoilLeft['q_bot'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_sqlb{i}")
-        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_SoilLeft['q_top'] if ex_SoilLeft else 0.0, disabled=is_super, key=f"{curr}_sqlt{i}")
+        h_L = c_sl.number_input("H_soil_left [m]", value=ex_SoilLeft['h'] if ex_SoilLeft else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_shl{i}", help="Soil on Left Face (Pushing Right)")
+        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_SoilLeft['q_bot'] if ex_SoilLeft else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqlb{i}")
+        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_SoilLeft['q_top'] if ex_SoilLeft else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqlt{i}")
         
-        h_R = c_sr.number_input("H_soil_right [m]", value=ex_SoilRight['h'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_shr{i}", help="Soil on Right Face (Pushing Left)")
-        qR_bot = c_sr.number_input("q_bot [kN/m²]", value=ex_SoilRight['q_bot'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_sqrb{i}")
-        qR_top = c_sr.number_input("q_top [kN/m²]", value=ex_SoilRight['q_top'] if ex_SoilRight else 0.0, disabled=is_super, key=f"{curr}_sqrt{i}")
+        h_R = c_sr.number_input("H_soil_right [m]", value=ex_SoilRight['h'] if ex_SoilRight else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_shr{i}", help="Soil on Right Face (Pushing Left)")
+        qR_bot = c_sr.number_input("q_bot [kN/m²]", value=ex_SoilRight['q_bot'] if ex_SoilRight else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqrb{i}")
+        qR_top = c_sr.number_input("q_top [kN/m²]", value=ex_SoilRight['q_top'] if ex_SoilRight else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqrt{i}")
 
         if not is_super:
             p['soil'] = [x for x in p['soil'] if x['wall_idx']!=i]
@@ -948,7 +956,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         st.caption("Configure variable stiffness, height profiles, or vertical alignment.")
         
         elem_options = [f"Span {i+1}" for i in range(n_spans)] + ([f"Wall {i+1}" for i in range(n_spans+1)] if not is_super else [])
-        sel_el = st.selectbox("Edit Element:", elem_options, key=f"{curr}_prof_sel")
+        sel_el = st.selectbox("Edit Element:", elem_options, key=f"{curr}_prof_sel", disabled=ui_locked)
         
         is_span_selected = "Span" in sel_el
         if is_span_selected:
@@ -962,10 +970,10 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             
         c_p1, c_p2 = st.columns(2)
         # ISSUE K FIX: Appending sel_el to keys to ensure widget state refreshes on selection change
-        new_type = c_p1.radio("Definition Mode:", ["Inertia (I)", "Height (H)"], index=target_geom['type'], key=f"{curr}_prof_type_{sel_el}", horizontal=True)
+        new_type = c_p1.radio("Definition Mode:", ["Inertia (I)", "Height (H)"], index=target_geom['type'], key=f"{curr}_prof_type_{sel_el}", horizontal=True, disabled=ui_locked)
         target_geom['type'] = 0 if "Inertia" in new_type else 1
         
-        new_shape = c_p2.radio("Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], index=target_geom['shape'], key=f"{curr}_prof_shape_{sel_el}", horizontal=True)
+        new_shape = c_p2.radio("Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], index=target_geom['shape'], key=f"{curr}_prof_shape_{sel_el}", horizontal=True, disabled=ui_locked)
         shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
         target_geom['shape'] = shape_map[new_shape]
         
@@ -973,15 +981,15 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         c_v1, c_v2, c_v3 = st.columns(3)
         
         lbl_v = "I [m⁴]" if target_geom['type']==0 else "H [m]"
-        v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1_{sel_el}")
+        v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1_{sel_el}", disabled=ui_locked)
         
         v2 = vals[1]
         if target_geom['shape'] == 2:
-            v2 = c_v2.number_input(f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", key=f"{curr}_prof_v2_{sel_el}")
+            v2 = c_v2.number_input(f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", key=f"{curr}_prof_v2_{sel_el}", disabled=ui_locked)
         
         v3 = vals[2]
         if target_geom['shape'] >= 1:
-            v3 = c_v3.number_input(f"End {lbl_v}", value=float(vals[2]), format="%.4f", key=f"{curr}_prof_v3_{sel_el}")
+            v3 = c_v3.number_input(f"End {lbl_v}", value=float(vals[2]), format="%.4f", key=f"{curr}_prof_v3_{sel_el}", disabled=ui_locked)
             
         target_geom['vals'] = [v1, v2, v3]
         
@@ -994,17 +1002,17 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             if 'incline_val' not in target_geom: target_geom['incline_val'] = 0.0
 
             al_opts = ["Straight (Horizontal)", "Inclined"]
-            new_align = st.radio("Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, key=f"{curr}_align_t_{sel_el}")
+            new_align = st.radio("Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, key=f"{curr}_align_t_{sel_el}", disabled=ui_locked)
             target_geom['align_type'] = al_opts.index(new_align)
             
             if target_geom['align_type'] == 1:
                 inc_opts = ["Slope (%)", "Delta Height (End - Start) [m]"]
-                new_inc_mode = st.radio("Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, key=f"{curr}_inc_m_{sel_el}")
+                new_inc_mode = st.radio("Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, key=f"{curr}_inc_m_{sel_el}", disabled=ui_locked)
                 target_geom['incline_mode'] = inc_opts.index(new_inc_mode)
                 
                 lbl_inc = "Slope [%]" if target_geom['incline_mode'] == 0 else "Delta H [m]"
                 help_inc = "Positive slope/height goes UP. Negative goes DOWN."
-                target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", help=help_inc, key=f"{curr}_inc_v_{sel_el}")
+                target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", help=help_inc, key=f"{curr}_inc_v_{sel_el}", disabled=ui_locked)
 
 
 # --- BOUNDARY CONDITIONS TAB ---
@@ -1041,7 +1049,7 @@ with st.sidebar.expander("Boundary Conditions", expanded=False):
         curr_type = curr_s.get('type', 'Fixed')
         if curr_type not in presets: curr_type = 'Custom Spring'
         
-        sel_type = st.selectbox(f"Type {i+1}", list(presets.keys()), index=list(presets.keys()).index(curr_type), key=f"{curr}_supp_t_{i}", label_visibility="collapsed")
+        sel_type = st.selectbox(f"Type {i+1}", list(presets.keys()), index=list(presets.keys()).index(curr_type), key=f"{curr}_supp_t_{i}", label_visibility="collapsed", disabled=ui_locked)
         
         new_k = curr_s['k']
         if sel_type != "Custom Spring":
@@ -1051,9 +1059,9 @@ with st.sidebar.expander("Boundary Conditions", expanded=False):
         else:
             p['supports'][i]['type'] = "Custom Spring"
             col_k1, col_k2, col_k3 = st.columns(3)
-            kx = col_k1.number_input(f"Kx", value=float(curr_s['k'][0]), format="%.1e", key=f"{curr}_kx_{i}", help="Horizontal Stiffness [kN/m]")
-            ky = col_k2.number_input(f"Ky", value=float(curr_s['k'][1]), format="%.1e", key=f"{curr}_ky_{i}", help="Vertical Stiffness [kN/m]")
-            km = col_k3.number_input(f"Km", value=float(curr_s['k'][2]), format="%.1e", key=f"{curr}_km_{i}", help="Rotational Stiffness [kNm/rad]")
+            kx = col_k1.number_input(f"Kx", value=float(curr_s['k'][0]), format="%.1e", key=f"{curr}_kx_{i}", help="Horizontal Stiffness [kN/m]", disabled=ui_locked)
+            ky = col_k2.number_input(f"Ky", value=float(curr_s['k'][1]), format="%.1e", key=f"{curr}_ky_{i}", help="Vertical Stiffness [kN/m]", disabled=ui_locked)
+            km = col_k3.number_input(f"Km", value=float(curr_s['k'][2]), format="%.1e", key=f"{curr}_km_{i}", help="Rotational Stiffness [kNm/rad]", disabled=ui_locked)
             p['supports'][i]['k'] = [kx, ky, km]
 
 @st.cache_data
@@ -1082,7 +1090,7 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
              p[key_loads] = veh_data["Class 100"]['loads']
              p[key_space] = veh_data["Class 100"]['spacing']
         
-        sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key)
+        sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key, disabled=ui_locked)
         input_key_l = f"{curr}_{prefix}_loads_input"
         input_key_s = f"{curr}_{prefix}_space_input"
         if input_key_l not in st.session_state: st.session_state[input_key_l] = p[key_loads]
@@ -1105,8 +1113,8 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         h_loads = "Comma-separated axle loads [tonnes]. Example: 10,10,12"
         h_space = "Comma-separated distances [m] between axles. First value must be 0. Example: 0, 1.5, 3.0"
         
-        p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, help=h_loads)
-        p[key_space] = st.text_input(f"Space {prefix} [m]", key=input_key_s, help=h_space)
+        p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, help=h_loads, disabled=ui_locked)
+        p[key_space] = st.text_input(f"Space {prefix} [m]", key=input_key_s, help=h_space, disabled=ui_locked)
         
         valid_veh = False
         msg = ""
@@ -1214,6 +1222,8 @@ rA, rB = {}, {}
 step_view_sys = "System A"
 active_veh_step = "Vehicle A"
 veh_key_res = ""
+show_A_step = True
+show_B_step = True
 
 if view_case == "Vehicle Steps":
     st.markdown("---")
@@ -1246,17 +1256,35 @@ if view_case == "Vehicle Steps":
     list_A = res_A.get(veh_key_res, [])
     list_B = res_B.get(veh_key_res, [])
     
-    if not list_A and not list_B:
-        st.warning(f"No valid steps/vehicle definition found for {active_veh_step} ({'Reverse' if '_Rev' in veh_key_res else 'Forward'}).")
+    def set_step_sys(): st.session_state.keep_step_view_sys = st.session_state.step_sys_radio
+    try: ss_idx = ["Both", "System A", "System B"].index(st.session_state.keep_step_view_sys)
+    except ValueError: ss_idx = 0
+    step_tog_map = {"Both": "Both", "System A": st.session_state['sysA']['name'], "System B": st.session_state['sysB']['name']}
+    step_view_sys = c_step_tog.radio("View System:", ["Both", "System A", "System B"], index=ss_idx, format_func=lambda x: step_tog_map[x], horizontal=True, key="step_sys_radio", on_change=set_step_sys)
+    
+    show_A_step = (step_view_sys == "Both" or step_view_sys == "System A")
+    show_B_step = (step_view_sys == "Both" or step_view_sys == "System B")
+    
+    # Check if selected systems have valid vehicles
+    valid_A = len(list_A) > 0
+    valid_B = len(list_B) > 0
+    
+    # Logic to only show controls/plots if there is something to show for the selected system
+    something_to_show = False
+    
+    if show_A_step and not valid_A:
+        st.warning(f"⚠️ {active_veh_step} is not defined for {st.session_state['sysA']['name']} (or has no steps).")
+    if show_B_step and not valid_B:
+        st.warning(f"⚠️ {active_veh_step} is not defined for {st.session_state['sysB']['name']} (or has no steps).")
+        
+    if (show_A_step and valid_A) or (show_B_step and valid_B):
+        something_to_show = True
+    
+    if not something_to_show:
+        rA, rB = {}, {} # Ensure empty so nothing breaks downstream
     else:
         max_steps = max(1, len(list_A), len(list_B))
         step_idx = c_step_slide.slider("Step Index", 0, max_steps-1, 0, key="veh_step_slider_persistent")
-        
-        def set_step_sys(): st.session_state.keep_step_view_sys = st.session_state.step_sys_radio
-        try: ss_idx = ["Both", "System A", "System B"].index(st.session_state.keep_step_view_sys)
-        except ValueError: ss_idx = 0
-        step_tog_map = {"Both": "Both", "System A": st.session_state['sysA']['name'], "System B": st.session_state['sysB']['name']}
-        step_view_sys = c_step_tog.radio("View System:", ["Both", "System A", "System B"], index=ss_idx, format_func=lambda x: step_tog_map[x], horizontal=True, key="step_sys_radio", on_change=set_step_sys)
         
         st.markdown("---")
         def get_step(res, idx, k_res, f_factor):
@@ -1307,11 +1335,15 @@ name_B = st.session_state['sysB']['name']
 
 with t1:
     if view_case == "Vehicle Steps":
-        has_content = len(res_A.get(veh_key_res, [])) > 0 or len(res_B.get(veh_key_res, [])) > 0
-        if not has_content: st.info("Visualization unavailable: No valid vehicle steps.")
+        # Check logic calculated above
+        valid_A = len(list_A) > 0
+        valid_B = len(list_B) > 0
+        has_vis_content = (show_A_step and valid_A) or (show_B_step and valid_B)
+        
+        if not has_vis_content:
+             # Warning already displayed above in logic block
+             st.info("No visualization available for selected system/vehicle combination.")
         else:
-            show_A_step = (step_view_sys == "Both" or step_view_sys == "System A")
-            show_B_step = (step_view_sys == "Both" or step_view_sys == "System B")
             st.subheader("Bending Moment [kNm]")
             st.plotly_chart(viz.create_plotly_fig(
                 nodes_A, rA, rB, 'M', man_scale, "", 
