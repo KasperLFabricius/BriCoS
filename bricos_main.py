@@ -77,8 +77,8 @@ if 'keep_active_veh_step' not in st.session_state: st.session_state.keep_active_
 if 'keep_step_view_sys' not in st.session_state: st.session_state.keep_step_view_sys = "System A"
 
 # --- GLOBAL LOCK STATE ---
-# Lock inputs if a report is generated and waiting in buffer to ensure consistency
-ui_locked = 'report_buffer' in st.session_state
+# Removed blocking logic. UI is always active.
+ui_locked = False 
 
 def calc_I(h_mm):
     return (1.0 * (h_mm/1000.0)**3) / 12.0
@@ -433,7 +433,26 @@ if st.session_state['sysA'].get('scale_manual', 0) < 0.1: st.session_state['sysA
 if st.session_state['sysB'].get('scale_manual', 0) < 0.1: st.session_state['sysB']['scale_manual'] = 2.0
 
 # ---------------------------------------------
-# MOVED SECTIONS (TOP OF SIDEBAR)
+# EXECUTION & RESULTS (Moved Up for Report)
+# ---------------------------------------------
+# We solve BEFORE report generation to pass cached results
+def safe_solve(params):
+    try:
+        return solver.run_raw_analysis(params)
+    except ValueError as e:
+        return None, None, str(e)
+
+raw_res_A, nodes_A, err_A = safe_solve(st.session_state['sysA'])
+raw_res_B, nodes_B, err_B = safe_solve(st.session_state['sysB'])
+
+if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
+if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
+
+has_res_A = (raw_res_A is not None) and (nodes_A is not None)
+has_res_B = (raw_res_B is not None) and (nodes_B is not None)
+
+# ---------------------------------------------
+# SIDEBAR
 # ---------------------------------------------
 
 # --- ABOUT SECTION ---
@@ -689,7 +708,7 @@ if "common_step_slider" in st.session_state:
     st.session_state['sysA']['step_size'] = s_val
     st.session_state['sysB']['step_size'] = s_val
 
-# --- REPORT GENERATION (NEW) ---
+# --- REPORT GENERATION (UPDATED) ---
 with st.sidebar.expander("Report Generation", expanded=False):
     # Initialize report keys if missing
     if 'rep_pno' not in st.session_state: st.session_state.rep_pno = ""
@@ -700,22 +719,21 @@ with st.sidebar.expander("Report Generation", expanded=False):
     if 'rep_appr' not in st.session_state: st.session_state.rep_appr = ""
     if 'rep_comm' not in st.session_state: st.session_state.rep_comm = ""
 
-    # Corrected: Only using key= to bind, removing conflicting assignment
-    st.text_input("Project No.", key="rep_pno")
-    st.text_input("Project Name", key="rep_pname")
+    st.text_input("Project No.", key="rep_pno", disabled=ui_locked)
+    st.text_input("Project Name", key="rep_pname", disabled=ui_locked)
     
     c_r1, c_r2 = st.columns(2)
-    c_r1.text_input("Revision", key="rep_rev")
-    c_r2.text_input("Author", key="rep_author")
+    c_r1.text_input("Revision", key="rep_rev", disabled=ui_locked)
+    c_r2.text_input("Author", key="rep_author", disabled=ui_locked)
     
     c_r3, c_r4 = st.columns(2)
-    c_r3.text_input("Checker", key="rep_check")
-    c_r4.text_input("Approver", key="rep_appr")
+    c_r3.text_input("Checker", key="rep_check", disabled=ui_locked)
+    c_r4.text_input("Approver", key="rep_appr", disabled=ui_locked)
     
-    st.text_area("Comments", height=100, key="rep_comm")
+    st.text_area("Comments", height=100, key="rep_comm", disabled=ui_locked)
     
-    if st.button("Generate PDF Report", type="primary"):
-        with st.spinner("Rendering Report (this may take a moment)..."):
+    if st.button("Generate PDF Report", type="primary", disabled=ui_locked):
+        with st.spinner("Rendering Report..."):
             buffer = io.BytesIO()
             meta = {
                 'proj_no': st.session_state.rep_pno,
@@ -727,12 +745,17 @@ with st.sidebar.expander("Report Generation", expanded=False):
                 'comments': st.session_state.rep_comm
             }
             try:
-                rep_gen = bricos_report.BricosReportGenerator(buffer, meta, st.session_state)
+                # Pass pre-calculated results to avoid re-running solver
+                # This makes generation virtually instant.
+                rep_gen = bricos_report.BricosReportGenerator(
+                    buffer, meta, st.session_state,
+                    raw_res_A, raw_res_B, nodes_A, nodes_B
+                )
                 rep_gen.generate()
                 buffer.seek(0)
                 st.session_state['report_buffer'] = buffer
                 st.success("Report Generated!")
-                st.rerun() # Rerun to lock UI
+                # Removed st.rerun() to prevent UI locking
             except Exception as e:
                 st.error(f"Report Generation Failed: {e}")
     
@@ -743,9 +766,8 @@ with st.sidebar.expander("Report Generation", expanded=False):
             file_name=f"BriCoS_Report_{st.session_state.rep_pno}.pdf",
             mime="application/pdf"
         )
-        if st.button("Clear Report & Unlock UI"):
-            del st.session_state['report_buffer']
-            st.rerun()
+        # Removed "Clear Report & Unlock UI" button as requested.
+        # The UI is no longer locked post-generation.
 
 # ---------------------------------------------
 # STICKY SIDEBAR: ACTIVE SYSTEM & NAMES
@@ -1166,21 +1188,6 @@ try: v_idx = view_options.index(st.session_state.keep_view_case)
 except ValueError: v_idx = 0
 
 if 'result_mode' not in st.session_state: st.session_state['result_mode'] = "Design (ULS)"
-
-def safe_solve(params):
-    try:
-        return solver.run_raw_analysis(params)
-    except ValueError as e:
-        return None, None, str(e)
-
-raw_res_A, nodes_A, err_A = safe_solve(st.session_state['sysA'])
-raw_res_B, nodes_B, err_B = safe_solve(st.session_state['sysB'])
-
-if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
-if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
-
-has_res_A = (raw_res_A is not None) and (nodes_A is not None)
-has_res_B = (raw_res_B is not None) and (nodes_B is not None)
 
 # --- VISUAL CONTROL SETTINGS ---
 # Unified 2-row layout as requested

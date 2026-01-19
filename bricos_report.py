@@ -50,7 +50,7 @@ class NumberedCanvas(canvas.Canvas):
 # ==========================================
 
 class BricosReportGenerator:
-    def __init__(self, buffer, meta_data, session_state):
+    def __init__(self, buffer, meta_data, session_state, raw_res_A, raw_res_B, nodes_A, nodes_B):
         self.buffer = buffer
         self.meta = meta_data
         self.state = session_state
@@ -67,11 +67,14 @@ class BricosReportGenerator:
         self.styles.add(ParagraphStyle(name='SwecoCell', parent=self.styles['Normal'], fontSize=8, leading=9))
         self.styles.add(ParagraphStyle(name='SwecoMath', parent=self.styles['Normal'], fontSize=10, leading=12, alignment=TA_CENTER, spaceAfter=6, spaceBefore=6))
 
-        # Run Solver fresh to ensure data consistency
+        # Use pre-calculated results passed from Main UI to avoid redundant Numba execution
         self.params_A = self.state['sysA']
         self.params_B = self.state['sysB']
-        self.raw_A, self.nodes_A, _ = solver.run_raw_analysis(self.params_A)
-        self.raw_B, self.nodes_B, _ = solver.run_raw_analysis(self.params_B)
+        
+        self.raw_A = raw_res_A
+        self.nodes_A = nodes_A
+        self.raw_B = raw_res_B
+        self.nodes_B = nodes_B
         
     def generate(self):
         # 1. Cover / Metadata
