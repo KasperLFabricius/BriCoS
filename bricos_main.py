@@ -6,6 +6,7 @@ import copy
 import os
 import io # Added for Report Buffer
 import sys
+import time # Added for Autosave timing
 
 import bricos_solver as solver
 import bricos_viz as viz
@@ -16,12 +17,17 @@ import bricos_report # New Report Module
 # ==========================================
 
 APP_VERSION = "0.31"
+AUTOSAVE_FILE = "latest_session.csv"
 
 st.set_page_config(layout="wide", page_title=f"BriCoS v{APP_VERSION}")
 
-# --- PATH HELPER FOR EXE ---
+# --- PATH HELPER FOR ASSETS (READ-ONLY) ---
 def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
+    """ 
+    Get absolute path to bundled resources (images, static csv).
+    In EXE: Points to sys._MEIPASS (Temp folder).
+    In DEV: Points to current folder.
+    """
     try:
         # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
@@ -29,6 +35,22 @@ def resource_path(relative_path):
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
+
+# --- PATH HELPER FOR USER DATA (WRITABLE) ---
+def get_writable_path(filename):
+    """
+    Get path for writing persistent user data.
+    In EXE: Points to the folder containing the .exe.
+    In DEV: Points to current folder.
+    """
+    if getattr(sys, 'frozen', False):
+        # Running as compiled EXE -> Use executable directory
+        base_path = os.path.dirname(sys.executable)
+    else:
+        # Running as script -> Use current working directory
+        base_path = os.path.abspath(".")
+    
+    return os.path.join(base_path, filename)
 
 # --- CSS FOR STICKY CONTROLS & LAYOUT ---
 # Updated to use :has() selector for robust container targeting
@@ -73,15 +95,9 @@ if os.path.exists(logo_path):
 
 st.title(f"BriCoS v{APP_VERSION} - Bridge Comparison Software")
 
-# --- PERSISTENT STATE INITIALIZATION ---
-if 'keep_view_case' not in st.session_state: st.session_state.keep_view_case = "Total Envelope"
-if 'keep_active_veh_step' not in st.session_state: st.session_state.keep_active_veh_step = "Vehicle A"
-if 'keep_step_view_sys' not in st.session_state: st.session_state.keep_step_view_sys = "System A"
-if 'is_generating_report' not in st.session_state: st.session_state.is_generating_report = False
-
-# --- GLOBAL LOCK STATE ---
-# Locks UI if report generation is in progress
-ui_locked = st.session_state.is_generating_report
+# ==========================================
+# FUNCTIONS FOR DATA MANAGEMENT
+# ==========================================
 
 def calc_I(h_mm):
     return (1.0 * (h_mm/1000.0)**3) / 12.0
@@ -226,7 +242,6 @@ def get_clear(name_suffix, current_mode):
         'nu': 0.2
     }
 
-# --- FORCE UPDATE HELPER (FIXED FOR SYNC ISSUES) ---
 def force_ui_update(sys_key, data):
     """
     Explicitly synchronizes the Streamlit session_state keys with the provided data dict.
@@ -369,19 +384,101 @@ def clean_transient_keys():
     for k in keys_to_clear:
         del st.session_state[k]
 
-# --- INITIALIZATION WITH SPECIFIC DEFAULTS ---
-if 'sysA' not in st.session_state: 
-    # System A: 1 Span
-    d = get_def()
-    d['num_spans'] = 1
-    d['name'] = "System A"
-    d['soil'] = [
-        {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, 
-        {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-        {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
-        {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
-    ]
-    st.session_state['sysA'] = d
+def generate_csv_data():
+    """Generates the CSV string for saving the current session state."""
+    # Initialize report keys if missing
+    rep_keys = ['rep_pno', 'rep_pname', 'rep_rev', 'rep_author', 'rep_check', 'rep_appr', 'rep_comm']
+    
+    rows = []
+    # Save Systems
+    for sys_name in ['sysA', 'sysB']:
+        if sys_name in st.session_state:
+            data = st.session_state[sys_name]
+            for k, v in data.items():
+                if k == 'backup': continue 
+                val_str = json.dumps(v, default=str)
+                rows.append({'System': sys_name, 'Parameter': k, 'Value': val_str})
+    
+    # Save Global / Report Settings
+    global_keys = rep_keys + ['result_mode']
+    for gk in global_keys:
+        if gk in st.session_state:
+            val_str = json.dumps(st.session_state[gk], default=str)
+            rows.append({'System': 'Global', 'Parameter': gk, 'Value': val_str})
+
+    df = pd.DataFrame(rows)
+    return df.to_csv(index=False).encode('utf-8')
+
+def load_data_from_df(df_load):
+    """Loads session state from a DataFrame."""
+    if 'System' in df_load.columns and 'Parameter' in df_load.columns:
+        # Clean up transient UI keys (Profiler/Viz) to prevent stale state
+        clean_transient_keys()
+        
+        for _, row in df_load.iterrows():
+            sys_n = row['System']
+            try:
+                val = json.loads(row['Value'])
+                if sys_n in ['sysA', 'sysB']:
+                    if sys_n not in st.session_state:
+                         st.session_state[sys_n] = get_def() # Init if missing
+                    st.session_state[sys_n][row['Parameter']] = val
+                elif sys_n == 'Global':
+                    st.session_state[row['Parameter']] = val
+            except: pass
+        
+        # Ensure systems exist before forcing update
+        if 'sysA' in st.session_state:
+            force_ui_update('sysA', st.session_state['sysA'])
+        if 'sysB' in st.session_state:
+            force_ui_update('sysB', st.session_state['sysB'])
+        return True
+    return False
+
+
+# --- PERSISTENT STATE INITIALIZATION ---
+if 'keep_view_case' not in st.session_state: st.session_state.keep_view_case = "Total Envelope"
+if 'keep_active_veh_step' not in st.session_state: st.session_state.keep_active_veh_step = "Vehicle A"
+if 'keep_step_view_sys' not in st.session_state: st.session_state.keep_step_view_sys = "System A"
+if 'is_generating_report' not in st.session_state: st.session_state.is_generating_report = False
+if 'last_autosave_time' not in st.session_state: st.session_state.last_autosave_time = time.time()
+if 'autosave_interval' not in st.session_state: st.session_state.autosave_interval = 5
+
+# --- GLOBAL LOCK STATE ---
+# Locks UI if report generation is in progress
+ui_locked = st.session_state.is_generating_report
+
+# --- INITIALIZATION WITH AUTOSAVE CHECK ---
+if 'sysA' not in st.session_state:
+    # First run check for autosave file using WRITABLE PATH
+    autosave_path = get_writable_path(AUTOSAVE_FILE)
+    loaded_from_autosave = False
+    
+    if os.path.exists(autosave_path):
+        try:
+            df_auto = pd.read_csv(autosave_path)
+            # We initialize dummy sysA/sysB so load_data_from_df can populate them
+            st.session_state['sysA'] = get_def()
+            st.session_state['sysB'] = get_def()
+            
+            if load_data_from_df(df_auto):
+                loaded_from_autosave = True
+                # st.toast("Session restored from autosave.", icon="💾") 
+        except Exception:
+            pass # Fail silently and load defaults
+
+    if not loaded_from_autosave:
+        # System A: 1 Span
+        d = get_def()
+        d['num_spans'] = 1
+        d['name'] = "System A"
+        d['soil'] = [
+            {'wall_idx': 0, 'face': 'L', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}, 
+            {'wall_idx': 0, 'face': 'R', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+            {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
+            {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
+        ]
+        st.session_state['sysA'] = d
 
 if 'sysB' not in st.session_state: 
     # System B: 2 Spans
@@ -434,6 +531,22 @@ if 'uploader_key' not in st.session_state: st.session_state.uploader_key = 0
 
 if st.session_state['sysA'].get('scale_manual', 0) < 0.1: st.session_state['sysA']['scale_manual'] = 2.0
 if st.session_state['sysB'].get('scale_manual', 0) < 0.1: st.session_state['sysB']['scale_manual'] = 2.0
+
+# --- AUTOSAVE LOGIC ---
+current_time = time.time()
+interval_sec = st.session_state.autosave_interval * 60
+
+if st.session_state.autosave_interval > 0 and not ui_locked:
+    if (current_time - st.session_state.last_autosave_time) > interval_sec:
+        try:
+            csv_data = generate_csv_data()
+            # Use get_writable_path to ensure saving to EXE folder, not Temp
+            with open(get_writable_path(AUTOSAVE_FILE), "wb") as f:
+                f.write(csv_data)
+            st.session_state.last_autosave_time = current_time
+            st.toast("Session Autosaved 💾")
+        except Exception as e:
+            pass # Fail silently on autosave error
 
 # ---------------------------------------------
 # EXECUTION & RESULTS (Moved Up for Report)
@@ -552,56 +665,42 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
     for rk in rep_keys:
         if rk not in st.session_state: st.session_state[rk] = ""
 
-    def to_csv():
-        rows = []
-        # Save Systems
-        for sys_name in ['sysA', 'sysB']:
-            data = st.session_state[sys_name]
-            for k, v in data.items():
-                if k == 'backup': continue 
-                val_str = json.dumps(v, default=str)
-                rows.append({'System': sys_name, 'Parameter': k, 'Value': val_str})
-        
-        # Save Global / Report Settings
-        global_keys = rep_keys + ['result_mode']
-        for gk in global_keys:
-            if gk in st.session_state:
-                val_str = json.dumps(st.session_state[gk], default=str)
-                rows.append({'System': 'Global', 'Parameter': gk, 'Value': val_str})
-
-        df = pd.DataFrame(rows)
-        return df.to_csv(index=False).encode('utf-8')
-
-    st.download_button("Download Configuration (.csv)", to_csv(), "brico_config.csv", "text/csv", disabled=ui_locked)
+    st.download_button("Download Configuration (.csv)", generate_csv_data(), "brico_config.csv", "text/csv", disabled=ui_locked)
 
     uploaded_file = st.file_uploader("Upload Configuration (.csv)", type="csv", key=f"uploader_{st.session_state.uploader_key}", disabled=ui_locked)
     if uploaded_file is not None:
         try:
             df_load = pd.read_csv(uploaded_file)
-            if 'System' in df_load.columns and 'Parameter' in df_load.columns:
-                
-                # Clean up transient UI keys (Profiler/Viz) to prevent stale state
-                clean_transient_keys()
-                
-                for _, row in df_load.iterrows():
-                    sys_n = row['System']
-                    try:
-                        val = json.loads(row['Value'])
-                        if sys_n in ['sysA', 'sysB']:
-                            st.session_state[sys_n][row['Parameter']] = val
-                        elif sys_n == 'Global':
-                            # Restore global/report settings directly to session state
-                            st.session_state[row['Parameter']] = val
-                    except: pass
-                
-                force_ui_update('sysA', st.session_state['sysA'])
-                force_ui_update('sysB', st.session_state['sysB'])
-
+            if load_data_from_df(df_load):
                 st.session_state.uploader_key += 1
                 st.success("Configuration loaded! UI will update.")
                 st.rerun()
             else: st.error("Invalid CSV format.")
         except Exception as e: st.error(f"Error loading file: {e}")
+    
+    st.markdown("---")
+    st.caption("Autosave Settings")
+    auto_opts = [0, 2, 5, 10, 30]
+    
+    def on_autosave_change():
+        # Reset timer on change to avoid immediate trigger
+        st.session_state.last_autosave_time = time.time()
+    
+    # Updated default to 0 index (Never) or find current index
+    curr_idx = 0
+    if st.session_state.autosave_interval in auto_opts:
+        curr_idx = auto_opts.index(st.session_state.autosave_interval)
+        
+    new_interval = st.select_slider(
+        "Autosave Interval [min]", 
+        options=auto_opts, 
+        value=auto_opts[curr_idx],
+        format_func=lambda x: "Never" if x == 0 else f"{x} min",
+        on_change=on_autosave_change,
+        disabled=ui_locked,
+        help="Note: Autosave is triggered by user interaction (clicks, edits). The app does not save while idle."
+    )
+    st.session_state.autosave_interval = new_interval
 
 # --- COPY SYSTEM FEATURE ---
 with st.sidebar.expander("Copy Data", expanded=False):
