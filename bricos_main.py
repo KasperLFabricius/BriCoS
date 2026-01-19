@@ -129,6 +129,51 @@ def load_vehicle_from_csv(target_name):
         pass
     return None
 
+def sanitize_input_data(data):
+    """
+    Ensures input dictionaries are clean and devoid of placeholder zeros
+    that might skew initial calculations (e.g. Phi factor).
+    Mimics the cleanup that happens during solver parsing.
+    """
+    # 1. Clean Span Lists
+    nsp = data.get('num_spans', 1)
+    # Ensure lists are at least long enough, but clip values not used by nsp
+    # Actually, solver uses nsp to iterate, so trailing zeros in list are ignored.
+    # But let's make sure the ACTIVE entries are valid floats.
+    
+    # 2. Geometry Defaults
+    # If a variable geometry is defined but values are zero, fallback to simple list
+    for i in range(10):
+        k = f"span_geom_{i}"
+        if k in data:
+            g = data[k]
+            if not g.get('vals'): g['vals'] = [0.0, 0.0, 0.0]
+            # If main list has value but geom is 0, sync them
+            if i < len(data['Is_list']) and g['vals'] == [0.0, 0.0, 0.0]:
+                val = data['Is_list'][i]
+                g['vals'] = [val, val, val]
+                
+    for i in range(11):
+        k = f"wall_geom_{i}"
+        if k in data:
+            g = data[k]
+            if not g.get('vals'): g['vals'] = [0.0, 0.0, 0.0]
+            if i < len(data['Iw_list']) and g['vals'] == [0.0, 0.0, 0.0]:
+                val = data['Iw_list'][i]
+                g['vals'] = [val, val, val]
+
+    # 3. Ensure Material Lists are populated
+    while len(data['fck_span_list']) < 10: data['fck_span_list'].append(30.0)
+    while len(data['E_span_list']) < 10: data['E_span_list'].append(30e6)
+    while len(data['fck_wall_list']) < 11: data['fck_wall_list'].append(30.0)
+    while len(data['E_wall_list']) < 11: data['E_wall_list'].append(30e6)
+    
+    # 4. Filter invalid Surcharge/Soil if indices out of bounds
+    # (Rare, but prevents crashes on load)
+    # Solver handles this safely, so strict sanitization here is optional but good practice.
+    
+    return data
+
 def get_def():
     # Updated Defaults based on User Request
     I_def = calc_I(500)
@@ -146,7 +191,7 @@ def get_def():
         veh_l_str = "100.0"
         veh_s_str = "0.0"
 
-    return {
+    base_def = {
         'mode': 'Frame', 
         'E': 33e6, # Approx C30
         'num_spans': 1,
@@ -185,7 +230,7 @@ def get_def():
         'phi_mode': 'Calculate',
         
         # UPDATED DEFAULTS --------------------------
-        'mesh_size': 0.2,  # Changed from 0.5
+        'mesh_size': 2.0,  # Changed from 0.5
         'step_size': 0.2,
         'vehicle_direction': 'Both', # Changed from 'Forward'
         'use_shear_def': True,       # Changed from False
@@ -197,6 +242,7 @@ def get_def():
         'combine_surcharge_vehicle': False,
         'nu': 0.2
     }
+    return sanitize_input_data(base_def)
 
 def get_clear(name_suffix, current_mode):
     # Strictly cleared state: 0 Geometry, 1.0 Factors, Manual Phi=1.0
@@ -429,8 +475,11 @@ def load_data_from_df(df_load):
         
         # Ensure systems exist before forcing update
         if 'sysA' in st.session_state:
+            # SANITIZE LOADED DATA
+            st.session_state['sysA'] = sanitize_input_data(st.session_state['sysA'])
             force_ui_update('sysA', st.session_state['sysA'])
         if 'sysB' in st.session_state:
+            st.session_state['sysB'] = sanitize_input_data(st.session_state['sysB'])
             force_ui_update('sysB', st.session_state['sysB'])
         return True
     return False
@@ -478,7 +527,8 @@ if 'sysA' not in st.session_state:
             {'wall_idx': 1, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
             {'wall_idx': 1, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
         ]
-        st.session_state['sysA'] = d
+        # SANITIZE DEFAULT DATA
+        st.session_state['sysA'] = sanitize_input_data(d)
 
 if 'sysB' not in st.session_state: 
     # System B: 2 Spans
@@ -491,7 +541,8 @@ if 'sysB' not in st.session_state:
         {'wall_idx': 2, 'face': 'L', 'h': 4.0, 'q_top': 0.0, 'q_bot': 10.0},
         {'wall_idx': 2, 'face': 'R', 'h': 8.0, 'q_top': 0.0, 'q_bot': 20.0}
     ]
-    st.session_state['sysB'] = d
+    # SANITIZE DEFAULT DATA
+    st.session_state['sysB'] = sanitize_input_data(d)
 
 if 'name' not in st.session_state['sysA']: st.session_state['sysA']['name'] = "System A"
 if 'name' not in st.session_state['sysB']: st.session_state['sysB']['name'] = "System B"
@@ -549,25 +600,6 @@ if st.session_state.autosave_interval > 0 and not ui_locked:
             pass # Fail silently on autosave error
 
 # ---------------------------------------------
-# EXECUTION & RESULTS (Moved Up for Report)
-# ---------------------------------------------
-# We solve BEFORE report generation to pass cached results
-def safe_solve(params):
-    try:
-        return solver.run_raw_analysis(params)
-    except ValueError as e:
-        return None, None, str(e)
-
-raw_res_A, nodes_A, err_A = safe_solve(st.session_state['sysA'])
-raw_res_B, nodes_B, err_B = safe_solve(st.session_state['sysB'])
-
-if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
-if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
-
-has_res_A = (raw_res_A is not None) and (nodes_A is not None)
-has_res_B = (raw_res_B is not None) and (nodes_B is not None)
-
-# ---------------------------------------------
 # SIDEBAR
 # ---------------------------------------------
 
@@ -618,8 +650,10 @@ with st.sidebar.expander("Reset Data", expanded=False):
             action = st.session_state.reset_action
             
             def reset_system_state(target_key, new_data):
-                st.session_state[target_key] = new_data
-                force_ui_update(target_key, new_data)
+                # Ensure reset data is also sanitized!
+                clean_data = sanitize_input_data(new_data)
+                st.session_state[target_key] = clean_data
+                force_ui_update(target_key, clean_data)
 
             if mode == "A" or mode == "ALL":
                 current_mode = st.session_state['sysA']['mode']
@@ -799,7 +833,7 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     c_mesh, c_step = st.columns(2)
     def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
     def_step = st.session_state['sysA'].get('step_size', 0.2)
-    m_val = c_mesh.slider("Mesh Size [m]", 0.01, 2.0, def_mesh, 0.01, key="common_mesh_slider", disabled=ui_locked)
+    m_val = c_mesh.slider("Mesh Size [m]", 0.1, 5.0, def_mesh, 0.1, key="common_mesh_slider", disabled=ui_locked)
     s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider", disabled=ui_locked)
 
 if "common_mesh_slider" in st.session_state:
@@ -842,51 +876,7 @@ with st.sidebar.expander("Report Generation", expanded=False):
         st.session_state.is_generating_report = True
         st.rerun()
 
-    # EXECUTE GENERATION (If flag is set)
-    if st.session_state.is_generating_report:
-        with st.spinner("Rendering Report Figures..."):
-            buffer = io.BytesIO()
-            meta = {
-                'proj_no': st.session_state.rep_pno,
-                'proj_name': st.session_state.rep_pname,
-                'rev': st.session_state.rep_rev,
-                'author': st.session_state.rep_author,
-                'checker': st.session_state.rep_check,
-                'approver': st.session_state.rep_appr,
-                'comments': st.session_state.rep_comm
-            }
-            
-            # Progress Callback logic for Report Generator
-            current_prog = prog_bar.progress(0, text="Initializing Report...")
-            
-            def update_progress(p):
-                # Ensure p is between 0.0 and 1.0
-                val = max(0.0, min(1.0, float(p)))
-                current_prog.progress(val, text=f"Rendering Plots: {int(val*100)}%")
-
-            try:
-                # Pass pre-calculated results to avoid re-running solver
-                # NOTE: bricos_report must be updated to accept `version` and `progress_callback`
-                rep_gen = bricos_report.BricosReportGenerator(
-                    buffer, meta, st.session_state,
-                    raw_res_A, raw_res_B, nodes_A, nodes_B,
-                    version=APP_VERSION,
-                    progress_callback=update_progress
-                )
-                rep_gen.generate()
-                buffer.seek(0)
-                st.session_state['report_buffer'] = buffer
-                st.success("Report Generated!")
-                
-            except Exception as e:
-                st.error(f"Report Generation Failed: {e}")
-            
-            finally:
-                # Unlock UI and cleanup
-                st.session_state.is_generating_report = False
-                prog_bar.empty()
-                st.rerun()
-    
+    # DOWNLOAD BUTTON (Moved to Sidebar)
     if 'report_buffer' in st.session_state:
         st.download_button(
             label="Download Report PDF",
@@ -1306,6 +1296,70 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
     st.markdown("---")
     st.markdown("**Vehicle B**")
     handle_veh_inputs("B", f"{curr}_vehB_class", 'vehicleB_loads', 'vehicleB_space', 'vehicleB')
+
+# ---------------------------------------------
+# EXECUTION & RESULTS (Moved Up for Report)
+# ---------------------------------------------
+# We solve BEFORE report generation to pass cached results
+def safe_solve(params):
+    try:
+        return solver.run_raw_analysis(params)
+    except ValueError as e:
+        return None, None, str(e)
+
+raw_res_A, nodes_A, err_A = safe_solve(st.session_state['sysA'])
+raw_res_B, nodes_B, err_B = safe_solve(st.session_state['sysB'])
+
+if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
+if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
+
+has_res_A = (raw_res_A is not None) and (nodes_A is not None)
+has_res_B = (raw_res_B is not None) and (nodes_B is not None)
+
+# EXECUTE GENERATION (If flag is set)
+if st.session_state.is_generating_report:
+    # Spinner removed to keep UI clean (progress bar in sidebar is sufficient)
+    buffer = io.BytesIO()
+    meta = {
+        'proj_no': st.session_state.rep_pno,
+        'proj_name': st.session_state.rep_pname,
+        'rev': st.session_state.rep_rev,
+        'author': st.session_state.rep_author,
+        'checker': st.session_state.rep_check,
+        'approver': st.session_state.rep_appr,
+        'comments': st.session_state.rep_comm
+    }
+    
+    # Progress Callback logic for Report Generator
+    current_prog = prog_bar.progress(0, text="Initializing Report...")
+    
+    def update_progress(p):
+        # Ensure p is between 0.0 and 1.0
+        val = max(0.0, min(1.0, float(p)))
+        current_prog.progress(val, text=f"Rendering Plots: {int(val*100)}%")
+
+    try:
+        # Pass pre-calculated results to avoid re-running solver
+        # NOTE: bricos_report must be updated to accept `version` and `progress_callback`
+        rep_gen = bricos_report.BricosReportGenerator(
+            buffer, meta, st.session_state,
+            raw_res_A, raw_res_B, nodes_A, nodes_B,
+            version=APP_VERSION,
+            progress_callback=update_progress
+        )
+        rep_gen.generate()
+        buffer.seek(0)
+        st.session_state['report_buffer'] = buffer
+        st.success("Report Generated!")
+        
+    except Exception as e:
+        st.error(f"Report Generation Failed: {e}")
+    
+    finally:
+        # Unlock UI and cleanup
+        st.session_state.is_generating_report = False
+        prog_bar.empty()
+        st.rerun()
 
 # --- EXECUTION & RESULTS ---
 view_options = ["Total Envelope", "Selfweight", "Soil", "Surcharge", "Vehicle Envelope", "Vehicle Steps"]

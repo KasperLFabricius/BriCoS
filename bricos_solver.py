@@ -19,89 +19,94 @@ class FrameElement:
         if self.L_calc < 1e-6: self.L_calc = 1e-6
         
         # --- PROPERTIES & GEOMETRY ESTIMATION ---
-        vals = np.array(geom_data.get('vals', [1.0, 1.0, 1.0]), dtype=np.float64)
+        # Handling sub-element interpolation for variable sections
+        parent_vals = np.array(geom_data.get('vals', [1.0, 1.0, 1.0]), dtype=np.float64)
         v_type = int(geom_data.get('type', 0)) # 0=Input I, 1=Input H
         
+        # If this is a sub-element of a variable member, we must interpolate properties 
+        # based on the parent's full length and this element's local offset.
+        local_off = geom_data.get('local_offset', 0.0)
+        parent_L = geom_data.get('parent_L', self.L_calc)
+        
+        # Helper to interpolate at specific relative position
+        def interp_val(rel_x):
+            shape = int(geom_data.get('shape', 0))
+            if shape == 0: return parent_vals[0]
+            if shape == 1: return parent_vals[0]*(1-rel_x) + parent_vals[1]*rel_x # Linear
+            if shape == 2: # 3-Point
+                if rel_x <= 0.5:
+                    s = rel_x * 2.0
+                    return parent_vals[0]*(1-s) + parent_vals[1]*s
+                else:
+                    s = (rel_x - 0.5) * 2.0
+                    return parent_vals[1]*(1-s) + parent_vals[2]*s
+            return parent_vals[0]
+
+        # Calculate interpolated start/mid/end for THIS sub-element
+        rel_start = local_off / parent_L
+        rel_end = (local_off + self.L_calc) / parent_L
+        rel_mid = (rel_start + rel_end) / 2.0
+        
+        # Effective values for this sub-element
+        v_start = interp_val(rel_start)
+        v_end = interp_val(rel_end)
+        v_mid = interp_val(rel_mid)
+        
+        # If original was variable, sub-element is effectively Linear (trapezoidal) or 3-pt approx
+        # For simplicity in sub-elements, we treat them as Linear Taper between start/end 
+        # unless shape was 0 (Constant).
+        
+        eff_vals = [v_start, v_end, v_end] # Default structure for linear
+        eff_shape = 1 if geom_data.get('shape', 0) != 0 else 0
+        if eff_shape == 0: eff_vals = [v_start, v_start, v_start]
+
         # Defaults
         b_eff = shear_config.get('b_eff', 1.0)
         if b_eff < 0.01: b_eff = 1.0
         
         if v_type == 1:
-            # Input was H (Height). Assume width = 1.0m (Standard Strip)
-            # This preserves the specific "Height Input" logic
-            h_avg = np.mean(vals)
+            # Input was H (Height).
+            h_avg = (v_start + v_end)/2.0
             I_avg = (1.0 * h_avg**3) / 12.0
             A_approx = h_avg * 1.0
         else:
-            # Input was I (Inertia).
-            # FIX: Do NOT assume rigid (1e4). Estimate A from I assuming rectangular section.
-            # I = b * h^3 / 12  =>  h = (12 * I / b)^(1/3)
-            # A = b * h
-            I_avg = np.mean(vals)
+            # Input was I.
+            I_avg = (v_start + v_end)/2.0
             h_est = (12.0 * I_avg / b_eff)**(1.0/3.0)
             A_approx = b_eff * h_est
 
         # --- SHEAR DEFORMATION LOGIC ---
         phi_s = 0.0
         G_val = 0.0
-        # For shear area, we use the estimated h (or actual h)
         h_shear_calc = (12.0 * I_avg / b_eff)**(1.0/3.0)
         As_avg = (5.0/6.0) * b_eff * h_shear_calc
 
         if shear_config.get('use', False):
             nu = shear_config.get('nu', 0.2)
             G_val = float(E) / (2.0 * (1.0 + nu))
-            
             denom = (G_val * As_avg * self.L_calc**2)
             if denom > 1e-9:
                 phi_s = (12.0 * float(E) * I_avg) / denom
 
         # --- KERNEL SELECTION ---
-        
-        # Fallback for simple/legacy inputs treated as Constant
-        if 'I' in geom_data and 'vals' not in geom_data:
-            I_val = float(geom_data['I'])
+        if eff_shape == 0:
+            if v_type == 1: I_c = (1.0 * v_start**3) / 12.0
+            else: I_c = v_start
             
-            # Re-estimate A for this specific I
-            h_est_loc = (12.0 * I_val / b_eff)**(1.0/3.0)
-            A_loc = b_eff * h_est_loc
-            
-            # Re-calc specific phi
-            phi_s_specific = 0.0
-            if shear_config.get('use', False):
-                As_local = (5.0/6.0) * b_eff * h_est_loc
-                denom = (G_val * As_local * self.L_calc**2)
-                if denom > 1e-9:
-                    phi_s_specific = (12.0 * float(E) * I_val) / denom
-
             k_loc, k_glob, T, L, cx, cy = kernels.jit_beam_matrices(
-                node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_val, float(A_loc), phi_s_specific
+                node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_c, float(A_approx), phi_s
             )
-            self.E = E
-            self.I = I_val 
+            self.I = I_c
         else:
-            # Advanced / Variable Section Path
-            shape = int(geom_data.get('shape', 0))
-            
-            # If shape is Constant (0), use the fast prismatic kernel
-            if shape == 0:
-                if v_type == 1: I_c = (1.0 * vals[0]**3) / 12.0
-                else: I_c = vals[0]
-                
-                k_loc, k_glob, T, L, cx, cy = kernels.jit_beam_matrices(
-                    node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_c, float(A_approx), phi_s
-                )
-                self.I = I_c
-            else:
-                # Variable Section -> Numerical Integration in Kernel
-                k_loc, k_glob, T, L, cx, cy = kernels.jit_non_prismatic_matrices(
-                    node_i[0], node_i[1], node_j[0], node_j[1], float(E), float(G_val),
-                    shape, v_type, vals, float(A_approx), float(As_avg)
-                )
-                self.I = vals[0] if v_type == 0 else (vals[0]**3)/12
+            # Use Linear Taper (Shape Mode 1) for sub-elements of variable members
+            # This provides piecewise linear approximation of curves
+            k_loc, k_glob, T, L, cx, cy = kernels.jit_non_prismatic_matrices(
+                node_i[0], node_i[1], node_j[0], node_j[1], float(E), float(G_val),
+                1, v_type, np.array([v_start, v_end, 0.0]), float(A_approx), float(As_avg)
+            )
+            self.I = v_start if v_type == 0 else (v_start**3)/12
 
-            self.E = E
-
+        self.E = E
         self.k_local = k_loc
         self.k_global = k_glob
         self.T = T
@@ -180,7 +185,8 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
             elif load['type'] == 'distributed_trapezoid':
                 load_arr[k, :] = [2, val_1, val_2, p[2], p[3]]
 
-        num_pts = max(5, int(el.L / mesh_size) + 1)
+        # Points for visualization within this sub-element
+        num_pts = max(3, int(el.L / mesh_size) + 1)
         x_vals, M_vals, V_vals, N_vals = kernels.jit_internal_forces(
             el.L, f_start[:3], num_pts, load_arr
         )
@@ -196,13 +202,148 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
             'loads': active_loads,
             'f_start_local': np.array([N_vals[0], V_vals[0], M_vals[0]]),
             'f_end_local': np.array([-N_vals[-1], -V_vals[-1], -M_vals[-1]]),
-            'ni_id': ni, 'nj_id': nj
+            'ni_id': ni, 'nj_id': nj,
+            'parent': el_data.get('parent'),
+            'local_offset': el_data.get('local_offset', 0.0)
         }
     return results
 
+def aggregate_member_results(detailed_results, global_loads_override=None):
+    """
+    Groups sub-element results back into logical member results (W1, S1).
+    Concatenates arrays so visualization sees a continuous member.
+    
+    If global_loads_override is provided (dict: parent_id -> list of loads), 
+    it essentially 'bypasses' the sliced loads from sub-elements and uses the 
+    clean global definition for visualization. This fixes 'zebra striping' in load diagrams.
+    """
+    agg_res = {}
+    
+    # Group by parent
+    grouped = {}
+    for eid, res in detailed_results.items():
+        parent = res.get('parent', eid)
+        if parent not in grouped: grouped[parent] = []
+        grouped[parent].append(res)
+    
+    for parent, parts in grouped.items():
+        # Sort by local offset to ensure correct order
+        parts.sort(key=lambda x: x['local_offset'])
+        
+        # Base metadata from first part
+        base = parts[0]
+        last = parts[-1]
+        
+        total_L = sum(p['L'] for p in parts)
+        
+        # Concatenate Arrays
+        x_all = []
+        M_all, V_all, N_all = [], [], []
+        dx_all, dy_all = [], []
+        
+        raw_loads_all = []
+        
+        # Geometry for viz (start of first, end of last)
+        ni_final = base['ni']
+        nj_final = last['nj']
+        ni_id_final = base['ni_id']
+        nj_id_final = last['nj_id']
+        
+        for p in parts:
+            offset = p['local_offset']
+            x_all.append(p['x'] + offset)
+            M_all.append(p['M'])
+            V_all.append(p['V'])
+            N_all.append(p['N'])
+            dx_all.append(p['def_x'])
+            dy_all.append(p['def_y'])
+            
+            # If we do NOT have an override, we must stitch loads manually
+            if not global_loads_override or parent not in global_loads_override:
+                for load in p['loads']:
+                    new_load = copy.deepcopy(load)
+                    params = new_load['params']
+                    
+                    if load['type'] == 'point':
+                        # Point params: [P, x]
+                        params[1] += offset
+                    elif load['type'] == 'distributed_trapezoid':
+                        # Dist params: [q1, q2, x_start, x_end]
+                        params[2] += offset
+                        params[3] += offset
+                    
+                    raw_loads_all.append(new_load)
+        
+        final_loads = []
+        
+        # --- STRATEGY B: BYPASS WITH GLOBAL LOADS IF AVAILABLE ---
+        if global_loads_override and parent in global_loads_override:
+            # Use the clean, continuous global definition
+            final_loads = global_loads_override[parent]
+        else:
+            # --- FALLBACK: STITCHING LOGIC (LEGACY) ---
+            # Sort by Type & Position
+            def get_sort_tuple(d):
+                p = d['params']
+                if d['type'] == 'point': x_s = p[1]
+                elif d['type'] == 'distributed_trapezoid': x_s = p[2]
+                else: x_s = 0.0
+                return (d['type'], d.get('is_gravity', False), x_s)
+                
+            raw_loads_all.sort(key=get_sort_tuple)
+
+            # Merge
+            for curr in raw_loads_all:
+                if not final_loads:
+                    final_loads.append(curr)
+                    continue
+                    
+                prev = final_loads[-1]
+                is_trap = (curr['type'] == 'distributed_trapezoid') and (prev['type'] == 'distributed_trapezoid')
+                same_grav = (curr['is_gravity'] == prev['is_gravity'])
+                
+                if is_trap and same_grav:
+                    p_prev = prev['params']
+                    p_curr = curr['params']
+                    x_match = abs(p_prev[3] - p_curr[2]) < 1e-4
+                    q_match = abs(p_prev[1] - p_curr[0]) < 1e-4
+                    len_prev = max(1e-6, p_prev[3] - p_prev[2])
+                    len_curr = max(1e-6, p_curr[3] - p_curr[2])
+                    slope_prev = (p_prev[1] - p_prev[0]) / len_prev
+                    slope_curr = (p_curr[1] - p_curr[0]) / len_curr
+                    slope_match = abs(slope_prev - slope_curr) < 1e-4
+                    
+                    if x_match and q_match and slope_match:
+                        p_prev[1] = p_curr[1] # Update q_end
+                        p_prev[3] = p_curr[3] # Update x_end
+                        continue 
+                
+                final_loads.append(curr)
+
+        agg_res[parent] = {
+            'x': np.concatenate(x_all),
+            'M': np.concatenate(M_all),
+            'V': np.concatenate(V_all),
+            'N': np.concatenate(N_all),
+            'def_x': np.concatenate(dx_all),
+            'def_y': np.concatenate(dy_all),
+            'L': total_L,
+            'cx': base['cx'], 'cy': base['cy'],
+            'ni': ni_final, 'nj': nj_final,
+            'ni_id': ni_id_final, 'nj_id': nj_id_final,
+            'loads': final_loads, # Updated Loads list
+            'f_start_local': base['f_start_local'],
+            'f_end_local': last['f_end_local']
+        }
+        
+    return agg_res
+
 def calculate_reactions(nodes, detailed_results):
+    # Sum reactions from detailed sub-element results. 
+    # Logic remains valid because we iterate all sub-elements.
     reactions = {nid: np.zeros(3) for nid in nodes}
     for eid, data in detailed_results.items():
+        if 'f_start_local' not in data or 'f_end_local' not in data: continue
         c, s = data['cx'], data['cy']
         T_trans = np.array([[c, -s, 0],[s,  c, 0],[0,  0, 1]])
         f_start_glob = T_trans @ data['f_start_local'] 
@@ -228,7 +369,7 @@ def get_safe_error_result():
 def run_raw_analysis(params, phi_val_override=None):
     phi_mode = params.get('phi_mode', 'Calculate')
     
-    # --- PHI CALCULATION ---
+    # --- PHI CALCULATION (UNCHANGED) ---
     phi_log = []
     calc_phi = 1.0
     
@@ -305,12 +446,67 @@ def run_raw_analysis(params, phi_val_override=None):
     E_spans = params.get('E_span_list', [E_default] * num_spans)
     E_walls = params.get('E_wall_list', [E_default] * num_supp)
     
+    mesh_size = params.get('mesh_size', 0.5)
+
     def get_geom_data(idx, prefix_list_key, prefix_new_key):
         adv_key = f"{prefix_new_key}_{idx}"
         if adv_key in params:
             return params[adv_key]
-        val = params[prefix_list_key][idx]
-        return {'I': val}
+        val = float(params[prefix_list_key][idx])
+        # FIX: Ensure compatibility with FrameElement logic which expects 'vals' list
+        # We assume Type 0 (Inertia) and Shape 0 (Constant)
+        return {'type': 0, 'shape': 0, 'vals': [val, val, val]}
+
+    # Helper for unified element generation (H-Refinement)
+    next_node_id = 1000 # Start internal nodes at 1000
+
+    def create_member_mesh(start_xy, end_xy, start_node_id, end_node_id, props, member_type):
+        nonlocal next_node_id
+        
+        dx = end_xy[0] - start_xy[0]
+        dy = end_xy[1] - start_xy[1]
+        L_total = np.sqrt(dx**2 + dy**2)
+        
+        # Ensure at least 1 element
+        if L_total < 1e-6: return []
+
+        n_seg = max(1, int(np.ceil(L_total / mesh_size)))
+        d_vec = np.array([dx, dy]) / n_seg
+        
+        # Register Boundary Nodes
+        nodes[start_node_id] = start_xy
+        nodes[end_node_id] = end_xy
+        
+        sub_elems = []
+        prev_id = start_node_id
+        
+        for i in range(n_seg):
+            is_last = (i == n_seg - 1)
+            curr_node_id = end_node_id if is_last else next_node_id
+            
+            if not is_last:
+                pos = np.array(start_xy) + d_vec * (i + 1)
+                nodes[curr_node_id] = tuple(pos)
+                next_node_id += 1
+                
+            sub_id = f"{props['parent']}_{i}"
+            local_off = i * (L_total / n_seg)
+            
+            # Merge geometry props with metadata
+            # FIX: Unpack props['geom'] FIRST so solver-calculated keys (local_offset, etc.) overwrite any stale data
+            elem_data = {
+                **props['geom'],
+                'id': sub_id,
+                'nodes': (prev_id, curr_node_id),
+                'E': props['E'],
+                'parent': props['parent'],
+                'local_offset': local_off,
+                'parent_L': L_total
+            }
+            sub_elems.append(elem_data)
+            prev_id = curr_node_id
+            
+        return sub_elems
 
     # --- GEOMETRY CONSTRUCTION ---
     top_node_coords = {} 
@@ -320,6 +516,7 @@ def run_raw_analysis(params, phi_val_override=None):
     
     top_node_coords[0] = (0.0, 0.0) 
     
+    # Calculate Top Nodes Coordinates first
     for i in range(num_spans):
         L_horiz = params['L_list'][i]
         g_data = get_geom_data(i, 'Is_list', 'span_geom')
@@ -340,23 +537,44 @@ def run_raw_analysis(params, phi_val_override=None):
 
     TOLERANCE = 1e-4
 
+    # 1. BUILD WALLS
     if params['mode'] == 'Frame':
         for i in range(num_supp):
             h = params['h_list'][i]
-            if h < TOLERANCE: continue
+            
+            # Identify Top and Base Nodes
             nid_b, nid_t = 100+i, 200+i
-            t_x, t_y = top_node_coords[i]
-            nodes[nid_b] = (t_x, t_y - h)
-            nodes[nid_t] = (t_x, t_y)
+            
+            # Get Support Stiffness
             if i < len(supports_cfg): k_vec = supports_cfg[i]['k']
             else: k_vec = [1e14, 1e14, 1e14] 
-            restraints[nid_b] = k_vec
+            
+            if h < TOLERANCE:
+                # --- ZERO HEIGHT WALL HANDLING ---
+                # If h is near zero (e.g. transient init state), we cannot build a wall element.
+                # However, skipping it leaves the Span Node (200+i) floating.
+                # FIX: Apply the support DIRECTLY to the Top Node (200+i) to maintain stability.
+                t_x, t_y = top_node_coords[i]
+                nodes[nid_t] = (t_x, t_y)
+                restraints[nid_t] = k_vec
+                continue
+
+            t_x, t_y = top_node_coords[i]
+            base_xy = (t_x, t_y - h)
+            top_xy = (t_x, t_y)
+            
             e_val = E_walls[i] if i < len(E_walls) else E_default
             g_data = get_geom_data(i, 'Iw_list', 'wall_geom')
-            elems_base.append({
-                'id': f'W{i+1}', 'nodes': (nid_b, nid_t),
-                'E': e_val, **g_data
-            })
+            
+            walls_subs = create_member_mesh(
+                base_xy, top_xy, nid_b, nid_t, 
+                {'parent': f'W{i+1}', 'E': e_val, 'geom': g_data}, 'Wall'
+            )
+            elems_base.extend(walls_subs)
+            
+            # Apply Supports to base node as normal
+            restraints[nid_b] = k_vec
+            
     else: # Superstructure
         for i in range(num_supp):
             nid_t = 200+i
@@ -368,18 +586,26 @@ def run_raw_analysis(params, phi_val_override=None):
                 else: k_vec = [0.0, 1e14, 0.0]
             restraints[nid_t] = k_vec
 
+    # 2. BUILD SPANS
     for i in range(num_spans):
         if params['L_list'][i] < TOLERANCE: continue
         nid_s, nid_e = 200+i, 200+i+1
+        
+        # Coords pre-calculated
+        start_xy = top_node_coords[i]
+        end_xy = top_node_coords[i+1]
+        
         e_val = E_spans[i] if i < len(E_spans) else E_default
         g_data = get_geom_data(i, 'Is_list', 'span_geom')
-        elems_base.append({
-            'id': f'S{i+1}', 'nodes': (nid_s, nid_e),
-            'E': e_val, **g_data
-        })
+        
+        span_subs = create_member_mesh(
+            start_xy, end_xy, nid_s, nid_e,
+            {'parent': f'S{i+1}', 'E': e_val, 'geom': g_data}, 'Span'
+        )
+        elems_base.extend(span_subs)
 
     if len(elems_base) == 0:
-        return get_safe_error_result(), {}, "No valid structural elements defined (Length/Height > 0)."
+        return get_safe_error_result(), {}, "No valid structural elements defined."
 
     shear_config = {
         'use': params.get('use_shear_def', False),
@@ -395,6 +621,7 @@ def run_raw_analysis(params, phi_val_override=None):
         raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
 
     def solve_static(loads_dict):
+        # loads_dict now maps element_index -> list of loads
         F = np.zeros(NDOF)
         for idx, load_list in loads_dict.items():
             el = elem_objects[idx]
@@ -414,61 +641,161 @@ def run_raw_analysis(params, phi_val_override=None):
         D = K_inv @ F
         return get_detailed_results_optimized(elem_objects, elems_base, nodes, D, loads_dict, params.get('mesh_size', 0.5))
 
-    sw_loads_map = {}
-    for i in range(num_spans):
-        if params['sw_list'][i] != 0:
-            target_id = f'S{i+1}'
-            found_idx = -1
-            for k, el_info in enumerate(elems_base):
-                if el_info['id'] == target_id:
-                    found_idx = k
-                    break
-            if found_idx != -1:
-                val = params['sw_list'][i]
-                sw_loads_map[found_idx] = [{'type': 'distributed_trapezoid', 'is_gravity': True, 'params': [val, val, 0, elem_objects[found_idx].L]}]
-    res_sw = solve_static(sw_loads_map)
+    # --- LOAD SLICING HELPER ---
+    def add_member_load(target_map, parent_id, load_type, is_gravity, params_list):
+        """
+        Slices a global load definition (defined relative to member start 0..L)
+        onto the sub-elements of that member.
+        params_list: 
+          - Trapezoid: [q_start, q_end, x_start, L_load]
+          - Point: [P, x_pos]
+        """
+        # Find all sub-elements for this parent
+        indices = [k for k, el in enumerate(elems_base) if el['parent'] == parent_id]
+        if not indices: return
+        
+        # Sort indices by local_offset to traverse member linearly
+        indices.sort(key=lambda k: elems_base[k]['local_offset'])
+        
+        for idx in indices:
+            el_data = elems_base[idx]
+            el_obj = elem_objects[idx]
+            
+            loc_start = el_data['local_offset']
+            loc_end = loc_start + el_obj.L
+            
+            if load_type == 'distributed_trapezoid':
+                q_s_glob, q_e_glob, x_s_glob, L_load = params_list
+                x_e_glob = x_s_glob + L_load
+                
+                # Check overlap
+                overlap_start = max(loc_start, x_s_glob)
+                overlap_end = min(loc_end, x_e_glob)
+                
+                if overlap_end > overlap_start + 1e-6:
+                    # Calculate local coords on this sub-element (0..L_sub)
+                    local_x_s = overlap_start - loc_start
+                    local_x_e = overlap_end - loc_start
+                    
+                    # Interpolate q values
+                    # q(x) = qs + (qe-qs)*(x - xs_glob) / (xe_glob - xs_glob)
+                    # Denominator check
+                    len_glob = x_e_glob - x_s_glob
+                    
+                    if len_glob > 1e-9:
+                        q_sub_start = q_s_glob + (q_e_glob - q_s_glob) * (overlap_start - x_s_glob) / len_glob
+                        q_sub_end = q_s_glob + (q_e_glob - q_s_glob) * (overlap_end - x_s_glob) / len_glob
+                    else:
+                        q_sub_start = q_s_glob
+                        q_sub_end = q_e_glob
 
+                    if idx not in target_map: target_map[idx] = []
+                    target_map[idx].append({
+                        'type': 'distributed_trapezoid',
+                        'is_gravity': is_gravity,
+                        'params': [q_sub_start, q_sub_end, local_x_s, local_x_e]
+                    })
+                    
+            elif load_type == 'point':
+                P_val, x_pos_glob = params_list
+                if loc_start <= x_pos_glob <= loc_end:
+                    local_x = x_pos_glob - loc_start
+                    if idx not in target_map: target_map[idx] = []
+                    target_map[idx].append({
+                        'type': 'point',
+                        'is_gravity': is_gravity,
+                        'params': [P_val, local_x]
+                    })
+
+    # 1. Selfweight
+    sw_loads_map = {}
+    sw_global_loads = {} # Registry for Un-sliced loads
+
+    for i in range(num_spans):
+        val = params['sw_list'][i]
+        if val != 0:
+            pid = f'S{i+1}'
+            
+            # --- Capture Global Load for Viz ---
+            # NOTE: We can't rely on L_list[i] if geometry was aligned. 
+            # We must use the true structural length from mesh.
+            # But run_raw_analysis iterates L_list as source truth.
+            # Let's verify total length via sub-elements to be safe.
+            indices = [k for k, el in enumerate(elems_base) if el['parent'] == pid]
+            true_L = sum(elem_objects[k].L for k in indices)
+            
+            if pid not in sw_global_loads: sw_global_loads[pid] = []
+            sw_global_loads[pid].append({
+                'type': 'distributed_trapezoid', 'is_gravity': True,
+                'params': [val, val, 0, true_L]
+            })
+            
+            # Apply to solver (Sliced)
+            for idx in indices:
+                el_L = elem_objects[idx].L
+                if idx not in sw_loads_map: sw_loads_map[idx] = []
+                sw_loads_map[idx].append({
+                    'type': 'distributed_trapezoid', 'is_gravity': True, 
+                    'params': [val, val, 0, el_L]
+                })
+
+    res_sw_detailed = solve_static(sw_loads_map)
+    # Pass Global Overrides to aggregation
+    res_sw = aggregate_member_results(res_sw_detailed, sw_global_loads)
+
+    # 2. Soil
     soil_loads_map = {}
+    soil_global_loads = {}
+    
     if params['mode'] == 'Frame':
         for s in params.get('soil', []):
             if s['wall_idx'] < num_supp:
-                target_id = f'W{s["wall_idx"]+1}'
-                found_idx = -1
-                for k, el_info in enumerate(elems_base):
-                    if el_info['id'] == target_id:
-                        found_idx = k
-                        break
-                if found_idx != -1:
-                    sign = 1.0 if s['face'] == 'L' else -1.0 
-                    if found_idx not in soil_loads_map: soil_loads_map[found_idx] = []
-                    soil_loads_map[found_idx].append({
-                        'type': 'distributed_trapezoid', 'is_gravity': False, 'params': [sign*s['q_bot'], sign*s['q_top'], 0, s['h']]
-                    })
-    res_soil = solve_static(soil_loads_map)
+                pid = f'W{s["wall_idx"]+1}'
+                sign = 1.0 if s['face'] == 'L' else -1.0 
+                
+                # Capture Global Load
+                if pid not in soil_global_loads: soil_global_loads[pid] = []
+                soil_global_loads[pid].append({
+                    'type': 'distributed_trapezoid', 'is_gravity': False,
+                    'params': [sign*s['q_bot'], sign*s['q_top'], 0.0, s['h']]
+                })
+                
+                # Apply Sliced Load
+                add_member_load(soil_loads_map, pid, 'distributed_trapezoid', False, 
+                                [sign*s['q_bot'], sign*s['q_top'], 0.0, s['h']])
+                                
+    res_soil = aggregate_member_results(solve_static(soil_loads_map), soil_global_loads)
 
+    # 3. Surcharge
     surch_loads_map = {}
+    surch_global_loads = {}
+    
     if params['mode'] == 'Frame':
         for sur in params.get('surcharge', []):
             if sur['wall_idx'] < num_supp:
-                target_id = f'W{sur["wall_idx"]+1}'
-                found_idx = -1
-                for k, el_info in enumerate(elems_base):
-                    if el_info['id'] == target_id:
-                        found_idx = k
-                        break
-                if found_idx != -1:
-                    sign = 1.0 if sur['face'] == 'L' else -1.0
-                    if found_idx not in surch_loads_map: surch_loads_map[found_idx] = []
-                    surch_loads_map[found_idx].append({
-                        'type': 'distributed_trapezoid', 'is_gravity': False, 'params': [sign*sur['q'], sign*sur['q'], 0, sur['h']]
-                    })
-    res_surch = solve_static(surch_loads_map)
+                pid = f'W{sur["wall_idx"]+1}'
+                sign = 1.0 if sur['face'] == 'L' else -1.0
+                
+                # Capture Global Load
+                if pid not in surch_global_loads: surch_global_loads[pid] = []
+                surch_global_loads[pid].append({
+                    'type': 'distributed_trapezoid', 'is_gravity': False,
+                    'params': [sign*sur['q'], sign*sur['q'], 0.0, sur['h']]
+                })
+                
+                # Apply Sliced Load
+                add_member_load(surch_loads_map, pid, 'distributed_trapezoid', False,
+                                [sign*sur['q'], sign*sur['q'], 0.0, sur['h']])
+                                
+    res_surch = aggregate_member_results(solve_static(surch_loads_map), surch_global_loads)
 
     def get_empty_env():
+        # Just run empty static to get structure
+        res_empty_det = solve_static({})
+        res_empty_agg = aggregate_member_results(res_empty_det)
         env = {}
-        res_empty = solve_static({})
-        if res_empty:
-            for eid, data in res_empty.items():
+        if res_empty_agg:
+            for eid, data in res_empty_agg.items():
                 env[eid] = {
                     'M_max': np.zeros_like(data['M']), 'M_min': np.zeros_like(data['M']), 
                     'V_max': np.zeros_like(data['V']), 'V_min': np.zeros_like(data['V']),
@@ -491,6 +818,8 @@ def run_raw_analysis(params, phi_val_override=None):
         
         steps_out = {'Forward': [], 'Reverse': []}
         
+        # PREPARE SPAN ELEMENTS LIST FOR MOVING LOAD KERNEL
+        # Must include all sub-elements of all spans, ordered by global position
         sp_start_x = []
         sp_lens = []
         sp_el_indices = []
@@ -498,19 +827,17 @@ def run_raw_analysis(params, phi_val_override=None):
         sp_elems_info = [] 
         
         for sp_i in range(num_spans):
-            target_id = f'S{sp_i+1}'
-            el_idx = -1
-            for k, el_info in enumerate(elems_base):
-                if el_info['id'] == target_id:
-                    el_idx = k
-                    break
+            pid = f'S{sp_i+1}'
+            # Get all sub-elements for this span
+            indices = [k for k, el in enumerate(elems_base) if el['parent'] == pid]
+            indices.sort(key=lambda k: elems_base[k]['local_offset'])
             
-            if el_idx != -1:
-                true_L = elem_objects[el_idx].L
+            for k in indices:
+                true_L = elem_objects[k].L
                 sp_start_x.append(c_x)
                 sp_lens.append(true_L)
-                sp_el_indices.append(el_idx)
-                sp_elems_info.append((c_x, true_L, el_idx))
+                sp_el_indices.append(k)
+                sp_elems_info.append((c_x, true_L, k))
                 c_x += true_L
 
         sp_start_x = np.array(sp_start_x, dtype=np.float64)
@@ -534,9 +861,12 @@ def run_raw_analysis(params, phi_val_override=None):
             idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
             el_dof_indices[k] = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
         
+        # For envelope accumulation, we still use the kernel on sub-elements
+        # Then we must aggregate envelope data manually
         mesh_sz = params.get('mesh_size', 0.5)
         max_len = np.max(el_L) if len(el_L) > 0 else 1.0
-        n_pts_kernel = max(5, int(max_len / mesh_sz) + 1)
+        n_pts_kernel = max(3, int(max_len / mesh_sz) + 1)
+        
         S_matrices = kernels.jit_precompute_stress_recovery(n_elems, n_pts_kernel, el_L, el_k_local)
         env_results_accum = np.zeros((n_elems, n_pts_kernel, 10))
         
@@ -580,6 +910,7 @@ def run_raw_analysis(params, phi_val_override=None):
                     is_init_chunk
                 )
                 
+                # STORE STEPS (AGGREGATED)
                 for i_local in range(n_chunk):
                     x_front = x_chunk[i_local]
                     D_step = D_chunk[:, i_local]
@@ -598,38 +929,86 @@ def run_raw_analysis(params, phi_val_override=None):
                                 has_loads = True
                                 break
                     if has_loads:
-                        step_res = get_detailed_results_optimized(elem_objects, elems_base, nodes, D_step, step_loads_map, params.get('mesh_size', 0.5))
-                        v_steps_res_list.append({'x': x_front, 'res': step_res})
+                        # Get detailed sub-element results
+                        raw_step = get_detailed_results_optimized(elem_objects, elems_base, nodes, D_step, step_loads_map, params.get('mesh_size', 0.5))
+                        # Aggregate them
+                        agg_step = aggregate_member_results(raw_step)
+                        v_steps_res_list.append({'x': x_front, 'res': agg_step})
             
             steps_out[current_dir] = v_steps_res_list
             is_first_run = False 
 
+        # FILL ENVELOPE (Mapping from Kernel Accumulator -> Aggregated Dictionary)
+        # Note: Kernel accumulator `env_results_accum` is per sub-element.
+        # We need to map these back to parents.
         if len(v_loads_raw) > 0 and env_to_fill:
-            for k in range(n_elems):
-                eid = elems_base[k]['id']
-                t = env_to_fill[eid]
-                real_L = el_L[k]
-                target_x = t['base']['x']
-                kernel_x = np.linspace(0, real_L, n_pts_kernel)
-                valid_res = env_results_accum[k, :n_pts_kernel, :]
-                def interp_res(idx): return np.interp(target_x, kernel_x, valid_res[:, idx])
-
-                t['M_max'] = np.maximum(t['M_max'], interp_res(0))
-                t['M_min'] = np.minimum(t['M_min'], interp_res(1))
-                t['V_max'] = np.maximum(t['V_max'], interp_res(2))
-                t['V_min'] = np.minimum(t['V_min'], interp_res(3))
-                t['N_max'] = np.maximum(t['N_max'], interp_res(4))
-                t['N_min'] = np.minimum(t['N_min'], interp_res(5))
-                t['def_x_max'] = np.maximum(t['def_x_max'], interp_res(6))
-                t['def_x_min'] = np.minimum(t['def_x_min'], interp_res(7))
-                t['def_y_max'] = np.maximum(t['def_y_max'], interp_res(8))
-                t['def_y_min'] = np.minimum(t['def_y_min'], interp_res(9))
+            # First, group accumulator indices by parent
+            parent_map = {}
+            for k, el_data in enumerate(elems_base):
+                pid = el_data['parent']
+                if pid not in parent_map: parent_map[pid] = []
+                parent_map[pid].append((k, el_data['local_offset'], el_L[k]))
+            
+            for pid, parts in parent_map.items():
+                if pid not in env_to_fill: continue
+                target_env = env_to_fill[pid]
+                parts.sort(key=lambda x: x[1]) # Sort by local_offset
+                
+                # We need to construct full arrays for max/min by concatenating sub-element arrays
+                # Similar to aggregate_member_results but sourcing from accumulator
+                
+                M_max_list, M_min_list = [], []
+                V_max_list, V_min_list = [], []
+                N_max_list, N_min_list = [], []
+                dx_max_list, dx_min_list = [], []
+                dy_max_list, dy_min_list = [], []
+                
+                for (idx, offset, L_sub) in parts:
+                    # Extract arrays from accumulator row `idx`
+                    # valid length is n_pts_kernel
+                    valid_res = env_results_accum[idx, :n_pts_kernel, :]
+                    
+                    M_max_list.append(valid_res[:, 0])
+                    M_min_list.append(valid_res[:, 1])
+                    V_max_list.append(valid_res[:, 2])
+                    V_min_list.append(valid_res[:, 3])
+                    N_max_list.append(valid_res[:, 4])
+                    N_min_list.append(valid_res[:, 5])
+                    dx_max_list.append(valid_res[:, 6])
+                    dx_min_list.append(valid_res[:, 7])
+                    dy_max_list.append(valid_res[:, 8])
+                    dy_min_list.append(valid_res[:, 9])
+                    
+                target_env['M_max'] = np.concatenate(M_max_list)
+                target_env['M_min'] = np.concatenate(M_min_list)
+                target_env['V_max'] = np.concatenate(V_max_list)
+                target_env['V_min'] = np.concatenate(V_min_list)
+                target_env['N_max'] = np.concatenate(N_max_list)
+                target_env['N_min'] = np.concatenate(N_min_list)
+                target_env['def_x_max'] = np.concatenate(dx_max_list)
+                target_env['def_x_min'] = np.concatenate(dx_min_list)
+                target_env['def_y_max'] = np.concatenate(dy_max_list)
+                target_env['def_y_min'] = np.concatenate(dy_min_list)
 
         return steps_out
 
     steps_A = run_stepping('vehicle', veh_env_A)
     steps_B = run_stepping('vehicleB', veh_env_B)
 
+    # Reactions aggregation uses the detailed sub-element map if needed, 
+    # but since calculate_reactions iterates input dict, we need to pass the "raw" detailed structure?
+    # No, we can calculate reactions from the raw detailed results of SW
+    # `res_sw` is aggregated. `calculate_reactions` needs node_ids which are preserved in aggregation metadata.
+    
+    # We re-calculate reactions using res_sw (Aggregated). 
+    # The aggregated dictionary has 'ni_id', 'nj_id' for the whole member.
+    # BUT! Supports are on internal nodes too for walls? 
+    # Actually, supports are only on the defined nodes (Wall Base, etc.). 
+    # The sub-element bases (W1_0 start) corresponds to the Wall Base node. 
+    # The Aggregation preserves `ni_id` of the FIRST sub-element (which is the base).
+    # So `calculate_reactions` works on aggregated data correctly for start/end nodes.
+    # Internal node equilibrium is satisfied automatically.
+    
     return {
         'Selfweight': res_sw,
         'Soil': res_soil,
@@ -720,8 +1099,11 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
     combine_surcharge_vehicle = params.get('combine_surcharge_vehicle', False)
 
     for eid in all_ids:
-        n_p = 50
-        if eid in out_sw: n_p = len(out_sw[eid]['x'])
+        # Default zero arrays if missing, based on size of existing one
+        ref = out_sw.get(eid) or out_soil.get(eid) or out_veh_env.get(eid) or out_surch.get(eid)
+        if not ref: continue
+        n_p = len(ref['M_max'])
+        
         z = np.zeros(n_p)
         sw = out_sw.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
         sl = out_soil.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
