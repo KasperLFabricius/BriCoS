@@ -12,10 +12,12 @@ import bricos_viz as viz
 import bricos_report # New Report Module
 
 # ==========================================
-# UI SETUP & CONFIGURATION
+# GLOBAL CONFIGURATION
 # ==========================================
 
-st.set_page_config(layout="wide", page_title="BriCoS v0.30")
+APP_VERSION = "0.31"
+
+st.set_page_config(layout="wide", page_title=f"BriCoS v{APP_VERSION}")
 
 # --- PATH HELPER FOR EXE ---
 def resource_path(relative_path):
@@ -69,16 +71,17 @@ logo_path = resource_path("logo.png")
 if os.path.exists(logo_path):
     st.sidebar.image(logo_path, width='stretch')
 
-st.title("BriCoS v0.30 - Bridge Comparison Software")
+st.title(f"BriCoS v{APP_VERSION} - Bridge Comparison Software")
 
 # --- PERSISTENT STATE INITIALIZATION ---
 if 'keep_view_case' not in st.session_state: st.session_state.keep_view_case = "Total Envelope"
 if 'keep_active_veh_step' not in st.session_state: st.session_state.keep_active_veh_step = "Vehicle A"
 if 'keep_step_view_sys' not in st.session_state: st.session_state.keep_step_view_sys = "System A"
+if 'is_generating_report' not in st.session_state: st.session_state.is_generating_report = False
 
 # --- GLOBAL LOCK STATE ---
-# Removed blocking logic. UI is always active.
-ui_locked = False 
+# Locks UI if report generation is in progress
+ui_locked = st.session_state.is_generating_report
 
 def calc_I(h_mm):
     return (1.0 * (h_mm/1000.0)**3) / 12.0
@@ -457,7 +460,7 @@ has_res_B = (raw_res_B is not None) and (nodes_B is not None)
 
 # --- ABOUT SECTION ---
 with st.sidebar.expander("About", expanded=False):
-    st.markdown("**BriCoS v0.30**")
+    st.markdown(f"**BriCoS v{APP_VERSION}**")
     st.write("Author: Kasper Lindskov Fabricius")
     st.write("Email: Kasper.LindskovFabricius@sweco.dk")
     st.write("A specialized Finite Element Analysis (FEM) tool for rapid bridge analysis and comparison.")
@@ -569,7 +572,7 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
         df = pd.DataFrame(rows)
         return df.to_csv(index=False).encode('utf-8')
 
-    st.download_button("Download Configuration (.csv)", to_csv(), "brico_config.csv", "text/csv")
+    st.download_button("Download Configuration (.csv)", to_csv(), "brico_config.csv", "text/csv", disabled=ui_locked)
 
     uploaded_file = st.file_uploader("Upload Configuration (.csv)", type="csv", key=f"uploader_{st.session_state.uploader_key}", disabled=ui_locked)
     if uploaded_file is not None:
@@ -684,8 +687,8 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     val_beff = st.session_state['sysA'].get('b_eff', 1.0)
     val_nu = st.session_state['sysA'].get('nu', 0.2)
     
-    new_beff = col_beff.number_input("Effective Width (b_eff) [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
-    new_nu = col_nu.number_input("Poisson's Ratio (ν)", value=float(val_nu), min_value=0.0, max_value=0.5, step=0.05, help=help_nu, key="nu_input_sidebar", disabled=ui_locked)
+    new_beff = col_beff.number_input(r"$b_{eff}$ [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
+    new_nu = col_nu.number_input(r"Poisson's Ratio ($\nu$)", value=float(val_nu), min_value=0.0, max_value=0.5, step=0.05, help=help_nu, key="nu_input_sidebar", disabled=ui_locked)
     
     st.session_state['sysA']['b_eff'] = new_beff
     st.session_state['sysB']['b_eff'] = new_beff
@@ -732,8 +735,17 @@ with st.sidebar.expander("Report Generation", expanded=False):
     
     st.text_area("Comments", height=100, key="rep_comm", disabled=ui_locked)
     
+    # Progress Bar Placeholder
+    prog_bar = st.empty()
+    
+    # TRIGGER GENERATION (Sets lock flag and reruns)
     if st.button("Generate PDF Report", type="primary", disabled=ui_locked):
-        with st.spinner("Rendering Report..."):
+        st.session_state.is_generating_report = True
+        st.rerun()
+
+    # EXECUTE GENERATION (If flag is set)
+    if st.session_state.is_generating_report:
+        with st.spinner("Rendering Report Figures..."):
             buffer = io.BytesIO()
             meta = {
                 'proj_no': st.session_state.rep_pno,
@@ -744,20 +756,37 @@ with st.sidebar.expander("Report Generation", expanded=False):
                 'approver': st.session_state.rep_appr,
                 'comments': st.session_state.rep_comm
             }
+            
+            # Progress Callback logic for Report Generator
+            current_prog = prog_bar.progress(0, text="Initializing Report...")
+            
+            def update_progress(p):
+                # Ensure p is between 0.0 and 1.0
+                val = max(0.0, min(1.0, float(p)))
+                current_prog.progress(val, text=f"Rendering Plots: {int(val*100)}%")
+
             try:
                 # Pass pre-calculated results to avoid re-running solver
-                # This makes generation virtually instant.
+                # NOTE: bricos_report must be updated to accept `version` and `progress_callback`
                 rep_gen = bricos_report.BricosReportGenerator(
                     buffer, meta, st.session_state,
-                    raw_res_A, raw_res_B, nodes_A, nodes_B
+                    raw_res_A, raw_res_B, nodes_A, nodes_B,
+                    version=APP_VERSION,
+                    progress_callback=update_progress
                 )
                 rep_gen.generate()
                 buffer.seek(0)
                 st.session_state['report_buffer'] = buffer
                 st.success("Report Generated!")
-                # Removed st.rerun() to prevent UI locking
+                
             except Exception as e:
                 st.error(f"Report Generation Failed: {e}")
+            
+            finally:
+                # Unlock UI and cleanup
+                st.session_state.is_generating_report = False
+                prog_bar.empty()
+                st.rerun()
     
     if 'report_buffer' in st.session_state:
         st.download_button(
@@ -766,8 +795,6 @@ with st.sidebar.expander("Report Generation", expanded=False):
             file_name=f"BriCoS_Report_{st.session_state.rep_pno}.pdf",
             mime="application/pdf"
         )
-        # Removed "Clear Report & Unlock UI" button as requested.
-        # The UI is no longer locked post-generation.
 
 # ---------------------------------------------
 # STICKY SIDEBAR: ACTIVE SYSTEM & NAMES
@@ -781,7 +808,7 @@ with st.sidebar.container():
     st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'], disabled=ui_locked)
 
     sys_map = {"sysA": f"{st.session_state['sysA']['name']} (Blue)", "sysB": f"{st.session_state['sysB']['name']} (Red)"}
-    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True)
+    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True, disabled=ui_locked)
 
     if active_sys_key == 'sysA':
         st.markdown("""<style>[data-testid="stSidebar"] { background-color: #F0F8FF; }</style>""", unsafe_allow_html=True)
@@ -881,7 +908,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
     p['num_spans'] = n_spans
     
     is_ec = (p['e_mode'] == 'Eurocode')
-    lbl_mat = "f_ck [MPa]" if is_ec else "E [GPa]"
+    lbl_mat = r"$f_{ck}$ [MPa]" if is_ec else r"$E$ [GPa]"
     help_mat_col = "Concrete Cylinder Strength (f_ck)." if is_ec else "Elastic Modulus (Young's Modulus)."
     
     st.markdown("---")
@@ -908,7 +935,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         is_adv = (s_geom['shape'] != 0) or (s_geom['type'] != 0) or (s_geom.get('align_type', 0) != 0)
         
         if not is_adv:
-            val = c2.number_input(f"I{i+1} [m⁴]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help="Inertia" if i==0 else None, disabled=ui_locked)
+            val = c2.number_input(f"I{i+1} " + r"[$\text{m}^4$]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", help="Inertia" if i==0 else None, disabled=ui_locked)
             p['Is_list'][i] = val
             s_geom['vals'] = [val, val, val]
         else:
@@ -944,7 +971,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         is_adv_w = (w_geom['shape'] != 0) or (w_geom['type'] != 0)
 
         if not is_adv_w:
-            val_w = c2.number_input(f"I [m⁴]", value=float(p['Iw_list'][i]), format="%.4f", disabled=(is_super or ui_locked), key=f"{curr}_iw{i}", help="Inertia" if i==0 else None)
+            val_w = c2.number_input(r"I [$\text{m}^4$]", value=float(p['Iw_list'][i]), format="%.4f", disabled=(is_super or ui_locked), key=f"{curr}_iw{i}", help="Inertia" if i==0 else None)
             p['Iw_list'][i] = val_w
             w_geom['vals'] = [val_w, val_w, val_w]
         else:
@@ -975,12 +1002,12 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         c_sl, c_sr = st.columns(2)
         
         h_L = c_sl.number_input("H_soil_left [m]", value=ex_SoilLeft['h'] if ex_SoilLeft else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_shl{i}", help="Soil on Left Face (Pushing Right)")
-        qL_bot = c_sl.number_input("q_bot [kN/m²]", value=ex_SoilLeft['q_bot'] if ex_SoilLeft else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqlb{i}")
-        qL_top = c_sl.number_input("q_top [kN/m²]", value=ex_SoilLeft['q_top'] if ex_SoilLeft else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqlt{i}")
+        qL_bot = c_sl.number_input(r"q_bot [$\text{kN/m}^2$]", value=ex_SoilLeft['q_bot'] if ex_SoilLeft else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqlb{i}")
+        qL_top = c_sl.number_input(r"q_top [$\text{kN/m}^2$]", value=ex_SoilLeft['q_top'] if ex_SoilLeft else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqlt{i}")
         
         h_R = c_sr.number_input("H_soil_right [m]", value=ex_SoilRight['h'] if ex_SoilRight else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_shr{i}", help="Soil on Right Face (Pushing Left)")
-        qR_bot = c_sr.number_input("q_bot [kN/m²]", value=ex_SoilRight['q_bot'] if ex_SoilRight else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqrb{i}")
-        qR_top = c_sr.number_input("q_top [kN/m²]", value=ex_SoilRight['q_top'] if ex_SoilRight else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqrt{i}")
+        qR_bot = c_sr.number_input(r"q_bot [$\text{kN/m}^2$]", value=ex_SoilRight['q_bot'] if ex_SoilRight else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqrb{i}")
+        qR_top = c_sr.number_input(r"q_top [$\text{kN/m}^2$]", value=ex_SoilRight['q_top'] if ex_SoilRight else 0.0, disabled=(is_super or ui_locked), key=f"{curr}_sqrt{i}")
 
         if not is_super:
             p['soil'] = [x for x in p['soil'] if x['wall_idx']!=i]
@@ -1016,7 +1043,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         vals = target_geom['vals']
         c_v1, c_v2, c_v3 = st.columns(3)
         
-        lbl_v = "I [m⁴]" if target_geom['type']==0 else "H [m]"
+        lbl_v = r"I [$\text{m}^4$]" if target_geom['type']==0 else "H [m]"
         v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1_{sel_el}", disabled=ui_locked)
         
         v2 = vals[1]
@@ -1194,15 +1221,15 @@ if 'result_mode' not in st.session_state: st.session_state['result_mode'] = "Des
 
 r1_col1, r1_col2 = st.columns([3, 1])
 with r1_col1:
-    man_scale = st.slider("Target Diagram Height [m]", 0.5, 10.0, float(st.session_state['sysA'].get('scale_manual', 2.0)), 0.1)
+    man_scale = st.slider("Target Diagram Height [m]", 0.5, 10.0, float(st.session_state['sysA'].get('scale_manual', 2.0)), 0.1, disabled=ui_locked)
 with r1_col2:
-    show_labels = st.checkbox("Labels", value=True)
+    show_labels = st.checkbox("Labels", value=True, disabled=ui_locked)
 
 r2_col1, r2_col2 = st.columns([3, 1])
 with r2_col1:
-    support_size = st.slider("Support Size", 0.1, 2.0, 0.5, 0.1)
+    support_size = st.slider("Support Size", 0.1, 2.0, 0.5, 0.1, disabled=ui_locked)
 with r2_col2:
-    show_supports = st.checkbox("Show Supports", value=True)
+    show_supports = st.checkbox("Show Supports", value=True, disabled=ui_locked)
 
 # Update Session State
 st.session_state['sysA']['scale_manual'] = man_scale
@@ -1213,18 +1240,18 @@ with st.container():
     st.markdown('<div id="sticky-results-marker"></div>', unsafe_allow_html=True)
     c_res_tool1, c_res_tool2, c_res_tool3 = st.columns([2, 2, 2])
 
-    view_case = c_res_tool1.selectbox("Load Case", view_options, index=v_idx, key="view_case_selector", on_change=set_view_case)
+    view_case = c_res_tool1.selectbox("Load Case", view_options, index=v_idx, key="view_case_selector", on_change=set_view_case, disabled=ui_locked)
 
     show_sys_mode = "Both"
     if view_case != "Vehicle Steps":
         tog_map = {"Both": "Both", "System A": st.session_state['sysA']['name'], "System B": st.session_state['sysB']['name']}
-        show_sys_mode = c_res_tool2.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle")
+        show_sys_mode = c_res_tool2.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle", disabled=ui_locked)
 
     curr_res_mode = st.session_state.get('result_mode', "Design (ULS)")
     res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
     try: res_idx = res_opts.index(curr_res_mode)
     except: res_idx = 0
-    st.session_state['result_mode'] = c_res_tool3.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_main_ui")
+    st.session_state['result_mode'] = c_res_tool3.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_main_ui", disabled=ui_locked)
     result_mode_val = st.session_state['result_mode']
 
 # -----------------------------
@@ -1257,7 +1284,7 @@ if view_case == "Vehicle Steps":
     
     if is_both_active:
         c_veh_tog, c_dir_tog, c_step_slide, c_step_tog = st.columns([1, 1, 2, 1])
-        step_dir_sel = c_dir_tog.radio("Step Direction:", ["Forward", "Reverse"], horizontal=True, key="step_dir_radio")
+        step_dir_sel = c_dir_tog.radio("Step Direction:", ["Forward", "Reverse"], horizontal=True, key="step_dir_radio", disabled=ui_locked)
         if step_dir_sel == "Reverse": step_dir_suffix = "_Rev"
     elif is_reverse_only:
         c_veh_tog, c_step_slide, c_step_tog = st.columns([1, 2, 1])
@@ -1270,7 +1297,7 @@ if view_case == "Vehicle Steps":
     def set_anim_veh(): st.session_state.keep_active_veh_step = st.session_state.anim_veh_radio
     try: av_idx = ["Vehicle A", "Vehicle B"].index(st.session_state.keep_active_veh_step)
     except ValueError: av_idx = 0
-    active_veh_step = c_veh_tog.radio("Anim Vehicle:", ["Vehicle A", "Vehicle B"], index=av_idx, horizontal=True, key="anim_veh_radio", on_change=set_anim_veh)
+    active_veh_step = c_veh_tog.radio("Anim Vehicle:", ["Vehicle A", "Vehicle B"], index=av_idx, horizontal=True, key="anim_veh_radio", on_change=set_anim_veh, disabled=ui_locked)
     
     base_key = "Vehicle Steps A" if active_veh_step == "Vehicle A" else "Vehicle Steps B"
     veh_key_res = f"{base_key}{step_dir_suffix}"
@@ -1282,7 +1309,7 @@ if view_case == "Vehicle Steps":
     try: ss_idx = ["Both", "System A", "System B"].index(st.session_state.keep_step_view_sys)
     except ValueError: ss_idx = 0
     step_tog_map = {"Both": "Both", "System A": st.session_state['sysA']['name'], "System B": st.session_state['sysB']['name']}
-    step_view_sys = c_step_tog.radio("View System:", ["Both", "System A", "System B"], index=ss_idx, format_func=lambda x: step_tog_map[x], horizontal=True, key="step_sys_radio", on_change=set_step_sys)
+    step_view_sys = c_step_tog.radio("View System:", ["Both", "System A", "System B"], index=ss_idx, format_func=lambda x: step_tog_map[x], horizontal=True, key="step_sys_radio", on_change=set_step_sys, disabled=ui_locked)
     
     show_A_step = (step_view_sys == "Both" or step_view_sys == "System A")
     show_B_step = (step_view_sys == "Both" or step_view_sys == "System B")
@@ -1306,7 +1333,7 @@ if view_case == "Vehicle Steps":
         rA, rB = {}, {} # Ensure empty so nothing breaks downstream
     else:
         max_steps = max(1, len(list_A), len(list_B))
-        step_idx = c_step_slide.slider("Step Index", 0, max_steps-1, 0, key="veh_step_slider_persistent")
+        step_idx = c_step_slide.slider("Step Index", 0, max_steps-1, 0, key="veh_step_slider_persistent", disabled=ui_locked)
         
         st.markdown("---")
         def get_step(res, idx, k_res, f_factor):
@@ -1515,7 +1542,8 @@ with t2:
             "Download Detailed Data (.csv)", 
             df_detailed.to_csv(index=False).encode('utf-8'), 
             f"bricos_detailed_{view_case.replace(' ', '_')}.csv", 
-            "text/csv"
+            "text/csv",
+            disabled=ui_locked
         )
     else:
         st.info("No detailed data available for this view.")

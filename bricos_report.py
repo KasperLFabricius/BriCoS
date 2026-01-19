@@ -2,7 +2,7 @@ import io
 import datetime
 import numpy as np
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
@@ -52,10 +52,13 @@ class NumberedCanvas(canvas.Canvas):
 # ==========================================
 
 class BricosReportGenerator:
-    def __init__(self, buffer, meta_data, session_state, raw_res_A, raw_res_B, nodes_A, nodes_B):
+    def __init__(self, buffer, meta_data, session_state, raw_res_A, raw_res_B, nodes_A, nodes_B, version="0.30", progress_callback=None):
         self.buffer = buffer
         self.meta = meta_data
         self.state = session_state
+        self.version = version
+        self.progress_callback = progress_callback
+        
         self.styles = getSampleStyleSheet()
         self.elements = []
         self.chapter_count = 1
@@ -82,12 +85,18 @@ class BricosReportGenerator:
         # 4 workers is usually a sweet spot for I/O bound image generation without starving UI
         self.executor = ThreadPoolExecutor(max_workers=4)
 
+    def _update_progress(self, val):
+        if self.progress_callback:
+            self.progress_callback(val)
+
     def generate(self):
+        self._update_progress(0.05)
+        
         # 1. Cover / Metadata
         self._add_header_section()
         self.elements.append(PageBreak())
         
-        # 2. Background Theory (New Chapter 1)
+        # 2. Background Theory
         self.elements.append(Paragraph(f"{self.chapter_count}. Basis of Analysis & Methodology", self.styles['SwecoSubHeader']))
         self._add_theory_section()
         self.elements.append(PageBreak())
@@ -107,51 +116,65 @@ class BricosReportGenerator:
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
-        # 5. Total Envelope (ULS)
+        self._update_progress(0.15)
+        
+        # 5. Total Envelope (ULS) [Progress 15% -> 35%]
         self.elements.append(Paragraph(f"{self.chapter_count}. Design Results (ULS) - Total Envelope", self.styles['SwecoSubHeader']))
         eq_txt = self._build_uls_equation_text()
         self.elements.append(Paragraph(f"<b>Formula:</b> {eq_txt}", self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
-        self._add_results_section("Design (ULS)") 
+        # Define progress range for this section
+        self._add_results_section("Design (ULS)", prog_range=(0.15, 0.35)) 
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
-        # 6. Total Envelope (SLS)
+        # 6. Total Envelope (SLS) [Progress 35% -> 50%]
         self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results (SLS) - Total Envelope", self.styles['SwecoSubHeader']))
         self.elements.append(Paragraph(r"<b>Formula:</b> 1.0 · Permanent + 1.0 · Variable (No KFI, No Gamma, No Phi)", self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
-        self._add_results_section("Characteristic (No Dynamic Factor)")
+        self._add_results_section("Characteristic (No Dynamic Factor)", prog_range=(0.35, 0.50))
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
-        # 7. Load Components (Unfactored)
+        # 7. Load Components (Unfactored) [Progress 50% -> 75%]
         has_sw = any(v > 0 for v in self.params_A['sw_list']) or any(v > 0 for v in self.params_B['sw_list'])
         has_soil = len(self.params_A.get('soil', [])) > 0 or len(self.params_B.get('soil', [])) > 0
         has_surch = len(self.params_A.get('surcharge', [])) > 0 or len(self.params_B.get('surcharge', [])) > 0
         
+        # Calculate slices for active components to distribute progress evenly
+        active_comps = sum([has_sw, has_soil, has_surch])
+        prog_start = 0.50
+        prog_total_span = 0.25
+        prog_step = prog_total_span / max(1, active_comps)
+        
         if has_sw:
             self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Selfweight (Unfactored)", self.styles['SwecoSubHeader']))
-            self._add_component_section("Selfweight")
+            self._add_component_section("Selfweight", prog_range=(prog_start, prog_start + prog_step))
             self.elements.append(PageBreak())
             self.chapter_count += 1
+            prog_start += prog_step
             
         if has_soil:
             self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Soil (Unfactored)", self.styles['SwecoSubHeader']))
-            self._add_component_section("Soil")
+            self._add_component_section("Soil", prog_range=(prog_start, prog_start + prog_step))
             self.elements.append(PageBreak())
             self.chapter_count += 1
+            prog_start += prog_step
             
         if has_surch:
             self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Surcharge (Unfactored)", self.styles['SwecoSubHeader']))
-            self._add_component_section("Surcharge")
+            self._add_component_section("Surcharge", prog_range=(prog_start, prog_start + prog_step))
             self.elements.append(PageBreak())
             self.chapter_count += 1
+            prog_start += prog_step
         
-        # 8. Critical Vehicle Steps
+        # 8. Critical Vehicle Steps [Progress 75% -> 95%]
         self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
         self.elements.append(Paragraph("Vehicle positions causing peak effects per span, ordered by: Min M, Max M, Min V, Max V.", self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
-        self._add_smart_vehicle_steps()
+        self._add_smart_vehicle_steps(prog_range=(0.75, 0.95))
+
+        self._update_progress(0.98)
 
         # Shutdown Executor
         self.executor.shutdown(wait=True)
@@ -163,11 +186,8 @@ class BricosReportGenerator:
             topMargin=2*cm, bottomMargin=2*cm
         )
         doc.build(self.elements, canvasmaker=NumberedCanvas)
+        self._update_progress(1.0)
 
-    # ... [THEORY, HEADER, GLOBAL SETTINGS, INPUT SUMMARY methods remain unchanged] ...
-    # ... I will include them for completeness or brevity? 
-    # ... To be safe and compliant with "Updated File" type, I must include full content.
-    
     def _add_theory_section(self):
         """Adds standard background theory text."""
         styles = self.styles
@@ -177,7 +197,7 @@ class BricosReportGenerator:
             self.elements.append(Spacer(1, 0.2*cm))
 
         add_sub("1.1 Calculation Method", 
-            "The structural analysis is performed using <b>BriCoS v0.30</b>, a proprietary Finite Element Analysis (FEM) tool based on the Matrix Stiffness Method for 2D planar frames.")
+            f"The structural analysis is performed using <b>BriCoS v{self.version}</b>, a proprietary Finite Element Analysis (FEM) tool based on the Matrix Stiffness Method for 2D planar frames.")
 
         add_sub("1.2 Element Formulation", 
             "The structure is discretized using advanced beam elements that account for both constant and variable cross-sections. Two formulations are available:")
@@ -187,6 +207,7 @@ class BricosReportGenerator:
             "<b>Timoshenko Theory:</b> Explicitly accounts for shear deformation, ensuring accuracy for deep members (e.g., piers, thick slabs). The stiffness matrix is modified by the shear parameter:"
         ]
         
+        # Superscript formatting for formula
         eq_phi = "<i>&Phi;<sub>s</sub></i> = 12<i>EI</i> / (<i>GA<sub>s</sub>L</i><sup>2</sup>)"
         
         bullets2 = [
@@ -266,14 +287,14 @@ class BricosReportGenerator:
             self.elements.append(Paragraph("[Sweco Logo Missing]", self.styles['Normal']))
             
         self.elements.append(Spacer(1, 1*cm))
-        self.elements.append(Paragraph("BriCoS Analysis Report", self.styles['Title']))
+        self.elements.append(Paragraph(f"BriCoS Analysis Report (v{self.version})", self.styles['Title']))
         self.elements.append(Spacer(1, 1*cm))
         
         data = [
             ["Project No:", self.meta.get('proj_no', ''), "Date:", datetime.date.today().strftime("%Y-%m-%d")],
             ["Project Name:", self.meta.get('proj_name', ''), "Revision:", self.meta.get('rev', '')],
             ["Author:", self.meta.get('author', ''), "Checker:", self.meta.get('checker', '')],
-            ["Approver:", self.meta.get('approver', ''), "Analysis Ver:", "v0.30"]
+            ["Approver:", self.meta.get('approver', ''), "Analysis Ver:", f"v{self.version}"]
         ]
         
         t = Table(data, colWidths=[2.5*cm, 5.5*cm, 2.5*cm, 5.5*cm], hAlign='LEFT')
@@ -305,10 +326,11 @@ class BricosReportGenerator:
         use_shear = p.get('use_shear_def', False)
         shear_status = "Enabled (Timoshenko)" if use_shear else "Disabled (Euler-Bernoulli)"
         data.append(["Shear Deformation", shear_status, "stiffness matrix formulation"])
+        # Unicode subscript for effective width
         data.append(["Effective Width (b_eff)", f"{p.get('b_eff', 1.0)} m", "Used for Shear Area & Axial Area estimation"])
 
         if use_shear:
-            data.append(["Poisson's Ratio (nu)", f"{p.get('nu', 0.2)}", "Used for Shear Modulus G"])
+            data.append(["Poisson's Ratio (ν)", f"{p.get('nu', 0.2)}", "Used for Shear Modulus G"])
         
         t = self._make_std_table(data, [4*cm, 5*cm, 7*cm])
         self.elements.append(KeepTogether([t]))
@@ -445,6 +467,7 @@ class BricosReportGenerator:
 
         # 3. SUPPORTS
         self.elements.append(Spacer(1, 0.2*cm))
+        # Note: Unicode superscripts in headers if needed, though Kx/Ky are plain here
         supp_data = [["Support Node", "Type", "Stiffness (Kx, Ky, Km) [kN/m, kN/m, kNm/rad]"]]
         has_supp = False
         supp_list = p.get('supports', [])
@@ -473,7 +496,8 @@ class BricosReportGenerator:
         if soil_list:
             self.elements.append(Spacer(1, 0.2*cm))
             self.elements.append(Paragraph("Soil Loads (Earth Pressure):", self.styles['SwecoSmall']))
-            soil_table = [["Wall", "Face", "Height [m]", "q_top [kN/m2]", "q_bot [kN/m2]"]]
+            # Unicode Superscripts: kN/m²
+            soil_table = [["Wall", "Face", "Height [m]", "q_top [kN/m²]", "q_bot [kN/m²]"]]
             for s in soil_list:
                 soil_table.append([
                     f"W{s['wall_idx']+1}", s['face'], f"{s['h']:.2f}", f"{s['q_top']:.1f}", f"{s['q_bot']:.1f}"
@@ -496,42 +520,63 @@ class BricosReportGenerator:
         add_veh_table('vehicleB', "B")
 
     # -----------------------------------------------
-    # PARALLEL RENDERING HELPER
+    # PARALLEL RENDERING HELPER (WITH PROGRESS)
     # -----------------------------------------------
     def _render_plot_task(self, fig_kwargs):
         """Executed in ThreadPool to offload Plotly I/O."""
         try:
             fig = viz.create_plotly_fig(**fig_kwargs)
-            # OPTIMIZATION: Reduced scale from 3.0 to 1.5 (User Request)
             b = io.BytesIO()
+            # Optimization: 1.5 scale is sufficient for PDF
             fig.write_image(b, format='png', scale=1.5)
             b.seek(0)
             return b
         except Exception:
             return None
 
-    def _submit_parallel_plots(self, task_list):
-        """Helper to submit a batch of plotting tasks and return results in order."""
-        futures = []
-        for kwargs in task_list:
-            futures.append(self.executor.submit(self._render_plot_task, kwargs))
+    def _submit_parallel_plots(self, task_list, prog_range=(0.0, 0.0)):
+        """
+        Helper to submit a batch of plotting tasks and return results in order.
+        Updates the UI progress bar as tasks complete.
+        """
+        if not task_list:
+            return []
+            
+        futures = {} # future -> index in task_list
+        for i, kwargs in enumerate(task_list):
+            f = self.executor.submit(self._render_plot_task, kwargs)
+            futures[f] = i
         
-        results = []
-        for f in futures:
-            results.append(f.result())
+        results = [None] * len(task_list)
+        
+        total_tasks = len(task_list)
+        completed_count = 0
+        start_p, end_p = prog_range
+        prog_span = end_p - start_p
+        
+        for f in as_completed(futures):
+            idx = futures[f]
+            try:
+                results[idx] = f.result()
+            except Exception:
+                results[idx] = None
+            
+            completed_count += 1
+            if total_tasks > 0:
+                current_fraction = completed_count / total_tasks
+                new_val = start_p + (prog_span * current_fraction)
+                self._update_progress(new_val)
+
         return results
 
-    def _add_results_section(self, res_mode):
+    def _add_results_section(self, res_mode, prog_range=(0.0, 0.0)):
         res_A = solver.combine_results(self.raw_A, self.params_A, res_mode)
         res_B = solver.combine_results(self.raw_B, self.params_B, res_mode)
         
         # Split Plots: System A then System B
         self.elements.append(Paragraph(f"Visualizations - {res_mode}", self.styles['Heading4']))
         
-        # Prepare Tasks for Parallel Rendering
-        # Tasks are dicts of kwargs passed to viz.create_plotly_fig
         tasks = []
-        
         types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'), 
                  ('N', 'Normal Force [kN]'), ('Def', 'Deformation [mm]')]
         
@@ -559,8 +604,8 @@ class BricosReportGenerator:
                 'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
             })
 
-        # BATCH RENDER
-        images = self._submit_parallel_plots(tasks)
+        # BATCH RENDER with Progress
+        images = self._submit_parallel_plots(tasks, prog_range)
         
         # Assemble Flowables
         self.elements.append(Paragraph("System A", self.styles['SwecoSmall']))
@@ -580,7 +625,7 @@ class BricosReportGenerator:
         self.elements.append(Spacer(1, 0.3*cm))
         self._add_reaction_table(res_A, self.params_A, res_B, self.params_B)
 
-    def _add_component_section(self, load_key):
+    def _add_component_section(self, load_key, prog_range=(0.0, 0.0)):
         res_A = solver.combine_results(self.raw_A, self.params_A, "Characteristic (No Dynamic Factor)")
         res_B = solver.combine_results(self.raw_B, self.params_B, "Characteristic (No Dynamic Factor)")
         
@@ -612,7 +657,7 @@ class BricosReportGenerator:
                 'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
             })
 
-        images = self._submit_parallel_plots(tasks)
+        images = self._submit_parallel_plots(tasks, prog_range)
         
         self.elements.append(Paragraph("System A", self.styles['SwecoSmall']))
         self._append_image_grid(images[0:4])
@@ -648,7 +693,7 @@ class BricosReportGenerator:
     # -----------------------------------------------
     # OPTIMIZED VEHICLE STEP LOGIC
     # -----------------------------------------------
-    def _add_smart_vehicle_steps(self):
+    def _add_smart_vehicle_steps(self, prog_range=(0.0, 0.0)):
         # Phase 1: Identify all critical steps (Calculation)
         tasks_A = self._identify_critical_steps(self.params_A, self.raw_A, "System A", self.nodes_A)
         tasks_B = self._identify_critical_steps(self.params_B, self.raw_B, "System B", self.nodes_B)
@@ -656,9 +701,6 @@ class BricosReportGenerator:
         all_render_configs = []
         # Combine tasks for batch rendering
         # Structure of tasks: {'header': str, 'plots': [{'title': str, 'config': dict}, ...]}
-        
-        # We need to flatten this to submit to executor, but keep reference to order
-        # flatten_map: list of (sys_index, group_index, plot_index)
         
         flat_configs = []
         
@@ -670,9 +712,9 @@ class BricosReportGenerator:
         collect_configs(tasks_A)
         collect_configs(tasks_B)
         
-        # Phase 2: Batch Render (I/O Bound)
+        # Phase 2: Batch Render with Progress
         if flat_configs:
-            rendered_images = self._submit_parallel_plots(flat_configs)
+            rendered_images = self._submit_parallel_plots(flat_configs, prog_range)
         else:
             rendered_images = []
         
@@ -691,12 +733,13 @@ class BricosReportGenerator:
                     self.elements.append(Paragraph(full_title, self.styles['SwecoCell']))
                     
                     # Pop image from flat list
-                    img_data = rendered_images[img_cursor]
-                    img_cursor += 1
-                    
-                    if img_data:
-                        img = Image(img_data, width=16*cm, height=8*cm)
-                        self.elements.append(KeepTogether([img]))
+                    if img_cursor < len(rendered_images):
+                        img_data = rendered_images[img_cursor]
+                        img_cursor += 1
+                        
+                        if img_data:
+                            img = Image(img_data, width=16*cm, height=8*cm)
+                            self.elements.append(KeepTogether([img]))
                     self.elements.append(Spacer(1, 0.2*cm))
 
         build_sys_section(tasks_A, "System A", self.params_A.get('name'))
@@ -704,14 +747,7 @@ class BricosReportGenerator:
         build_sys_section(tasks_B, "System B", self.params_B.get('name'))
 
     def _identify_critical_steps(self, params, raw_data, sys_label, sys_nodes):
-        steps = raw_data.get('Vehicle Steps A', []) # Default to A, logic in solver ensures correct key mapping?
-        # Correction: The solver output has keys 'Vehicle Steps A', 'Vehicle Steps B'.
-        # We need to pick based on params. But wait, raw_res_A ONLY has 'Vehicle Steps A' populated if it was active.
-        # Actually, let's look at bricos_solver.py again.
-        # solver returns: 'Vehicle Steps A', 'Vehicle Steps B'.
-        # If we are processing params_A, we should look for 'Vehicle Steps A' (or B if B is active on A? No, solver separates them).
-        
-        # Safe lookup
+        # Safe lookup for vehicle steps (solver separates them by key)
         steps = raw_data.get('Vehicle Steps A', [])
         if not steps: steps = raw_data.get('Vehicle Steps B', [])
         
@@ -790,9 +826,6 @@ class BricosReportGenerator:
             output_groups.append(group)
             
         return output_groups
-
-    # ... [Table helpers _calculate_reaction_envelope, _add_force_summary_table, _add_reaction_table, _make_std_table remain unchanged] ...
-    # ... Including them for file completeness ...
 
     def _calculate_reaction_envelope(self, res_dict, nodes_dict):
         reacts = {}
