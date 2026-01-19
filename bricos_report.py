@@ -170,7 +170,7 @@ class BricosReportGenerator:
         
         # 8. Critical Vehicle Steps [Progress 75% -> 95%]
         self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
-        self.elements.append(Paragraph("Vehicle positions causing peak effects per span, ordered by: Min M, Max M, Min V, Max V.", self.styles['SwecoSmall']))
+        self.elements.append(Paragraph("Vehicle positions causing peak effects per span. Plots correspond to the specific effect (Bending Moment for M, Shear Force for V).", self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
         self._add_smart_vehicle_steps(prog_range=(0.75, 0.95))
 
@@ -783,27 +783,30 @@ class BricosReportGenerator:
             
             group = {'header': f"Element {eid}", 'plots': []}
             
-            # Unique indices to avoid duplicate plots
-            unique_indices = {} # idx -> list of descriptions
+            # Explicitly define the 4 critical cases to ensure correct plot types
+            critical_cases = [
+                (idx_min_M, "Min M", 'M'),
+                (idx_max_M, "Max M", 'M'),
+                (idx_min_V, "Min V", 'V'),
+                (idx_max_V, "Max V", 'V')
+            ]
             
-            def add_req(idx, desc):
-                if idx == -1: return
-                if idx not in unique_indices: unique_indices[idx] = []
-                unique_indices[idx].append(desc)
+            # Track processed indices per plot type to avoid duplicates IF desired, 
+            # but user request implies specific plot types for specific extrema.
+            # We will allow same index to produce multiple plots if it is critical for different types (e.g. Max M and Max V).
+            # However, we avoid repeating the exact same plot (same index AND same type).
+            processed = set() 
+            
+            for idx, label, type_code in critical_cases:
+                if idx == -1: continue
                 
-            add_req(idx_min_M, "Min M")
-            add_req(idx_max_M, "Max M")
-            add_req(idx_min_V, "Min V")
-            add_req(idx_max_V, "Max V")
-            
-            for idx, desc_list in unique_indices.items():
+                # Unique key: (step_index, plot_type)
+                if (idx, type_code) in processed: continue
+                processed.add((idx, type_code))
+                
                 step = steps[idx]
                 x_loc = step['x']
-                combined_desc = ", ".join(desc_list)
-                title = f"Step {idx}: {combined_desc} @ X={x_loc:.2f}m"
-                
-                # Determine type base based on description priority (M > V)
-                t_base = 'M' if 'M' in combined_desc else 'V'
+                title = f"Step {idx}: {label} @ X={x_loc:.2f}m"
                 
                 is_A = (sys_label == "System A")
                 
@@ -811,7 +814,7 @@ class BricosReportGenerator:
                     'nodes': sys_nodes,
                     'sysA_data': step['res'] if is_A else {},
                     'sysB_data': step['res'] if not is_A else {},
-                    'type_base': t_base,
+                    'type_base': type_code, # Enforce correct type (M or V)
                     'title': title,
                     'load_case_name': "Vehicle Steps",
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
@@ -876,7 +879,14 @@ class BricosReportGenerator:
     def _add_force_summary_table(self, resA_dict, resB_dict):
         all_ids = sorted(list(set(resA_dict.keys()) | set(resB_dict.keys())), 
                          key=lambda x: (x[0], int(x[1:])))
-        table_data = [["Elem", "M_Max", "M_Min", "V_Max", "V_Min", "N_Max", "N_Min", "Def_Max", "Def_Min"]]
+        
+        # Add Unit Row to Header
+        headers = [
+            ["Elem", "M_Max", "M_Min", "V_Max", "V_Min", "N_Max", "N_Min", "Def_Max", "Def_Min"],
+            ["[-]", "[kNm]", "[kNm]", "[kN]", "[kN]", "[kN]", "[kN]", "[mm]", "[mm]"]
+        ]
+        table_data = headers + [] # Start with headers
+        
         col_widths = [1.5*cm] + [2.0*cm]*8
         for eid in all_ids:
             row = [eid]
@@ -898,7 +908,9 @@ class BricosReportGenerator:
             k_def_min = 'def_x_min' if eid.startswith('W') else 'def_y_min'
             row.extend([cell_txt(k_def_max), cell_txt(k_def_min)])
             table_data.append(row)
-        t = self._make_std_table(table_data, col_widths, font_size=7)
+        
+        # Pass header_rows=2 to style both rows
+        t = self._make_std_table(table_data, col_widths, font_size=7, header_rows=2)
         self.elements.append(KeepTogether([t]))
         self.elements.append(Paragraph("Values shown as: Sys A / Sys B", self.styles['Italic']))
 
@@ -918,7 +930,13 @@ class BricosReportGenerator:
         all_nodes = sorted(list(set(reactA.keys()) | set(reactB.keys())))
         filtered_nodes = [n for n in all_nodes if (n in valid_A) or (n in valid_B)]
         
-        table_data = [["Node", "Rx Max", "Rx Min", "Ry Max", "Ry Min", "Mz Max", "Mz Min"]]
+        # Add Unit Row
+        headers = [
+            ["Node", "Rx Max", "Rx Min", "Ry Max", "Ry Min", "Mz Max", "Mz Min"],
+            ["[-]", "[kN]", "[kN]", "[kN]", "[kN]", "[kNm]", "[kNm]"]
+        ]
+        table_data = headers + []
+        
         col_widths = [1.5*cm] + [2.6*cm]*6
         for nid in filtered_nodes:
             lbl = f"{nid}"
@@ -932,16 +950,26 @@ class BricosReportGenerator:
                     vA = dA.get(k, 0.0); vB = dB.get(k, 0.0)
                     row.append(f"{vA:.1f} / {vB:.1f}")
             table_data.append(row)
-        t = self._make_std_table(table_data, col_widths, font_size=7)
+        
+        # Pass header_rows=2
+        t = self._make_std_table(table_data, col_widths, font_size=7, header_rows=2)
         self.elements.append(KeepTogether([t]))
 
-    def _make_std_table(self, data, col_widths, font_size=9):
+    def _make_std_table(self, data, col_widths, font_size=9, header_rows=1):
         t = Table(data, colWidths=col_widths, hAlign='LEFT')
+        
+        # Apply header style to 'header_rows' number of rows
+        # Row indices are 0-based. If header_rows=1, slice is 0. If 2, slice is 0,1.
+        # The 'BACKGROUND' and 'FONTNAME' need to span (0,0) to (-1, header_rows-1)
+        
         t.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
             ('FONTSIZE', (0,0), (-1,-1), font_size),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+            
+            # Header Styling
+            ('FONTNAME', (0,0), (-1, header_rows-1), 'Helvetica-Bold'),
+            ('BACKGROUND', (0,0), (-1, header_rows-1), colors.lightgrey),
+            
             ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('ALIGN', (1,0), (-1,-1), 'CENTER'),
