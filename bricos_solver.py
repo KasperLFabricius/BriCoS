@@ -76,6 +76,18 @@ class FrameElement:
             h_est = (12.0 * I_avg / b_eff)**(1.0/3.0)
             A_approx = b_eff * h_est
 
+        # --- SAFETY FLOOR (CRITICAL FIX) ---
+        # Prevents singularities if H=0 or I=0 is passed
+        MIN_I = 1e-9  # m^4
+        MIN_A = 1e-6  # m^2
+        
+        if I_avg < MIN_I: I_avg = MIN_I
+        if A_approx < MIN_A: A_approx = MIN_A
+        
+        # Ensure v_start is safe if used directly as I or H
+        if v_start < 1e-6: v_start = 1e-6
+        if v_end < 1e-6: v_end = 1e-6
+
         # --- SHEAR DEFORMATION LOGIC ---
         phi_s = 0.0
         G_val = 0.0
@@ -98,6 +110,9 @@ class FrameElement:
             else: 
                 I_c = v_start
             
+            # Apply Safety Floor to I_c as well
+            if I_c < MIN_I: I_c = MIN_I
+            
             k_loc, k_glob, T, L, cx, cy = kernels.jit_beam_matrices(
                 node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_c, float(A_approx), phi_s
             )
@@ -114,6 +129,8 @@ class FrameElement:
                 self.I = (b_eff * v_start**3) / 12.0
             else:
                 self.I = v_start
+            
+            if self.I < MIN_I: self.I = MIN_I
 
         self.E = E
         self.k_local = k_loc

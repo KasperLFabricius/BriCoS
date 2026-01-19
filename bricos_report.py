@@ -38,6 +38,8 @@ class NumberedCanvas(canvas.Canvas):
         for state in self._saved_page_states:
             self.__dict__.update(state)
             self.draw_page_number(num_pages)
+            # FIX: Explicitly commit the page to the stream
+            canvas.Canvas.showPage(self)
         canvas.Canvas.save(self)
 
     def draw_page_number(self, page_count):
@@ -392,9 +394,12 @@ class BricosReportGenerator:
             fmt = "{:.3f}m" if is_height else "{:.4e}"
             shape = g.get('shape', 0)
             vals = g.get('vals', [0.0, 0.0, 0.0])
-            v1 = fmt.format(vals[0])
-            v2 = fmt.format(vals[1])
-            v3 = fmt.format(vals[2])
+            # GUARD: Ensure vals are numbers, not None, to prevent format errors
+            safe_vals = [v if (v is not None and not np.isnan(v)) else 0.0 for v in vals]
+            
+            v1 = fmt.format(safe_vals[0])
+            v2 = fmt.format(safe_vals[1])
+            v3 = fmt.format(safe_vals[2])
             
             if shape == 0: desc = f"{lbl} = {v1}"
             elif shape == 1: desc = f"{lbl}: {v1} -> {v3} (Taper)"
@@ -403,8 +408,10 @@ class BricosReportGenerator:
             if prefix == 'span' and g.get('align_type') == 1:
                 mode = g.get('incline_mode', 0)
                 val = g.get('incline_val', 0.0)
+                if val is None or np.isnan(val): val = 0.0
                 inc_txt = f"{val:.2f}%" if mode == 0 else f"{val:.2f}m"
-                desc += f"\nSlope: {inc_txt}"
+                # FIX: Use <br/> instead of \n for proper PDF rendering
+                desc += f"<br/>Slope: {inc_txt}"
         return desc
 
     def _add_system_input_summary(self, sys_label, p, raw_res):
@@ -439,8 +446,10 @@ class BricosReportGenerator:
             if p['L_list'][i] > 0.001:
                 mat_str = f"fck = {p['fck_span_list'][i]} MPa" if p['e_mode'] == 'Eurocode' else f"E = {p['E_custom_span'][i]} GPa"
                 geom_desc = self._get_geometry_description(p, 'span', i, 'Is_list')
+                # FIX: Wrap in Paragraph to handle <br/> breaks
+                geom_flowable = Paragraph(geom_desc, self.styles['SwecoCell'])
                 span_data.append([
-                    f"S{i+1}", f"{p['L_list'][i]:.2f}", geom_desc, 
+                    f"S{i+1}", f"{p['L_list'][i]:.2f}", geom_flowable, 
                     f"{p['sw_list'][i]:.1f}", mat_str
                 ])
         if len(span_data) > 1:
@@ -460,8 +469,10 @@ class BricosReportGenerator:
                     mat_str = f"fck = {p['fck_wall_list'][i]} MPa" if p['e_mode'] == 'Eurocode' else f"E = {p['E_custom_wall'][i]} GPa"
                     sur = next((x['q'] for x in p.get('surcharge', []) if x['wall_idx']==i), 0.0)
                     geom_desc = self._get_geometry_description(p, 'wall', i, 'Iw_list')
+                    # FIX: Wrap in Paragraph
+                    geom_flowable = Paragraph(geom_desc, self.styles['SwecoCell'])
                     wall_data.append([
-                        f"W{i+1}", f"{p['h_list'][i]:.2f}", geom_desc, 
+                        f"W{i+1}", f"{p['h_list'][i]:.2f}", geom_flowable, 
                         f"{sur:.1f}", mat_str
                     ])
             if has_wall: 
@@ -532,7 +543,12 @@ class BricosReportGenerator:
             b = io.BytesIO()
             # Optimization: 1.5 scale is sufficient for PDF
             fig.write_image(b, format='png', scale=1.5)
+            # CRITICAL FIX: MAGIC BYTE VALIDATION
+            # Kaleido may write text errors to buffer instead of image data.
+            # PNG must start with \x89PNG
             b.seek(0)
+            if not b.getvalue().startswith(b'\x89PNG'):
+                return None
             return b
         except Exception:
             return None
@@ -560,6 +576,7 @@ class BricosReportGenerator:
         for f in as_completed(futures):
             idx = futures[f]
             try:
+                # Catch failures explicitly (None return)
                 results[idx] = f.result()
             except Exception:
                 results[idx] = None
@@ -682,13 +699,23 @@ class BricosReportGenerator:
         img_flowables = []
         for b in img_bytes_list:
             if b:
-                img = Image(b, width=8*cm, height=5*cm)
-                img_flowables.append(img)
+                # SAFE IMAGE EMBEDDING
+                try:
+                    img = Image(b, width=8*cm, height=5*cm)
+                    img_flowables.append(img)
+                except Exception:
+                    img_flowables.append(Paragraph("[Image Corrupt]", self.styles['SwecoSmall']))
+            else:
+                img_flowables.append(Paragraph("[Image Failed]", self.styles['SwecoSmall']))
         
         if img_flowables:
             rows = []
             for i in range(0, len(img_flowables), 2):
                 rows.append(img_flowables[i:i+2])
+            # Ensure row has 2 elements if odd number
+            if len(rows[-1]) == 1:
+                rows[-1].append(Paragraph("", self.styles['Normal']))
+                
             t = Table(rows, colWidths=[8.5*cm, 8.5*cm], hAlign='LEFT')
             t.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (-1,-1), 'CENTER')]))
             self.elements.append(KeepTogether([t]))
@@ -743,6 +770,8 @@ class BricosReportGenerator:
                         if img_data:
                             img = Image(img_data, width=16*cm, height=8*cm)
                             self.elements.append(KeepTogether([img]))
+                        else:
+                            self.elements.append(Paragraph("[Plot Generation Failed]", self.styles['SwecoCell']))
                     self.elements.append(Spacer(1, 0.2*cm))
 
         build_sys_section(tasks_A, "System A", self.params_A.get('name'))

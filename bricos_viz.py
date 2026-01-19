@@ -162,7 +162,9 @@ def create_plotly_fig(
             
             for k in keys_to_scan:
                 if k in d:
-                    val = np.max(np.abs(d[k]))
+                    # Sanitize before checking max
+                    raw_v = np.nan_to_num(d[k], nan=0.0, posinf=0.0, neginf=0.0)
+                    val = np.max(np.abs(raw_v))
                     if type_base == 'Def': val *= 1000.0 
                     max_val = max(max_val, val)
     
@@ -314,6 +316,12 @@ def create_plotly_fig(
                     vals_pos = data[key]
                     vals_neg = vals_pos
                     fill_mode = False
+
+            # --- SANITIZATION BLOCK ---
+            # Replace NaNs or Infs with 0.0 to prevent Plotly failures
+            vals_pos = np.nan_to_num(vals_pos, nan=0.0, posinf=0.0, neginf=0.0)
+            vals_neg = np.nan_to_num(vals_neg, nan=0.0, posinf=0.0, neginf=0.0)
+            # --------------------------
 
             nx, ny = -s, c
             x_plot_pos = x_glob + nx * vals_pos * scale * inv
