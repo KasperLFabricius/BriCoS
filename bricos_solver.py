@@ -21,7 +21,7 @@ class FrameElement:
         # --- PROPERTIES & GEOMETRY ESTIMATION ---
         # Handling sub-element interpolation for variable sections
         parent_vals = np.array(geom_data.get('vals', [1.0, 1.0, 1.0]), dtype=np.float64)
-        v_type = int(geom_data.get('type', 0)) # 0=Input I, 1=Input H
+        v_type = int(geom_data.get('type', 1)) # Default to 1 (Height) now
         
         # If this is a sub-element of a variable member, we must interpolate properties 
         # based on the parent's full length and this element's local offset.
@@ -66,9 +66,10 @@ class FrameElement:
         
         if v_type == 1:
             # Input was H (Height).
+            # UPDATED: Use b_eff for I and A calculation
             h_avg = (v_start + v_end)/2.0
-            I_avg = (1.0 * h_avg**3) / 12.0
-            A_approx = h_avg * 1.0
+            I_avg = (b_eff * h_avg**3) / 12.0
+            A_approx = b_eff * h_avg
         else:
             # Input was I.
             I_avg = (v_start + v_end)/2.0
@@ -78,6 +79,7 @@ class FrameElement:
         # --- SHEAR DEFORMATION LOGIC ---
         phi_s = 0.0
         G_val = 0.0
+        # Re-calculate h for shear area consistency
         h_shear_calc = (12.0 * I_avg / b_eff)**(1.0/3.0)
         As_avg = (5.0/6.0) * b_eff * h_shear_calc
 
@@ -90,8 +92,11 @@ class FrameElement:
 
         # --- KERNEL SELECTION ---
         if eff_shape == 0:
-            if v_type == 1: I_c = (1.0 * v_start**3) / 12.0
-            else: I_c = v_start
+            if v_type == 1: 
+                # If constant height, I is constant
+                I_c = (b_eff * v_start**3) / 12.0
+            else: 
+                I_c = v_start
             
             k_loc, k_glob, T, L, cx, cy = kernels.jit_beam_matrices(
                 node_i[0], node_i[1], node_j[0], node_j[1], float(E), I_c, float(A_approx), phi_s
@@ -104,7 +109,11 @@ class FrameElement:
                 node_i[0], node_i[1], node_j[0], node_j[1], float(E), float(G_val),
                 1, v_type, np.array([v_start, v_end, 0.0]), float(A_approx), float(As_avg)
             )
-            self.I = v_start if v_type == 0 else (v_start**3)/12
+            # For variable elements, store start I as representative
+            if v_type == 1:
+                self.I = (b_eff * v_start**3) / 12.0
+            else:
+                self.I = v_start
 
         self.E = E
         self.k_local = k_loc
@@ -212,10 +221,6 @@ def aggregate_member_results(detailed_results, global_loads_override=None):
     """
     Groups sub-element results back into logical member results (W1, S1).
     Concatenates arrays so visualization sees a continuous member.
-    
-    If global_loads_override is provided (dict: parent_id -> list of loads), 
-    it essentially 'bypasses' the sliced loads from sub-elements and uses the 
-    clean global definition for visualization. This fixes 'zebra striping' in load diagrams.
     """
     agg_res = {}
     
@@ -340,7 +345,6 @@ def aggregate_member_results(detailed_results, global_loads_override=None):
 
 def calculate_reactions(nodes, detailed_results):
     # Sum reactions from detailed sub-element results. 
-    # Logic remains valid because we iterate all sub-elements.
     reactions = {nid: np.zeros(3) for nid in nodes}
     for eid, data in detailed_results.items():
         if 'f_start_local' not in data or 'f_end_local' not in data: continue
@@ -369,7 +373,7 @@ def get_safe_error_result():
 def run_raw_analysis(params, phi_val_override=None):
     phi_mode = params.get('phi_mode', 'Calculate')
     
-    # --- PHI CALCULATION (UNCHANGED) ---
+    # --- PHI CALCULATION ---
     phi_log = []
     calc_phi = 1.0
     
@@ -454,8 +458,8 @@ def run_raw_analysis(params, phi_val_override=None):
             return params[adv_key]
         val = float(params[prefix_list_key][idx])
         # FIX: Ensure compatibility with FrameElement logic which expects 'vals' list
-        # We assume Type 0 (Inertia) and Shape 0 (Constant)
-        return {'type': 0, 'shape': 0, 'vals': [val, val, val]}
+        # UPDATED: Default is now Type 1 (Height)
+        return {'type': 1, 'shape': 0, 'vals': [val, val, val]}
 
     # Helper for unified element generation (H-Refinement)
     next_node_id = 1000 # Start internal nodes at 1000
@@ -717,10 +721,6 @@ def run_raw_analysis(params, phi_val_override=None):
             pid = f'S{i+1}'
             
             # --- Capture Global Load for Viz ---
-            # NOTE: We can't rely on L_list[i] if geometry was aligned. 
-            # We must use the true structural length from mesh.
-            # But run_raw_analysis iterates L_list as source truth.
-            # Let's verify total length via sub-elements to be safe.
             indices = [k for k, el in enumerate(elems_base) if el['parent'] == pid]
             true_L = sum(elem_objects[k].L for k in indices)
             
@@ -995,20 +995,6 @@ def run_raw_analysis(params, phi_val_override=None):
     steps_A = run_stepping('vehicle', veh_env_A)
     steps_B = run_stepping('vehicleB', veh_env_B)
 
-    # Reactions aggregation uses the detailed sub-element map if needed, 
-    # but since calculate_reactions iterates input dict, we need to pass the "raw" detailed structure?
-    # No, we can calculate reactions from the raw detailed results of SW
-    # `res_sw` is aggregated. `calculate_reactions` needs node_ids which are preserved in aggregation metadata.
-    
-    # We re-calculate reactions using res_sw (Aggregated). 
-    # The aggregated dictionary has 'ni_id', 'nj_id' for the whole member.
-    # BUT! Supports are on internal nodes too for walls? 
-    # Actually, supports are only on the defined nodes (Wall Base, etc.). 
-    # The sub-element bases (W1_0 start) corresponds to the Wall Base node. 
-    # The Aggregation preserves `ni_id` of the FIRST sub-element (which is the base).
-    # So `calculate_reactions` works on aggregated data correctly for start/end nodes.
-    # Internal node equilibrium is satisfied automatically.
-    
     return {
         'Selfweight': res_sw,
         'Soil': res_soil,
@@ -1061,7 +1047,8 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
                 'M_max': dat['M']*f, 'M_min': dat['M']*f,
                 'V_max': dat['V']*f, 'V_min': dat['V']*f,
                 'N_max': dat['N']*f, 'N_min': dat['N']*f,
-                'def_x': dat['def_x']*f, 'def_y': dat['def_y']*f,
+                'def_x': dat['def_x']*f, 'def_x_min': dat['def_x']*f,
+                'def_y_max': dat['def_y']*f, 'def_y_min': dat['def_y']*f,
                 'def_x_max': dat['def_x']*f, 'def_x_min': dat['def_x']*f,
                 'def_y_max': dat['def_y']*f, 'def_y_min': dat['def_y']*f
             }

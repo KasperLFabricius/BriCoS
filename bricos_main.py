@@ -3,6 +3,7 @@ import io
 import time
 import copy
 import os
+import pandas as pd 
 
 # --- INTERNAL MODULES ---
 import bricos_data as data_mod
@@ -60,6 +61,14 @@ if os.path.exists(logo_path):
     st.sidebar.image(logo_path, width='stretch')
 
 st.title(f"BriCoS v{APP_VERSION} - Bridge Comparison Software")
+
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+
+def trigger_lock(geom_data):
+    """Callback to lock a geometry element when modified via Profiler."""
+    geom_data['locked'] = True
 
 # ==========================================
 # INITIALIZATION & AUTOSAVE
@@ -451,25 +460,27 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
     lbl_mat = r"$f_{ck}$ [MPa]" if is_ec else r"$E$ [GPa]"
     
     st.markdown("---")
-    st.markdown("**Spans (L, I, SW, Material)**")
+    st.markdown("**Spans (L, H, SW, Material)**")
     
     # Input Loop (Spans)
     for i in range(n_spans):
         c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
         p['L_list'][i] = c1.number_input(f"L{i+1} [m]", value=float(p['L_list'][i]), key=f"{curr}_l{i}", disabled=ui_locked)
         
-        # Check if profiler data exists
+        # Check if profiler data exists (Advanced Config Check)
         key = f"span_geom_{i}"
-        if key not in p: p[key] = {'type': 0, 'shape': 0, 'vals': [p['Is_list'][i]]*3}
+        if key not in p: p[key] = {'type': 1, 'shape': 0, 'vals': [p['Is_list'][i]]*3, 'locked': False}
         s_geom = p[key]
-        is_adv = (s_geom['shape'] != 0) or (s_geom['type'] != 0) or (s_geom.get('align_type', 0) != 0)
+        
+        # Locked if user marked it 'locked' via Profiler OR if complex config
+        is_adv = (s_geom.get('locked', False)) or (s_geom['shape'] != 0) or (s_geom['type'] != 1) or (s_geom.get('align_type', 0) != 0)
         
         if not is_adv:
-            val = c2.number_input(f"I{i+1} " + r"[$\text{m}^4$]", value=float(p['Is_list'][i]), format="%.4f", key=f"{curr}_i{i}", disabled=ui_locked)
+            val = c2.number_input(f"H{i+1} [m]", value=float(p['Is_list'][i]), format="%.3f", key=f"{curr}_i{i}", disabled=ui_locked)
             p['Is_list'][i] = val
             s_geom['vals'] = [val, val, val]
         else:
-            c2.text_input(f"I{i+1}", "See Profiler", disabled=True, key=f"{curr}_i{i}_dis")
+            c2.text_input(f"H{i+1} [m]", "See Profiler", disabled=True, key=f"{curr}_i{i}_dis", help="Controlled by Section Profiler")
 
         p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", disabled=ui_locked)
         
@@ -485,25 +496,26 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         
     is_super = (p['mode'] == 'Superstructure')
     st.markdown("---")
-    st.markdown("**Walls (H, I, Surcharge, Material)**")
+    st.markdown("**Walls (H_wall, H_sect, Surcharge, Material)**")
     
     # Input Loop (Walls)
     for i in range(n_spans + 1):
         st.caption(f"Wall {i+1}")
         c1, c2, c3, c4 = st.columns([1,1,1,1])
-        p['h_list'][i] = c1.number_input(f"H [m]", value=float(p['h_list'][i]), disabled=(is_super or ui_locked), key=f"{curr}_h{i}")
+        p['h_list'][i] = c1.number_input(f"H_wall [m]", value=float(p['h_list'][i]), disabled=(is_super or ui_locked), key=f"{curr}_h{i}")
         
         key = f"wall_geom_{i}"
-        if key not in p: p[key] = {'type': 0, 'shape': 0, 'vals': [p['Iw_list'][i]]*3}
+        if key not in p: p[key] = {'type': 1, 'shape': 0, 'vals': [p['Iw_list'][i]]*3, 'locked': False}
         w_geom = p[key]
-        is_adv_w = (w_geom['shape'] != 0) or (w_geom['type'] != 0)
+        
+        is_adv_w = (w_geom.get('locked', False)) or (w_geom['shape'] != 0) or (w_geom['type'] != 1)
 
         if not is_adv_w:
-            val_w = c2.number_input(r"I [$\text{m}^4$]", value=float(p['Iw_list'][i]), format="%.4f", disabled=(is_super or ui_locked), key=f"{curr}_iw{i}")
+            val_w = c2.number_input(r"H_sect [m]", value=float(p['Iw_list'][i]), format="%.3f", disabled=(is_super or ui_locked), key=f"{curr}_iw{i}")
             p['Iw_list'][i] = val_w
             w_geom['vals'] = [val_w, val_w, val_w]
         else:
-            c2.text_input(f"I", "See Profiler", disabled=True, key=f"{curr}_iw{i}_dis")
+            c2.text_input(f"H_sect", "See Profiler", disabled=True, key=f"{curr}_iw{i}_dis", help="Controlled by Section Profiler")
         
         sur = next((x for x in p['surcharge'] if x['wall_idx']==i), None)
         val_q = sur['q'] if sur else 0.0
@@ -557,12 +569,44 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         else:
             target_geom = p[f"wall_geom_{idx}"]
             target_simple_list = p['Iw_list']
-            
+        
+        # --- LOCK MANAGEMENT ---
+        is_currently_locked = target_geom.get('locked', False)
+        is_simple_shape = (target_geom['shape'] == 0) and (target_geom['type'] == 1) and (target_geom.get('align_type', 0) == 0)
+
+        # Sanity Check: If it says locked, but config is simple, show the Reset button (Logic below).
+        # We removed the auto-lock 'else' block here.
+        
+        # UI Control for Locking
+        c_lock1, c_lock2 = st.columns([3, 1])
+        if is_currently_locked:
+            c_lock1.warning("⚠️ Simple Input Locked")
+            if c_lock2.button("Reset", key=f"{curr}_unlock_{sel_el}", help="Reverts to Simple Input (unlocks field above)"):
+                target_geom['locked'] = False
+                target_geom['shape'] = 0
+                target_geom['type'] = 1
+                target_geom['align_type'] = 0
+                target_geom['incline_mode'] = 0
+                target_geom['incline_val'] = 0.0
+                st.rerun()
+        
+        # NOTE: We attach 'trigger_lock' to on_change events below to catch explicit edits.
+
         c_p1, c_p2 = st.columns(2)
-        new_type = c_p1.radio("Definition Mode:", ["Inertia (I)", "Height (H)"], index=target_geom['type'], key=f"{curr}_prof_type_{sel_el}", horizontal=True, disabled=ui_locked)
+        new_type = c_p1.radio(
+            "Definition Mode:", ["Inertia (I)", "Height (H)"], 
+            index=target_geom['type'], 
+            key=f"{curr}_prof_type_{sel_el}", horizontal=True, disabled=ui_locked,
+            on_change=trigger_lock, args=(target_geom,)
+        )
         target_geom['type'] = 0 if "Inertia" in new_type else 1
         
-        new_shape = c_p2.radio("Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], index=target_geom['shape'], key=f"{curr}_prof_shape_{sel_el}", horizontal=True, disabled=ui_locked)
+        new_shape = c_p2.radio(
+            "Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], 
+            index=target_geom['shape'], 
+            key=f"{curr}_prof_shape_{sel_el}", horizontal=True, disabled=ui_locked,
+            on_change=trigger_lock, args=(target_geom,)
+        )
         shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
         target_geom['shape'] = shape_map[new_shape]
         
@@ -570,16 +614,37 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         c_v1, c_v2, c_v3 = st.columns(3)
         lbl_v = r"I [$\text{m}^4$]" if target_geom['type']==0 else "H [m]"
         
-        v1 = c_v1.number_input(f"Start {lbl_v}", value=float(vals[0]), format="%.4f", key=f"{curr}_prof_v1_{sel_el}", disabled=ui_locked)
+        # SYNC: If unlocked and simple, ensure we see the simple input values
+        if not is_currently_locked and is_simple_shape:
+             st.session_state[f"{curr}_prof_v1_{sel_el}"] = vals[0]
+             st.session_state[f"{curr}_prof_v2_{sel_el}"] = vals[1]
+             st.session_state[f"{curr}_prof_v3_{sel_el}"] = vals[2]
+
+        v1 = c_v1.number_input(
+            f"Start {lbl_v}", value=float(vals[0]), format="%.4f", 
+            key=f"{curr}_prof_v1_{sel_el}", disabled=ui_locked,
+            on_change=trigger_lock, args=(target_geom,)
+        )
         v2 = vals[1]
         if target_geom['shape'] == 2:
-            v2 = c_v2.number_input(f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", key=f"{curr}_prof_v2_{sel_el}", disabled=ui_locked)
+            v2 = c_v2.number_input(
+                f"Mid {lbl_v}", value=float(vals[1]), format="%.4f", 
+                key=f"{curr}_prof_v2_{sel_el}", disabled=ui_locked,
+                on_change=trigger_lock, args=(target_geom,)
+            )
         v3 = vals[2]
         if target_geom['shape'] >= 1:
-            v3 = c_v3.number_input(f"End {lbl_v}", value=float(vals[2]), format="%.4f", key=f"{curr}_prof_v3_{sel_el}", disabled=ui_locked)
+            v3 = c_v3.number_input(
+                f"End {lbl_v}", value=float(vals[2]), format="%.4f", 
+                key=f"{curr}_prof_v3_{sel_el}", disabled=ui_locked,
+                on_change=trigger_lock, args=(target_geom,)
+            )
             
         target_geom['vals'] = [v1, v2, v3]
-        target_simple_list[idx] = v1 if target_geom['type']==0 else (1.0 * v1**3)/12.0
+        
+        # If in simple mode (just height constant), sync back to simple list for legacy logic
+        if target_geom['type'] == 1:
+            target_simple_list[idx] = v1
 
         if is_span_selected:
             st.markdown("#### 📐 Alignment (Vertical Geometry)")
@@ -588,16 +653,28 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             if 'incline_val' not in target_geom: target_geom['incline_val'] = 0.0
 
             al_opts = ["Straight (Horizontal)", "Inclined"]
-            new_align = st.radio("Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, key=f"{curr}_align_t_{sel_el}", disabled=ui_locked)
+            new_align = st.radio(
+                "Span Profile:", al_opts, index=target_geom['align_type'], horizontal=True, 
+                key=f"{curr}_align_t_{sel_el}", disabled=ui_locked,
+                on_change=trigger_lock, args=(target_geom,)
+            )
             target_geom['align_type'] = al_opts.index(new_align)
             
             if target_geom['align_type'] == 1:
                 inc_opts = ["Slope (%)", "Delta Height (End - Start) [m]"]
-                new_inc_mode = st.radio("Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, key=f"{curr}_inc_m_{sel_el}", disabled=ui_locked)
+                new_inc_mode = st.radio(
+                    "Define Inclination by:", inc_opts, index=target_geom['incline_mode'], horizontal=True, 
+                    key=f"{curr}_inc_m_{sel_el}", disabled=ui_locked,
+                    on_change=trigger_lock, args=(target_geom,)
+                )
                 target_geom['incline_mode'] = inc_opts.index(new_inc_mode)
                 
                 lbl_inc = "Slope [%]" if target_geom['incline_mode'] == 0 else "Delta H [m]"
-                target_geom['incline_val'] = st.number_input(lbl_inc, value=float(target_geom['incline_val']), format="%.2f", key=f"{curr}_inc_v_{sel_el}", disabled=ui_locked)
+                target_geom['incline_val'] = st.number_input(
+                    lbl_inc, value=float(target_geom['incline_val']), format="%.2f", 
+                    key=f"{curr}_inc_v_{sel_el}", disabled=ui_locked,
+                    on_change=trigger_lock, args=(target_geom,)
+                )
 
 # --- BOUNDARY CONDITIONS TAB ---
 with st.sidebar.expander("Boundary Conditions", expanded=False):

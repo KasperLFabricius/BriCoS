@@ -38,7 +38,6 @@ class NumberedCanvas(canvas.Canvas):
         for state in self._saved_page_states:
             self.__dict__.update(state)
             self.draw_page_number(num_pages)
-            canvas.Canvas.showPage(self)
         canvas.Canvas.save(self)
 
     def draw_page_number(self, page_count):
@@ -381,10 +380,14 @@ class BricosReportGenerator:
     def _get_geometry_description(self, p, prefix, idx, simple_list_key):
         geom_key = f"{prefix}_geom_{idx}"
         val_default = p[simple_list_key][idx]
-        desc = f"I = {val_default:.4e}"
+        
+        # UPDATED: Default input is now Height (H)
+        desc = f"H = {val_default:.3f}m"
+        
         if geom_key in p:
             g = p[geom_key]
-            is_height = (g.get('type', 0) == 1)
+            # UPDATED: Default type 1 = Height
+            is_height = (g.get('type', 1) == 1)
             lbl = "H" if is_height else "I"
             fmt = "{:.3f}m" if is_height else "{:.4e}"
             shape = g.get('shape', 0)

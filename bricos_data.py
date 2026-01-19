@@ -51,6 +51,8 @@ def get_writable_path(filename):
 # ==========================================
 
 def calc_I(h_mm):
+    # Legacy helper, kept for reference or potential future use.
+    # Note: Solver now handles I calculation using b_eff.
     return (1.0 * (h_mm/1000.0)**3) / 12.0
 
 @st.cache_data
@@ -146,7 +148,8 @@ def sanitize_input_data(data):
 
 def get_def():
     # Updated Defaults based on User Request
-    I_def = calc_I(500)
+    # Default is now Height = 0.5m instead of calculated Inertia
+    H_def = 0.5
     
     # Attempt to load Class 100 using the new centralized logic
     def_veh = load_vehicle_from_csv("Class 100")
@@ -166,10 +169,12 @@ def get_def():
         'E': 33e6, # Approx C30
         'num_spans': 1,
         'L_list': [10.0]*10,
-        'Is_list': [I_def]*10,
+        # Now stores Height [m] by default (was Inertia)
+        'Is_list': [H_def]*10,
         'sw_list': [20.0]*10,
         'h_list': [8.0]*11,
-        'Iw_list': [I_def]*11,
+        # Now stores Height [m] by default (was Inertia)
+        'Iw_list': [H_def]*11,
         # Material Properties (C30 -> fck=30)
         'e_mode': 'Eurocode',
         'fck_span_list': [30.0]*10,
@@ -285,6 +290,7 @@ def force_ui_update(sys_key, data):
 
     # 4. Spans & Profiler Keys
     shape_map_rev = {0: "Constant", 1: "Linear (Taper)", 2: "3-Point (Start/Mid/End)"}
+    # Note: 1 is now "Height (H)" which is the new default for logic, but UI select logic handles type 0/1 mapping
     type_map_rev = {0: "Inertia (I)", 1: "Height (H)"}
     align_map_rev = {0: "Straight (Horizontal)", 1: "Inclined"}
     inc_mode_rev = {0: "Slope (%)", 1: "Delta Height (End - Start) [m]"}
@@ -301,7 +307,7 @@ def force_ui_update(sys_key, data):
         if geom_key in data:
             g = data[geom_key]
             el_name = f"Span {i+1}"
-            st.session_state[f"{sys_key}_prof_type_{el_name}"] = type_map_rev.get(g.get('type', 0), "Inertia (I)")
+            st.session_state[f"{sys_key}_prof_type_{el_name}"] = type_map_rev.get(g.get('type', 1), "Height (H)")
             st.session_state[f"{sys_key}_prof_shape_{el_name}"] = shape_map_rev.get(g.get('shape', 0), "Constant")
             
             vals = g.get('vals', [0.0, 0.0, 0.0])
@@ -324,7 +330,7 @@ def force_ui_update(sys_key, data):
         if geom_key in data:
             g = data[geom_key]
             el_name = f"Wall {i+1}"
-            st.session_state[f"{sys_key}_prof_type_{el_name}"] = type_map_rev.get(g.get('type', 0), "Inertia (I)")
+            st.session_state[f"{sys_key}_prof_type_{el_name}"] = type_map_rev.get(g.get('type', 1), "Height (H)")
             st.session_state[f"{sys_key}_prof_shape_{el_name}"] = shape_map_rev.get(g.get('shape', 0), "Constant")
             
             vals = g.get('vals', [0.0, 0.0, 0.0])
