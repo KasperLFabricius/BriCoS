@@ -53,7 +53,7 @@ class NumberedCanvas(canvas.Canvas):
 # ==========================================
 
 class BricosReportGenerator:
-    def __init__(self, buffer, meta_data, session_state, raw_res_A, raw_res_B, nodes_A, nodes_B, version="0.30", progress_callback=None):
+    def __init__(self, buffer, meta_data, session_state, raw_res_A, raw_res_B, nodes_A, nodes_B, version="0.31", progress_callback=None):
         self.buffer = buffer
         self.meta = meta_data
         self.state = session_state
@@ -76,6 +76,10 @@ class BricosReportGenerator:
         # Use pre-calculated results passed from Main UI to avoid redundant Numba execution
         self.params_A = self.state['sysA']
         self.params_B = self.state['sysB']
+        
+        # Retrieve Model Properties (E-modulus) passed from Main
+        self.props_A = self.state.get('model_props_A', {'Spans':{}, 'Walls':{}})
+        self.props_B = self.state.get('model_props_B', {'Spans':{}, 'Walls':{}})
         
         self.raw_A = raw_res_A
         self.nodes_A = nodes_A
@@ -111,9 +115,14 @@ class BricosReportGenerator:
         
         # 4. Input Summary
         self.elements.append(Paragraph(f"{self.chapter_count}. System Configuration & Geometry", self.styles['SwecoSubHeader']))
-        self._add_system_input_summary("System A", self.params_A, self.raw_A)
+        
+        # --- NEW: Audit Conventions Text ---
+        self._add_conventions_text(self.params_A)
+        self.elements.append(Spacer(1, 0.5*cm))
+
+        self._add_system_input_summary("System A", self.params_A, self.raw_A, self.props_A)
         self.elements.append(PageBreak())
-        self._add_system_input_summary("System B", self.params_B, self.raw_B)
+        self._add_system_input_summary("System B", self.params_B, self.raw_B, self.props_B)
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
@@ -171,7 +180,15 @@ class BricosReportGenerator:
         
         # 8. Critical Vehicle Steps [Progress 75% -> 95%]
         self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
-        self.elements.append(Paragraph("Vehicle positions causing peak effects per span. Plots correspond to the specific effect (Bending Moment for M, Shear Force for V).", self.styles['SwecoSmall']))
+        
+        # --- NEW: Unfactored Data Table ---
+        self.elements.append(Paragraph("<b>Table 8.1: Critical Vehicle Effects (Raw Envelope Values)</b>", self.styles['SwecoSmall']))
+        self.elements.append(Paragraph("Values represent the raw Min/Max envelope before application of Partial Factors (Gamma) and Dynamic Factor (Phi).", self.styles['SwecoCell']))
+        self._add_unfactored_vehicle_table()
+        self.elements.append(Spacer(1, 0.4*cm))
+
+        self.elements.append(Paragraph("<b>Vehicle Step Plots</b>", self.styles['SwecoBody']))
+        self.elements.append(Paragraph("Vehicle positions causing peak effects per span.", self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
         self._add_smart_vehicle_steps(prog_range=(0.75, 0.95))
 
@@ -188,6 +205,22 @@ class BricosReportGenerator:
         )
         doc.build(self.elements, canvasmaker=NumberedCanvas)
         self._update_progress(1.0)
+
+    def _add_conventions_text(self, params):
+        """Adds audit-required conventions text."""
+        shear_txt = "INCLUDED (Timoshenko)" if params.get('use_shear_def', False) else "NEGLECTED (Euler-Bernoulli)"
+        conventions_text = f"""
+        <b>Model Assumptions & Conventions:</b><br/>
+        • <b>Coordinate System:</b> 2D Plane Frame (X: Horizontal, Y: Vertical, M: Counter-clockwise positive).<br/>
+        • <b>Analysis Width:</b> Analysis is performed per meter run (1m strip). All stiffness properties are calculated based on the input effective width (<i>b_eff</i>), but results are output for the full width unless otherwise noted.<br/>
+        • <b>Section Properties:</b> Members are modeled as rectangular sections unless defined otherwise. 
+        Area <i>A = b_eff · h</i>. Inertia <i>I = b_eff · h<sup>3</sup> / 12</i>.<br/>
+        • <b>Material Stiffness:</b> Shear Modulus <i>G = E / (2·(1+&nu;))</i>.<br/>
+        • <b>Loads:</b> Gravity <i>g = 9.81 m/s²</i>. Vehicle loads (tonnes) are converted to kN using this factor.
+        Soil and surcharge loads are applied as line loads (kN/m) acting on the 1m analysis strip.<br/>
+        • <b>Shear Deformation:</b> {shear_txt}.
+        """
+        self.elements.append(Paragraph(conventions_text, self.styles['SwecoSmall']))
 
     def _add_theory_section(self):
         """Adds standard background theory text."""
@@ -414,7 +447,7 @@ class BricosReportGenerator:
                 desc += f"<br/>Slope: {inc_txt}"
         return desc
 
-    def _add_system_input_summary(self, sys_label, p, raw_res):
+    def _add_system_input_summary(self, sys_label, p, raw_res, props):
         self.elements.append(Paragraph(f"<b>{sys_label} ({p.get('name', '')})</b> - {p['mode']}", self.styles['Heading3']))
         
         phi_val = p.get('phi', 1.0)
@@ -441,12 +474,18 @@ class BricosReportGenerator:
         col_widths = [w_id, w_dim, w_geom, w_load, w_mat]
 
         # 1. SPANS
-        span_data = [["Span", "L [m]", "Section Geometry", "SW [kN/m]", "Material"]]
+        span_data = [["Span", "L [m]", "Section Geometry", "SW [kN/m]", "Material / E [MPa]"]]
         for i in range(p['num_spans']):
             if p['L_list'][i] > 0.001:
-                mat_str = f"fck = {p['fck_span_list'][i]} MPa" if p['e_mode'] == 'Eurocode' else f"E = {p['E_custom_span'][i]} GPa"
+                # NEW: Access computed E from model_props
+                pid = f"S{i+1}"
+                e_real = props['Spans'].get(pid, {}).get('E', 0.0) / 1e6 # Pa -> MPa
+                if p['e_mode'] == 'Eurocode':
+                    mat_str = f"C{p['fck_span_list'][i]:.0f} ({e_real:.0f} MPa)"
+                else:
+                    mat_str = f"Custom ({e_real:.0f} MPa)"
+                
                 geom_desc = self._get_geometry_description(p, 'span', i, 'Is_list')
-                # FIX: Wrap in Paragraph to handle <br/> breaks
                 geom_flowable = Paragraph(geom_desc, self.styles['SwecoCell'])
                 span_data.append([
                     f"S{i+1}", f"{p['L_list'][i]:.2f}", geom_flowable, 
@@ -461,15 +500,21 @@ class BricosReportGenerator:
         # 2. WALLS
         if p['mode'] == 'Frame':
             self.elements.append(Spacer(1, 0.2*cm))
-            wall_data = [["Wall", "H [m]", "Section Geometry", "Surch [kN/m]", "Material"]]
+            wall_data = [["Wall", "H [m]", "Section Geometry", "Surch [kN/m]", "Material / E [MPa]"]]
             has_wall = False
             for i in range(p['num_spans'] + 1):
                 if p['h_list'][i] > 0.001:
                     has_wall = True
-                    mat_str = f"fck = {p['fck_wall_list'][i]} MPa" if p['e_mode'] == 'Eurocode' else f"E = {p['E_custom_wall'][i]} GPa"
+                    # NEW: Access computed E
+                    pid = f"W{i+1}"
+                    e_real = props['Walls'].get(pid, {}).get('E', 0.0) / 1e6
+                    if p['e_mode'] == 'Eurocode':
+                        mat_str = f"C{p['fck_wall_list'][i]:.0f} ({e_real:.0f} MPa)"
+                    else:
+                        mat_str = f"Custom ({e_real:.0f} MPa)"
+
                     sur = next((x['q'] for x in p.get('surcharge', []) if x['wall_idx']==i), 0.0)
                     geom_desc = self._get_geometry_description(p, 'wall', i, 'Iw_list')
-                    # FIX: Wrap in Paragraph
                     geom_flowable = Paragraph(geom_desc, self.styles['SwecoCell'])
                     wall_data.append([
                         f"W{i+1}", f"{p['h_list'][i]:.2f}", geom_flowable, 
@@ -510,8 +555,8 @@ class BricosReportGenerator:
         if soil_list:
             self.elements.append(Spacer(1, 0.2*cm))
             self.elements.append(Paragraph("Soil Loads (Earth Pressure):", self.styles['SwecoSmall']))
-            # Unicode Superscripts: kN/m²
-            soil_table = [["Wall", "Face", "Height [m]", "q_top [kN/m²]", "q_bot [kN/m²]"]]
+            # FIXED UNIT: kN/m (Line Load) instead of kN/m2 (Pressure)
+            soil_table = [["Wall", "Face", "Height [m]", "q_top [kN/m]", "q_bot [kN/m]"]]
             for s in soil_list:
                 soil_table.append([
                     f"W{s['wall_idx']+1}", s['face'], f"{s['h']:.2f}", f"{s['q_top']:.1f}", f"{s['q_bot']:.1f}"
@@ -719,6 +764,34 @@ class BricosReportGenerator:
             t = Table(rows, colWidths=[8.5*cm, 8.5*cm], hAlign='LEFT')
             t.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (-1,-1), 'CENTER')]))
             self.elements.append(KeepTogether([t]))
+
+    def _add_unfactored_vehicle_table(self):
+        """Adds table showing raw vehicle effects (Unfactored) for validation."""
+        data = [["Elem", "M_max", "M_min", "V_max", "V_min", "System"]]
+        
+        def process_sys(raw_env, sys_name):
+            if not raw_env: return
+            all_ids = sorted(raw_env.keys(), key=lambda x: (x[0], int(x[1:])))
+            for eid in all_ids:
+                dat = raw_env[eid]
+                # Helper to get scalar max/min
+                def get_v(k):
+                    arr = dat.get(k)
+                    if arr is None or len(arr) == 0: return 0.0
+                    return np.max(arr) if 'max' in k else np.min(arr)
+                
+                mmx = get_v('M_max'); mmn = get_v('M_min')
+                vmx = get_v('V_max'); vmn = get_v('V_min')
+                data.append([eid, f"{mmx:.1f}", f"{mmn:.1f}", f"{vmx:.1f}", f"{vmn:.1f}", sys_name])
+
+        process_sys(self.raw_A.get('Vehicle Envelope A', {}), "A")
+        process_sys(self.raw_B.get('Vehicle Envelope B', {}), "B")
+        
+        if len(data) > 1:
+            t = self._make_std_table(data, [2*cm, 3*cm, 3*cm, 3*cm, 3*cm, 2*cm])
+            self.elements.append(KeepTogether([t]))
+        else:
+            self.elements.append(Paragraph("No vehicle results found.", self.styles['SwecoSmall']))
 
     # -----------------------------------------------
     # OPTIMIZED VEHICLE STEP LOGIC

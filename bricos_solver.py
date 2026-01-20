@@ -443,10 +443,19 @@ def run_raw_analysis(params, phi_val_override=None):
                 phi_log.append(f"L_mean = {sum(lengths_for_phi):.2f}/{n} = {L_mean:.2f} m")
                 phi_log.append(f"L_phi = {k_fac} * {L_mean:.2f} = {L_phi_calc:.3f} m (Min {L_max:.2f})")
 
-            raw_val = 1.25 - (L_phi - 5.0) / 225.0
-            if L_phi <= 5.0: calc_phi = 1.25 
-            else: calc_phi = max(1.0, raw_val) 
-            phi_log.append(f"Phi = 1.25 - ({L_phi:.3f}-5)/225 = {raw_val:.3f}")
+            # --- DYNAMIC FACTOR LIMITS (DK/NA A.2.3.5) ---
+            if L_phi <= 5.0:
+                calc_phi = 1.25
+                phi_log.append(f"L_phi <= 5.0m: Phi set to upper limit (1.25)")
+            elif L_phi >= 50.0:
+                calc_phi = 1.05
+                phi_log.append(f"L_phi >= 50.0m: Phi set to lower limit (1.05)")
+            else:
+                raw_val = 1.25 - (L_phi - 5.0) / 225.0
+                calc_phi = raw_val
+                phi_log.append(f"5.0 < L_phi < 50.0: Calc Formula applied.")
+                phi_log.append(f"Phi = 1.25 - ({L_phi:.3f}-5)/225 = {raw_val:.3f}")
+                
             phi_log.append(f"Final Phi = {calc_phi:.3f}")
         else:
             phi_log.append("Geometry invalid/empty. Phi=1.0")
@@ -457,6 +466,7 @@ def run_raw_analysis(params, phi_val_override=None):
     nodes = {}
     elems_base = []
     restraints = {}
+    model_props = {'Spans': {}, 'Walls': {}} # Metadata container for report
     
     num_spans = params['num_spans']
     num_supp = num_spans + 1
@@ -593,6 +603,9 @@ def run_raw_analysis(params, phi_val_override=None):
             )
             elems_base.extend(walls_subs)
             
+            # Store Model Property for Audit
+            model_props['Walls'][f'W{i+1}'] = {'E': e_val}
+            
             # Apply Supports to base node as normal
             restraints[nid_b] = k_vec
             
@@ -624,9 +637,12 @@ def run_raw_analysis(params, phi_val_override=None):
             {'parent': f'S{i+1}', 'E': e_val, 'geom': g_data}, 'Span'
         )
         elems_base.extend(span_subs)
+        
+        # Store Model Property for Audit
+        model_props['Spans'][f'S{i+1}'] = {'E': e_val}
 
     if len(elems_base) == 0:
-        return get_safe_error_result(), {}, "No valid structural elements defined."
+        return get_safe_error_result(), {}, {}, "No valid structural elements defined."
 
     shear_config = {
         'use': params.get('use_shear_def', False),
@@ -1012,6 +1028,7 @@ def run_raw_analysis(params, phi_val_override=None):
     steps_A = run_stepping('vehicle', veh_env_A)
     steps_B = run_stepping('vehicleB', veh_env_B)
 
+    # UPDATED RETURN SIGNATURE: Added model_props for Report Auditing
     return {
         'Selfweight': res_sw,
         'Soil': res_soil,
@@ -1025,7 +1042,7 @@ def run_raw_analysis(params, phi_val_override=None):
         'phi_calc': calc_phi,
         'phi_log': phi_log,
         'Reactions': calculate_reactions(nodes, res_sw) 
-    }, nodes, 0
+    }, nodes, model_props, 0
 
 def combine_results(raw_res, params, result_mode="Design (ULS)"):
     KFI = params.get('KFI', 1.0)
