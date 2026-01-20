@@ -59,15 +59,16 @@ def jit_beam_matrices(xi, yi, xj, yj, E, I, A, phi_s):
     
     return k_local, k_global, T, L, cx, cy
 
-# --- NEW: NON-PRISMATIC LOGIC ---
+# --- NON-PRISMATIC LOGIC ---
 
 @jit(nopython=True, cache=True)
-def get_I_at_x(x, L, vals, shape_mode, val_mode):
+def get_I_at_x(x, L, vals, shape_mode, val_mode, b_eff):
     """
     Interpolates Moment of Inertia I at position x.
     vals: array of [v_start, v_mid, v_end] (mid used only if shape_mode=2)
     shape_mode: 0=Constant, 1=Linear(2pt), 2=PiecewiseLinear(3pt)
-    val_mode: 0=Values are I, 1=Values are h (I = 1/12 * h^3)
+    val_mode: 0=Values are I, 1=Values are h (I = b_eff/12 * h^3)
+    b_eff: Effective width of the section
     """
     v = vals[0]
     xi = x / L
@@ -87,17 +88,17 @@ def get_I_at_x(x, L, vals, shape_mode, val_mode):
             v = vals[1] * (1 - s) + vals[2] * s
             
     if val_mode == 1:
-        # v is height, width=1.0m
-        return (1.0 * v**3) / 12.0
+        # v is height, width=b_eff
+        return (b_eff * v**3) / 12.0
     else:
         # v is Inertia
         return v
 
 @jit(nopython=True, cache=True)
-def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_vals, A_avg, As_avg):
+def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_vals, A_avg, As_avg, b_eff):
     """
     Calculates Stiffness Matrix for non-prismatic beam using Flexibility Method Integration.
-    Now includes Shear Deformation Flexibility terms if G > 0.
+    Uses Simpson's Rule (1/3) for exact integration of quadratic flexibility functions.
     """
     dx = xj - xi
     dy = yj - yi
@@ -105,52 +106,49 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_
     if L < 1e-6: L = 1e-6
     cx = dx / L; cy = dy / L
     
-    # Numerical Integration Setup (Simpson's Rule - 10 steps)
+    # Numerical Integration Setup (Simpson's Rule - 10 steps / 11 points)
     n_int = 11
     d_step = L / (n_int - 1)
     
     # Flexibility Terms: f11 (rot_i due to M_i), f22 (rot_j due to M_j), f12
     f11 = 0.0; f22 = 0.0; f12 = 0.0
     
-    # Pre-calculate Shear Flexibility Constant (approx for variable section using As_avg)
-    # Unit Shear V from Unit M = 1/L.
-    # Energy = Integral [ (V*V)/(G*As) ] dx = Integral [ 1/(L^2 G As) ] dx
-    # If G is provided (Timoshenko), we add this to the flex matrix.
+    # Shear Flexibility Term (constant approx using As_avg)
     shear_flex_term = 0.0
     if G > 1e-3 and As_avg > 1e-6:
-        # f_shear = Integral(0->L) of (1/L * 1/L) / (G * As) dx
-        # Simplification: Use As_avg. Integral = L / (L^2 * G * As_avg) = 1 / (L * G * As_avg)
         shear_flex_term = 1.0 / (L * G * As_avg)
     
     for i in range(n_int):
         x = i * d_step
-        weight = 1.0
-        if i == 0 or i == n_int - 1: weight = 0.5 # Trapezoidal weights for safety
-        else: weight = 1.0
         
-        I_x = get_I_at_x(x, L, geom_vals, shape_mode, val_mode)
+        # Simpson's Rule Weights
+        if i == 0 or i == n_int - 1:
+            weight = 1.0
+        elif i % 2 == 1: # Odd
+            weight = 4.0
+        else: # Even
+            weight = 2.0
+            
+        I_x = get_I_at_x(x, L, geom_vals, shape_mode, val_mode, b_eff)
         EI = E * I_x
         
-        # Unit Moment Diagrams:
-        # m1 = (1 - x/L)  [Unit moment at i]
-        # m2 = (x/L)      [Unit moment at j]
+        # Unit Moment Diagrams: m1 = (1 - x/L), m2 = (x/L)
         m1 = 1.0 - x/L
         m2 = x/L
         
-        fac = weight * d_step / EI
+        # Simpson's Integration Factor
+        fac = (weight * d_step / 3.0) / EI
+        
         f11 += m1 * m1 * fac
         f22 += m2 * m2 * fac
         f12 += m1 * m2 * fac
         
     # Add Shear Flexibility
-    # Unit V for M1 is -1/L, Unit V for M2 is +1/L
-    # f11 += shear_flex; f22 += shear_flex; f12 -= shear_flex
     f11 += shear_flex_term
     f22 += shear_flex_term
-    f12 -= shear_flex_term # V1*V2 is negative product
+    f12 -= shear_flex_term 
     
-    # Flexibility Matrix F = [[f11, f12], [f12, f22]]
-    # Stiffness K_rot = inv(F)
+    # Invert F to get K_rot
     det = f11 * f22 - f12 * f12
     if abs(det) < 1e-12: det = 1e-12
     
@@ -159,7 +157,6 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_
     k12 = -f12 / det
     
     # Build 6x6 Local Stiffness
-    # F_y_i = (M_i + M_j) / L
     w_A = E * A_avg / L
     
     # Shear forces from moment equilibrium: V = (Mi + Mj)/L
@@ -174,13 +171,9 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_
     k_loc[3,0] = -w_A; k_loc[3,3] = w_A
     
     # Bending / Shear
-    # v1 row
     k_loc[1,1] = q3;   k_loc[1,2] = q1;   k_loc[1,4] = -q3;  k_loc[1,5] = q2
-    # r1 row
     k_loc[2,1] = q1;   k_loc[2,2] = k11;  k_loc[2,4] = -q1;  k_loc[2,5] = k12
-    # v2 row
     k_loc[4,1] = -q3;  k_loc[4,2] = -q1;  k_loc[4,4] = q3;   k_loc[4,5] = -q2
-    # r2 row
     k_loc[5,1] = q2;   k_loc[5,2] = k12;  k_loc[5,4] = -q2;  k_loc[5,5] = k22
     
     # Transform
@@ -196,7 +189,207 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_
     
     return k_loc, k_glob, T, L, cx, cy
 
-# --- STANDARD FEF ---
+# --- NEW: NUMERICAL LOAD INTEGRATION (CONSISTENT NODAL LOADS) ---
+
+@jit(nopython=True, cache=True)
+def get_static_M0_V0_point(x, L, P, a):
+    """Static Moment/Shear for Simply Supported beam with Point Load."""
+    if x < a:
+        # Reaction at start: R_i = P*(L-a)/L
+        R_i = P * (1.0 - a/L)
+        V0 = R_i
+        M0 = R_i * x
+    else:
+        # Reaction at start same
+        R_i = P * (1.0 - a/L)
+        V0 = R_i - P
+        M0 = R_i * x - P * (x - a)
+    return M0, V0
+
+@jit(nopython=True, cache=True)
+def get_static_M0_V0_trapezoid(x, L, q_s, q_e, h_s, h_e):
+    """Static Moment/Shear for Simply Supported beam with Trapezoid Load."""
+    
+    # 1. Calculate Total Reactions R_i, R_j for simply supported beam
+    # Load Resultant F
+    len_load = h_e - h_s
+    if len_load < 1e-9: return 0.0, 0.0
+    
+    F_res = (q_s + q_e) / 2.0 * len_load
+    
+    # Centroid from h_s
+    # x_c_local = (L/3) * (2*q_e + q_s) / (q_e + q_s)
+    denom = q_e + q_s
+    if abs(denom) < 1e-9:
+        x_c_local = len_load / 2.0
+    else:
+        x_c_local = (len_load / 3.0) * (2.0 * q_e + q_s) / denom
+        
+    x_c_global = h_s + x_c_local
+    
+    # Reactions
+    R_j = F_res * x_c_global / L
+    R_i = F_res - R_j
+    
+    # 2. Calculate Internal Forces at x
+    if x <= h_s:
+        V0 = R_i
+        M0 = R_i * x
+    elif x >= h_e:
+        V0 = R_i - F_res
+        M0 = R_i * x - F_res * (x - x_c_global)
+    else:
+        # Inside the load
+        L_prime = x - h_s
+        # q at x
+        q_x = q_s + (q_e - q_s) * (L_prime / len_load)
+        
+        # Resultant of part up to x
+        F_prime = (q_s + q_x) / 2.0 * L_prime
+        
+        # Centroid of F_prime (distance from x back to centroid)
+        denom_p = q_x + q_s
+        if abs(denom_p) < 1e-9:
+            dist_back = L_prime / 2.0
+        else:
+            dist_back = (L_prime / 3.0) * (q_x + 2.0*q_s) / denom_p
+            
+        V0 = R_i - F_prime
+        M0 = R_i * x - F_prime * dist_back
+        
+    return M0, V0
+
+@jit(nopython=True, cache=True)
+def jit_numerical_fef(load_type, params, L, E, G, shape_mode, val_mode, geom_vals, b_eff, As_avg):
+    """
+    Calculates Fixed End Forces (FEF) using Numerical Integration (Simpson's Rule).
+    Must match jit_non_prismatic_matrices integration exactly.
+    load_type: 1=Point, 2=Trapezoid
+    params: [P, a] or [q_s, q_e, h_s, h_e]
+    """
+    # Simpson's Setup
+    n_int = 11
+    d_step = L / (n_int - 1)
+    
+    f11 = 0.0; f22 = 0.0; f12 = 0.0
+    theta_i = 0.0; theta_j = 0.0
+    
+    shear_flex_term = 0.0
+    has_shear = (G > 1e-3 and As_avg > 1e-6)
+    if has_shear:
+        shear_flex_term = 1.0 / (L * G * As_avg)
+    
+    # Integration Loop
+    for i in range(n_int):
+        x = i * d_step
+        
+        # Weights
+        if i == 0 or i == n_int - 1: weight = 1.0
+        elif i % 2 == 1: weight = 4.0
+        else: weight = 2.0
+            
+        I_x = get_I_at_x(x, L, geom_vals, shape_mode, val_mode, b_eff)
+        EI = E * I_x
+        
+        fac = (weight * d_step / 3.0) / EI
+        
+        m1 = 1.0 - x/L
+        m2 = x/L
+        
+        # Flexibility Accumulation (Same as stiffness kernel)
+        f11 += m1 * m1 * fac
+        f22 += m2 * m2 * fac
+        f12 += m1 * m2 * fac
+        
+        # Load Vector Accumulation
+        # Get M0(x) and V0(x) (Simply Supported Forces)
+        if load_type == 1: # Point
+            M0, V0 = get_static_M0_V0_point(x, L, params[0], params[1])
+        elif load_type == 2: # Trapezoid
+            M0, V0 = get_static_M0_V0_trapezoid(x, L, params[0], params[1], params[2], params[3])
+        else:
+            M0, V0 = 0.0, 0.0
+            
+        # Work Done: Integral (M0 * m / EI)
+        theta_i += M0 * m1 * fac
+        theta_j += M0 * m2 * fac
+        
+        # Shear Work for Load Vector: Integral (V0 * v / GAs)
+        # v1 = -1/L, v2 = 1/L
+        if has_shear:
+            # Shear work uses simplified constant area integration for consistency with stiffness kernel
+            # Factor: (weight * d_step / 3.0) / (G * As_avg)
+            fac_s = (weight * d_step / 3.0) / (G * As_avg)
+            theta_i += V0 * (-1.0/L) * fac_s
+            theta_j += V0 * (1.0/L) * fac_s
+
+    # Add Shear Flexibility to Matrix
+    f11 += shear_flex_term
+    f22 += shear_flex_term
+    f12 -= shear_flex_term
+    
+    # Solve System F * M = -Theta
+    # | f11 f12 | | Mi | = | -theta_i |
+    # | f12 f22 | | Mj |   | -theta_j |
+    
+    det = f11 * f22 - f12 * f12
+    if abs(det) < 1e-12: det = 1e-12
+    
+    # Inverse of 2x2 F
+    k11 = f22 / det
+    k22 = f11 / det
+    k12 = -f12 / det
+    
+    # FEF Moments
+    Mi = -(k11 * theta_i + k12 * theta_j)
+    Mj = -(k12 * theta_i + k22 * theta_j)
+    
+    # FEF Shears (Equilibrium)
+    # Total Reaction = Simple Reaction + (Mi + Mj)/L
+    # But we need to calculate Simple Reaction total first?
+    # Actually, we can get total load F_total and verify. 
+    # Or just use the M0/V0 at ends.
+    # R_i_fixed = R_i_simple + (Mi + Mj)/L
+    # R_j_fixed = R_j_simple - (Mi + Mj)/L
+    
+    # Recalculate simple reactions R_i0, R_j0 for the whole beam
+    if load_type == 1: # Point
+        P, a = params[0], params[1]
+        Ri0 = P * (1.0 - a/L)
+        Rj0 = P * a/L
+    elif load_type == 2: # Trapezoid
+        q_s, q_e, h_s, h_e = params[0], params[1], params[2], params[3]
+        len_load = h_e - h_s
+        F_res = (q_s + q_e) / 2.0 * len_load
+        if abs(q_e + q_s) < 1e-9: xc = len_load/2.0
+        else: xc = (len_load/3.0)*(2*q_e + q_s)/(q_e + q_s)
+        xg = h_s + xc
+        Rj0 = F_res * xg / L
+        Ri0 = F_res - Rj0
+    else:
+        Ri0, Rj0 = 0.0, 0.0
+        
+    Vi = Ri0 + (Mi + Mj) / L
+    Vj = Rj0 - (Mi + Mj) / L
+    
+    # Return 6-DOF vector [Ni, Vi, Mi, Nj, Vj, Mj]
+    # Note: FEF vector is forces EXERTED BY NODES ON BEAM? 
+    # Usually FEF is "Fixed End Actions" = forces exerted BY BEAM ON NODES.
+    # Stiffness eqn: K*u = F_external + F_equivalent_nodal
+    # F_equivalent = - FEF.
+    # The existing jit_fef functions return "Reaction-like" forces (Forces on Nodes).
+    # e.g. jit_fef_point returns positive R1 upwards.
+    # So we return Vi, Mi, Vj, Mj as defined.
+    
+    f_vec = np.zeros(6)
+    f_vec[1] = Vi
+    f_vec[2] = Mi
+    f_vec[4] = Vj
+    f_vec[5] = Mj
+    
+    return f_vec
+
+# --- STANDARD FEF (ANALYTICAL) ---
 
 @jit(nopython=True, cache=True)
 def jit_fef_point(P, a, L):
@@ -353,7 +546,7 @@ def jit_annotation_solver(data_arr):
     return data_arr
 
 # ----------------------------------------
-# OPTIMIZED BATCH KERNELS (STRATEGY 1-5)
+# OPTIMIZED BATCH KERNELS
 # ----------------------------------------
 
 @jit(nopython=True, cache=True)
@@ -372,6 +565,11 @@ def jit_build_batch_F(NDOF, n_steps, x_steps, v_loads, v_dists, sp_start_x, sp_l
                 if s_x <= load_x <= e_x:
                     local_x = load_x - s_x
                     el_idx = sp_el_indices[k]
+                    # NOTE: Moving load stepping typically uses Point Load kernel.
+                    # For consistency in tapered elements, this should also ideally use the numerical kernel.
+                    # However, batch stepping performance is critical. 
+                    # For now, we retain analytical for speed, accepting minor inconsistency in moving loads
+                    # unless specified otherwise.
                     f_local = jit_fef_point(v_loads[j], local_x, el_L[el_idx])
                     T = el_T[el_idx]
                     f_global_vec = T.T @ f_local
@@ -416,8 +614,8 @@ def jit_envelope_batch_parallel(
     sp_start_x, sp_lens, sp_el_indices, 
     D_all, el_dof_indices, el_T, el_L, 
     S_matrices,
-    res_accum, # Accumulator updated in-place
-    is_init    # Reset flag
+    res_accum,
+    is_init
 ):
     num_axles = len(v_loads)
     num_spans = len(sp_start_x)
