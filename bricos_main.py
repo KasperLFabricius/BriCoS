@@ -410,7 +410,8 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     kfi_opts = [0.9, 1.0, 1.1]
     curr_kfi = p.get('KFI', 1.0)
     idx_kfi = kfi_opts.index(curr_kfi) if curr_kfi in kfi_opts else 1
-    p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", disabled=ui_locked)
+    help_KFI = "Partial factor for consequence class. Applied to all loads."
+    p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", disabled=ui_locked, help=help_KFI)
     
     gg_opts = [0.9, 1.0, 1.10, 1.25]
     c_gg, c_gj = st.columns(2)

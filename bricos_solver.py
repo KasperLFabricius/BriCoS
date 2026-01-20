@@ -807,7 +807,11 @@ def run_raw_analysis(params, phi_val_override=None):
         for sur in params.get('surcharge', []):
             if sur['wall_idx'] < num_supp:
                 pid = f'W{sur["wall_idx"]+1}'
-                sign = 1.0 if sur['face'] == 'L' else -1.0
+                
+                # INVERTED DIRECTION HERE
+                # Face L (-1.0): Generates load in negative local y' => positive Global X (Left to Right)
+                # Face R (+1.0): Generates load in positive local y' => negative Global X (Right to Left)
+                sign = -1.0 if sur['face'] == 'L' else 1.0
                 
                 # Capture Global Load
                 if pid not in surch_global_loads: surch_global_loads[pid] = []
