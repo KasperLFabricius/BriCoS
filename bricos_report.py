@@ -38,14 +38,13 @@ class NumberedCanvas(canvas.Canvas):
         for state in self._saved_page_states:
             self.__dict__.update(state)
             self.draw_page_number(num_pages)
-            # FIX: Explicitly commit the page to the stream
             canvas.Canvas.showPage(self)
         canvas.Canvas.save(self)
 
     def draw_page_number(self, page_count):
         # Draw "Page x of y" in the bottom right corner
         self.setFont("Helvetica", 8)
-        self.drawRightString(200*mm, 10*mm, # A4 is ~210mm wide. 200mm is right margin.
+        self.drawRightString(200*mm, 10*mm, 
             "Page %d of %d" % (self._pageNumber, page_count))
 
 # ==========================================
@@ -87,7 +86,6 @@ class BricosReportGenerator:
         self.nodes_B = nodes_B
         
         # Initialize ThreadPool for Parallel Rendering
-        # 4 workers is usually a sweet spot for I/O bound image generation without starving UI
         self.executor = ThreadPoolExecutor(max_workers=4)
 
     def _update_progress(self, val):
@@ -101,9 +99,12 @@ class BricosReportGenerator:
         self._add_header_section()
         self.elements.append(PageBreak())
         
-        # 2. Background Theory
+        # [cite_start]2. Background Theory & Methodology [cite: 1]
         self.elements.append(Paragraph(f"{self.chapter_count}. Basis of Analysis & Methodology", self.styles['SwecoSubHeader']))
         self._add_theory_section()
+        # [cite_start]Add Model Conventions here as requested [cite: 1]
+        self.elements.append(Spacer(1, 0.5*cm))
+        self._add_conventions_text(self.params_A)
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
@@ -115,11 +116,8 @@ class BricosReportGenerator:
         
         # 4. Input Summary
         self.elements.append(Paragraph(f"{self.chapter_count}. System Configuration & Geometry", self.styles['SwecoSubHeader']))
+        # [cite_start]Removed _add_conventions_text call from here [cite: 1]
         
-        # --- NEW: Audit Conventions Text ---
-        self._add_conventions_text(self.params_A)
-        self.elements.append(Spacer(1, 0.5*cm))
-
         self._add_system_input_summary("System A", self.params_A, self.raw_A, self.props_A)
         self.elements.append(PageBreak())
         self._add_system_input_summary("System B", self.params_B, self.raw_B, self.props_B)
@@ -128,17 +126,16 @@ class BricosReportGenerator:
         
         self._update_progress(0.15)
         
-        # 5. Total Envelope (ULS) [Progress 15% -> 35%]
+        # 5. Total Envelope (ULS)
         self.elements.append(Paragraph(f"{self.chapter_count}. Design Results (ULS) - Total Envelope", self.styles['SwecoSubHeader']))
         eq_txt = self._build_uls_equation_text()
         self.elements.append(Paragraph(f"<b>Formula:</b> {eq_txt}", self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
-        # Define progress range for this section
         self._add_results_section("Design (ULS)", prog_range=(0.15, 0.35)) 
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
-        # 6. Total Envelope (SLS) [Progress 35% -> 50%]
+        # 6. Total Envelope (SLS)
         self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results (SLS) - Total Envelope", self.styles['SwecoSubHeader']))
         self.elements.append(Paragraph(r"<b>Formula:</b> 1.0 · Permanent + 1.0 · Variable (No KFI, No Gamma, No Phi)", self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
@@ -146,12 +143,11 @@ class BricosReportGenerator:
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
-        # 7. Load Components (Unfactored) [Progress 50% -> 75%]
+        # 7. Load Components (Unfactored)
         has_sw = any(v > 0 for v in self.params_A['sw_list']) or any(v > 0 for v in self.params_B['sw_list'])
         has_soil = len(self.params_A.get('soil', [])) > 0 or len(self.params_B.get('soil', [])) > 0
         has_surch = len(self.params_A.get('surcharge', [])) > 0 or len(self.params_B.get('surcharge', [])) > 0
         
-        # Calculate slices for active components to distribute progress evenly
         active_comps = sum([has_sw, has_soil, has_surch])
         prog_start = 0.50
         prog_total_span = 0.25
@@ -178,10 +174,9 @@ class BricosReportGenerator:
             self.chapter_count += 1
             prog_start += prog_step
         
-        # 8. Critical Vehicle Steps [Progress 75% -> 95%]
+        # 8. Critical Vehicle Steps
         self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
         
-        # --- NEW: Unfactored Data Table ---
         self.elements.append(Paragraph("<b>Table 8.1: Critical Vehicle Effects (Raw Envelope Values)</b>", self.styles['SwecoSmall']))
         self.elements.append(Paragraph("Values represent the raw Min/Max envelope before application of Partial Factors (Gamma) and Dynamic Factor (Phi).", self.styles['SwecoCell']))
         self._add_unfactored_vehicle_table()
@@ -194,10 +189,8 @@ class BricosReportGenerator:
 
         self._update_progress(0.98)
 
-        # Shutdown Executor
         self.executor.shutdown(wait=True)
 
-        # Build PDF using Custom Canvas
         doc = SimpleDocTemplate(
             self.buffer, pagesize=A4,
             rightMargin=1.5*cm, leftMargin=1.5*cm,
@@ -208,17 +201,16 @@ class BricosReportGenerator:
 
     def _add_conventions_text(self, params):
         """Adds audit-required conventions text."""
-        shear_txt = "INCLUDED (Timoshenko)" if params.get('use_shear_def', False) else "NEGLECTED (Euler-Bernoulli)"
+        # Removed explicit shear deformation bullet as requested
         conventions_text = f"""
         <b>Model Assumptions & Conventions:</b><br/>
         • <b>Coordinate System:</b> 2D Plane Frame (X: Horizontal, Y: Vertical, M: Counter-clockwise positive).<br/>
-        • <b>Analysis Width:</b> Analysis is performed per meter run (1m strip). All stiffness properties are calculated based on the input effective width (<i>b_eff</i>), but results are output for the full width unless otherwise noted.<br/>
-        • <b>Section Properties:</b> Members are modeled as rectangular sections unless defined otherwise. 
-        Area <i>A = b_eff · h</i>. Inertia <i>I = b_eff · h<sup>3</sup> / 12</i>.<br/>
-        • <b>Material Stiffness:</b> Shear Modulus <i>G = E / (2·(1+&nu;))</i>.<br/>
+        • <b>Effective Width:</b> Analysis properties are calculated based on the effective width <i>b<sub>eff</sub></i>. Area <i>A = b<sub>eff</sub> · h</i>. Inertia <i>I = b<sub>eff</sub> · h<sup>3</sup> / 12</i>.<br/>
+        • <b>Shear Area:</b> The shear area <i>A<sub>s</sub></i> is assumed to be <i>5/6 · A</i> (Rectangular section).<br/>
+        • <b>Material Stiffness:</b> Shear Modulus <i>G = E / (2·(1+&nu;))</i>. <br/>
+        • <b>Elastic Modulus:</b> The Modulus of Elasticity <i>E</i> (or <i>E<sub>cm</sub></i>) is calculated in accordance with DS/EN 1992-1-1 Table 3.1: <i>E = 22 · ((f<sub>ck</sub> + 8) / 10)<sup>0.3</sup></i> (where <i>f<sub>ck</sub></i> is in MPa and <i>E</i> is in GPa).<br/>
         • <b>Loads:</b> Gravity <i>g = 9.81 m/s²</i>. Vehicle loads (tonnes) are converted to kN using this factor.
-        Soil and surcharge loads are applied as line loads (kN/m) acting on the 1m analysis strip.<br/>
-        • <b>Shear Deformation:</b> {shear_txt}.
+        Soil and surcharge loads are applied as line loads (kN/m) acting on the analysis strip.<br/>
         """
         self.elements.append(Paragraph(conventions_text, self.styles['SwecoSmall']))
 
@@ -241,7 +233,6 @@ class BricosReportGenerator:
             "<b>Timoshenko Theory:</b> Explicitly accounts for shear deformation, ensuring accuracy for deep members (e.g., piers, thick slabs). The stiffness matrix is modified by the shear parameter:"
         ]
         
-        # Superscript formatting for formula
         eq_phi = "<i>&Phi;<sub>s</sub></i> = 12<i>EI</i> / (<i>GA<sub>s</sub>L</i><sup>2</sup>)"
         
         bullets2 = [
@@ -350,18 +341,25 @@ class BricosReportGenerator:
 
     def _add_global_settings_summary(self):
         p = self.params_A
+        
+        # Mapped "Both" to "Forwards & Backwards"
+        v_dir = p.get('vehicle_direction', 'Forward')
+        if v_dir == "Both": v_dir = "Forwards & Backwards"
+
         data = [
             ["Parameter", "Value", "Description"],
             ["Mesh Size", f"{p.get('mesh_size', 0.5)} m", "Finite Element discretization length"],
             ["Step Size", f"{p.get('step_size', 0.2)} m", "Vehicle moving load increment"],
-            ["Vehicle Direction", f"{p.get('vehicle_direction', 'Forward')}", "Traffic flow direction"]
+            ["Vehicle Direction", f"{v_dir}", "Traffic flow direction"]
         ]
         
         use_shear = p.get('use_shear_def', False)
         shear_status = "Enabled (Timoshenko)" if use_shear else "Disabled (Euler-Bernoulli)"
         data.append(["Shear Deformation", shear_status, "stiffness matrix formulation"])
-        # Unicode subscript for effective width
-        data.append(["Effective Width (b_eff)", f"{p.get('b_eff', 1.0)} m", "Used for Shear Area & Axial Area estimation"])
+        # Use Paragraph to render HTML tags (subscript)
+        # We use SwecoBody style to match the table's default font size (9pt)
+        lbl_beff = Paragraph("Effective Width (<i>b<sub>eff</sub></i>)", self.styles['SwecoBody'])
+        data.append([lbl_beff, f"{p.get('b_eff', 1.0)} m", "Used for Shear Area & Axial Area estimation"])
 
         if use_shear:
             data.append(["Poisson's Ratio (ν)", f"{p.get('nu', 0.2)}", "Used for Shear Modulus G"])
@@ -416,18 +414,15 @@ class BricosReportGenerator:
         geom_key = f"{prefix}_geom_{idx}"
         val_default = p[simple_list_key][idx]
         
-        # UPDATED: Default input is now Height (H)
         desc = f"H = {val_default:.3f}m"
         
         if geom_key in p:
             g = p[geom_key]
-            # UPDATED: Default type 1 = Height
             is_height = (g.get('type', 1) == 1)
             lbl = "H" if is_height else "I"
             fmt = "{:.3f}m" if is_height else "{:.4e}"
             shape = g.get('shape', 0)
             vals = g.get('vals', [0.0, 0.0, 0.0])
-            # GUARD: Ensure vals are numbers, not None, to prevent format errors
             safe_vals = [v if (v is not None and not np.isnan(v)) else 0.0 for v in vals]
             
             v1 = fmt.format(safe_vals[0])
@@ -443,7 +438,6 @@ class BricosReportGenerator:
                 val = g.get('incline_val', 0.0)
                 if val is None or np.isnan(val): val = 0.0
                 inc_txt = f"{val:.2f}%" if mode == 0 else f"{val:.2f}m"
-                # FIX: Use <br/> instead of \n for proper PDF rendering
                 desc += f"<br/>Slope: {inc_txt}"
         return desc
 
@@ -468,22 +462,29 @@ class BricosReportGenerator:
         self.elements.append(Paragraph(txt_settings, self.styles['SwecoBody']))
         self.elements.append(Spacer(1, 0.2*cm))
         
-        w_id, w_dim, w_load, w_mat = 1.5*cm, 2.0*cm, 2.0*cm, 3.5*cm
+        # Widened Material Column
+        w_id, w_dim, w_load, w_mat = 1.5*cm, 2.0*cm, 2.0*cm, 4.5*cm 
         page_width = 18.0*cm
         w_geom = page_width - (w_id + w_dim + w_load + w_mat)
         col_widths = [w_id, w_dim, w_geom, w_load, w_mat]
 
         # 1. SPANS
-        span_data = [["Span", "L [m]", "Section Geometry", "SW [kN/m]", "Material / E [MPa]"]]
+        span_data = [["Span", "L [m]", "Section Geometry", "SW [kN/m]", "Material / E"]]
         for i in range(p['num_spans']):
             if p['L_list'][i] > 0.001:
-                # NEW: Access computed E from model_props
                 pid = f"S{i+1}"
-                e_real = props['Spans'].get(pid, {}).get('E', 0.0) / 1e6 # Pa -> MPa
+                e_real = props['Spans'].get(pid, {}).get('E', 0.0) / 1e6 
+                # E real is calculated in kPa, e_real here is in GPa (33e6 / 1e6 = 33)
+                # Formatted material string per user request
                 if p['e_mode'] == 'Eurocode':
-                    mat_str = f"C{p['fck_span_list'][i]:.0f} ({e_real:.0f} MPa)"
+                    fck = p['fck_span_list'][i]
                 else:
-                    mat_str = f"Custom ({e_real:.0f} MPa)"
+                    fck = 0 # Not relevant for Custom E
+                    
+                if p['e_mode'] == 'Eurocode':
+                    mat_str = f"fck = {fck:.0f} MPa / E = {e_real:.0f} GPa"
+                else:
+                    mat_str = f"Custom (E = {e_real:.0f} GPa)"
                 
                 geom_desc = self._get_geometry_description(p, 'span', i, 'Is_list')
                 geom_flowable = Paragraph(geom_desc, self.styles['SwecoCell'])
@@ -500,18 +501,19 @@ class BricosReportGenerator:
         # 2. WALLS
         if p['mode'] == 'Frame':
             self.elements.append(Spacer(1, 0.2*cm))
-            wall_data = [["Wall", "H [m]", "Section Geometry", "Surch [kN/m]", "Material / E [MPa]"]]
+            wall_data = [["Wall", "H [m]", "Section Geometry", "Surch [kN/m]", "Material / E"]]
             has_wall = False
             for i in range(p['num_spans'] + 1):
                 if p['h_list'][i] > 0.001:
                     has_wall = True
-                    # NEW: Access computed E
                     pid = f"W{i+1}"
                     e_real = props['Walls'].get(pid, {}).get('E', 0.0) / 1e6
+                    
                     if p['e_mode'] == 'Eurocode':
-                        mat_str = f"C{p['fck_wall_list'][i]:.0f} ({e_real:.0f} MPa)"
+                        fck = p['fck_wall_list'][i]
+                        mat_str = f"fck = {fck:.0f} MPa / E = {e_real:.0f} GPa"
                     else:
-                        mat_str = f"Custom ({e_real:.0f} MPa)"
+                        mat_str = f"Custom (E = {e_real:.0f} GPa)"
 
                     sur = next((x['q'] for x in p.get('surcharge', []) if x['wall_idx']==i), 0.0)
                     geom_desc = self._get_geometry_description(p, 'wall', i, 'Iw_list')
@@ -526,7 +528,6 @@ class BricosReportGenerator:
 
         # 3. SUPPORTS
         self.elements.append(Spacer(1, 0.2*cm))
-        # Note: Unicode superscripts in headers if needed, though Kx/Ky are plain here
         supp_data = [["Support Node", "Type", "Stiffness (Kx, Ky, Km) [kN/m, kN/m, kNm/rad]"]]
         has_supp = False
         supp_list = p.get('supports', [])
@@ -555,7 +556,6 @@ class BricosReportGenerator:
         if soil_list:
             self.elements.append(Spacer(1, 0.2*cm))
             self.elements.append(Paragraph("Soil Loads (Earth Pressure):", self.styles['SwecoSmall']))
-            # FIXED UNIT: kN/m (Line Load) instead of kN/m2 (Pressure)
             soil_table = [["Wall", "Face", "Height [m]", "q_top [kN/m]", "q_bot [kN/m]"]]
             for s in soil_list:
                 soil_table.append([
@@ -586,11 +586,7 @@ class BricosReportGenerator:
         try:
             fig = viz.create_plotly_fig(**fig_kwargs)
             b = io.BytesIO()
-            # Optimization: 1.5 scale is sufficient for PDF
             fig.write_image(b, format='png', scale=1.5)
-            # CRITICAL FIX: MAGIC BYTE VALIDATION
-            # Kaleido may write text errors to buffer instead of image data.
-            # PNG must start with \x89PNG
             b.seek(0)
             if not b.getvalue().startswith(b'\x89PNG'):
                 return None
@@ -599,20 +595,15 @@ class BricosReportGenerator:
             return None
 
     def _submit_parallel_plots(self, task_list, prog_range=(0.0, 0.0)):
-        """
-        Helper to submit a batch of plotting tasks and return results in order.
-        Updates the UI progress bar as tasks complete.
-        """
         if not task_list:
             return []
             
-        futures = {} # future -> index in task_list
+        futures = {}
         for i, kwargs in enumerate(task_list):
             f = self.executor.submit(self._render_plot_task, kwargs)
             futures[f] = i
         
         results = [None] * len(task_list)
-        
         total_tasks = len(task_list)
         completed_count = 0
         start_p, end_p = prog_range
@@ -621,7 +612,6 @@ class BricosReportGenerator:
         for f in as_completed(futures):
             idx = futures[f]
             try:
-                # Catch failures explicitly (None return)
                 results[idx] = f.result()
             except Exception:
                 results[idx] = None
@@ -638,14 +628,12 @@ class BricosReportGenerator:
         res_A = solver.combine_results(self.raw_A, self.params_A, res_mode)
         res_B = solver.combine_results(self.raw_B, self.params_B, res_mode)
         
-        # Split Plots: System A then System B
         self.elements.append(Paragraph(f"Visualizations - {res_mode}", self.styles['Heading4']))
         
         tasks = []
         types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'), 
                  ('N', 'Normal Force [kN]'), ('Def', 'Deformation [mm]')]
         
-        # Task set 1: System A
         for t_code, t_title in types:
             tasks.append({
                 'nodes': self.nodes_A, 'sysA_data': res_A.get("Total Envelope", {}), 'sysB_data': {},
@@ -657,7 +645,6 @@ class BricosReportGenerator:
                 'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5
             })
             
-        # Task set 2: System B
         for t_code, t_title in types:
             tasks.append({
                 'nodes': self.nodes_B, 'sysA_data': {}, 'sysB_data': res_B.get("Total Envelope", {}),
@@ -669,20 +656,17 @@ class BricosReportGenerator:
                 'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
             })
 
-        # BATCH RENDER with Progress
         images = self._submit_parallel_plots(tasks, prog_range)
         
-        # Assemble Flowables
         self.elements.append(Paragraph("System A", self.styles['SwecoSmall']))
-        self._append_image_grid(images[0:4]) # First 4 are Sys A
+        self._append_image_grid(images[0:4]) 
         
         self.elements.append(Spacer(1, 0.3*cm))
         self.elements.append(Paragraph("System B", self.styles['SwecoSmall']))
-        self._append_image_grid(images[4:8]) # Next 4 are Sys B
+        self._append_image_grid(images[4:8]) 
 
         self.elements.append(Spacer(1, 0.5*cm))
         
-        # Tables
         title_str = f"Tabular Summary - {res_mode.upper()}"
         self.elements.append(Paragraph(title_str, self.styles['Heading3']))
         
@@ -698,7 +682,6 @@ class BricosReportGenerator:
         types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'), 
                  ('N', 'Normal Force [kN]'), ('Def', 'Deformation [mm]')]
         
-        # Sys A Tasks
         for t_code, t_title in types:
             tasks.append({
                 'nodes': self.nodes_A, 'sysA_data': res_A.get(load_key, {}), 'sysB_data': {},
@@ -710,7 +693,6 @@ class BricosReportGenerator:
                 'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5
             })
             
-        # Sys B Tasks
         for t_code, t_title in types:
             tasks.append({
                 'nodes': self.nodes_B, 'sysA_data': {}, 'sysB_data': res_B.get(load_key, {}),
@@ -740,11 +722,9 @@ class BricosReportGenerator:
         self._add_reaction_table(wrap_A, self.params_A, wrap_B, self.params_B)
 
     def _append_image_grid(self, img_bytes_list):
-        """Creates a 2x2 grid (or similar) from a list of image bytes."""
         img_flowables = []
         for b in img_bytes_list:
             if b:
-                # SAFE IMAGE EMBEDDING
                 try:
                     img = Image(b, width=8*cm, height=5*cm)
                     img_flowables.append(img)
@@ -757,7 +737,6 @@ class BricosReportGenerator:
             rows = []
             for i in range(0, len(img_flowables), 2):
                 rows.append(img_flowables[i:i+2])
-            # Ensure row has 2 elements if odd number
             if len(rows[-1]) == 1:
                 rows[-1].append(Paragraph("", self.styles['Normal']))
                 
@@ -774,7 +753,6 @@ class BricosReportGenerator:
             all_ids = sorted(raw_env.keys(), key=lambda x: (x[0], int(x[1:])))
             for eid in all_ids:
                 dat = raw_env[eid]
-                # Helper to get scalar max/min
                 def get_v(k):
                     arr = dat.get(k)
                     if arr is None or len(arr) == 0: return 0.0
@@ -785,7 +763,9 @@ class BricosReportGenerator:
                 data.append([eid, f"{mmx:.1f}", f"{mmn:.1f}", f"{vmx:.1f}", f"{vmn:.1f}", sys_name])
 
         process_sys(self.raw_A.get('Vehicle Envelope A', {}), "A")
-        process_sys(self.raw_B.get('Vehicle Envelope B', {}), "B")
+        # FIX: System B also uses 'Vehicle Envelope A' if referencing its primary vehicle
+        # raw_B is the result set for System B. Inside it, 'Vehicle Envelope A' corresponds to the vehicle defined at params_B['vehicle'].
+        process_sys(self.raw_B.get('Vehicle Envelope A', {}), "B")
         
         if len(data) > 1:
             t = self._make_std_table(data, [2*cm, 3*cm, 3*cm, 3*cm, 3*cm, 2*cm])
@@ -793,18 +773,11 @@ class BricosReportGenerator:
         else:
             self.elements.append(Paragraph("No vehicle results found.", self.styles['SwecoSmall']))
 
-    # -----------------------------------------------
-    # OPTIMIZED VEHICLE STEP LOGIC
-    # -----------------------------------------------
     def _add_smart_vehicle_steps(self, prog_range=(0.0, 0.0)):
-        # Phase 1: Identify all critical steps (Calculation)
         tasks_A = self._identify_critical_steps(self.params_A, self.raw_A, "System A", self.nodes_A)
         tasks_B = self._identify_critical_steps(self.params_B, self.raw_B, "System B", self.nodes_B)
         
         all_render_configs = []
-        # Combine tasks for batch rendering
-        # Structure of tasks: {'header': str, 'plots': [{'title': str, 'config': dict}, ...]}
-        
         flat_configs = []
         
         def collect_configs(task_groups):
@@ -815,13 +788,11 @@ class BricosReportGenerator:
         collect_configs(tasks_A)
         collect_configs(tasks_B)
         
-        # Phase 2: Batch Render with Progress
         if flat_configs:
             rendered_images = self._submit_parallel_plots(flat_configs, prog_range)
         else:
             rendered_images = []
         
-        # Phase 3: Reconstruct Report
         img_cursor = 0
         
         def build_sys_section(task_groups, label, p_name):
@@ -835,7 +806,6 @@ class BricosReportGenerator:
                     full_title = plot_req['title']
                     self.elements.append(Paragraph(full_title, self.styles['SwecoCell']))
                     
-                    # Pop image from flat list
                     if img_cursor < len(rendered_images):
                         img_data = rendered_images[img_cursor]
                         img_cursor += 1
@@ -852,8 +822,8 @@ class BricosReportGenerator:
         build_sys_section(tasks_B, "System B", self.params_B.get('name'))
 
     def _identify_critical_steps(self, params, raw_data, sys_label, sys_nodes):
-        # Safe lookup for vehicle steps (solver separates them by key)
         steps = raw_data.get('Vehicle Steps A', [])
+        # FIX: Check 'Vehicle Steps A' first (Primary), then B if needed, but usually we just want primary critical steps
         if not steps: steps = raw_data.get('Vehicle Steps B', [])
         
         if not steps: return []
@@ -864,7 +834,6 @@ class BricosReportGenerator:
         for i in range(num_spans):
             eid = f"S{i+1}"
             
-            # Find Critical Indices
             max_M, idx_max_M = -1e15, -1
             min_M, idx_min_M = 1e15, -1
             max_V, idx_max_V = -1e15, -1
@@ -888,7 +857,6 @@ class BricosReportGenerator:
             
             group = {'header': f"Element {eid}", 'plots': []}
             
-            # Explicitly define the 4 critical cases to ensure correct plot types
             critical_cases = [
                 (idx_min_M, "Min M", 'M'),
                 (idx_max_M, "Max M", 'M'),
@@ -896,16 +864,10 @@ class BricosReportGenerator:
                 (idx_max_V, "Max V", 'V')
             ]
             
-            # Track processed indices per plot type to avoid duplicates IF desired, 
-            # but user request implies specific plot types for specific extrema.
-            # We will allow same index to produce multiple plots if it is critical for different types (e.g. Max M and Max V).
-            # However, we avoid repeating the exact same plot (same index AND same type).
             processed = set() 
             
             for idx, label, type_code in critical_cases:
                 if idx == -1: continue
-                
-                # Unique key: (step_index, plot_type)
                 if (idx, type_code) in processed: continue
                 processed.add((idx, type_code))
                 
@@ -919,7 +881,7 @@ class BricosReportGenerator:
                     'nodes': sys_nodes,
                     'sysA_data': step['res'] if is_A else {},
                     'sysB_data': step['res'] if not is_A else {},
-                    'type_base': type_code, # Enforce correct type (M or V)
+                    'type_base': type_code,
                     'title': title,
                     'load_case_name': "Vehicle Steps",
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
@@ -985,12 +947,11 @@ class BricosReportGenerator:
         all_ids = sorted(list(set(resA_dict.keys()) | set(resB_dict.keys())), 
                          key=lambda x: (x[0], int(x[1:])))
         
-        # Add Unit Row to Header
         headers = [
             ["Elem", "M_Max", "M_Min", "V_Max", "V_Min", "N_Max", "N_Min", "Def_Max", "Def_Min"],
             ["[-]", "[kNm]", "[kNm]", "[kN]", "[kN]", "[kN]", "[kN]", "[mm]", "[mm]"]
         ]
-        table_data = headers + [] # Start with headers
+        table_data = headers + [] 
         
         col_widths = [1.5*cm] + [2.0*cm]*8
         for eid in all_ids:
@@ -1014,7 +975,6 @@ class BricosReportGenerator:
             row.extend([cell_txt(k_def_max), cell_txt(k_def_min)])
             table_data.append(row)
         
-        # Pass header_rows=2 to style both rows
         t = self._make_std_table(table_data, col_widths, font_size=7, header_rows=2)
         self.elements.append(KeepTogether([t]))
         self.elements.append(Paragraph("Values shown as: Sys A / Sys B", self.styles['Italic']))
@@ -1035,7 +995,6 @@ class BricosReportGenerator:
         all_nodes = sorted(list(set(reactA.keys()) | set(reactB.keys())))
         filtered_nodes = [n for n in all_nodes if (n in valid_A) or (n in valid_B)]
         
-        # Add Unit Row
         headers = [
             ["Node", "Rx Max", "Rx Min", "Ry Max", "Ry Min", "Mz Max", "Mz Min"],
             ["[-]", "[kN]", "[kN]", "[kN]", "[kN]", "[kNm]", "[kNm]"]
@@ -1056,25 +1015,17 @@ class BricosReportGenerator:
                     row.append(f"{vA:.1f} / {vB:.1f}")
             table_data.append(row)
         
-        # Pass header_rows=2
         t = self._make_std_table(table_data, col_widths, font_size=7, header_rows=2)
         self.elements.append(KeepTogether([t]))
 
     def _make_std_table(self, data, col_widths, font_size=9, header_rows=1):
         t = Table(data, colWidths=col_widths, hAlign='LEFT')
         
-        # Apply header style to 'header_rows' number of rows
-        # Row indices are 0-based. If header_rows=1, slice is 0. If 2, slice is 0,1.
-        # The 'BACKGROUND' and 'FONTNAME' need to span (0,0) to (-1, header_rows-1)
-        
         t.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
             ('FONTSIZE', (0,0), (-1,-1), font_size),
-            
-            # Header Styling
             ('FONTNAME', (0,0), (-1, header_rows-1), 'Helvetica-Bold'),
             ('BACKGROUND', (0,0), (-1, header_rows-1), colors.lightgrey),
-            
             ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('ALIGN', (1,0), (-1,-1), 'CENTER'),
