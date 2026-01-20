@@ -102,7 +102,6 @@ class BricosReportGenerator:
         # [cite_start]2. Background Theory & Methodology [cite: 1]
         self.elements.append(Paragraph(f"{self.chapter_count}. Basis of Analysis & Methodology", self.styles['SwecoSubHeader']))
         self._add_theory_section()
-        # [cite_start]Add Model Conventions here as requested [cite: 1]
         self.elements.append(Spacer(1, 0.5*cm))
         self._add_conventions_text(self.params_A)
         self.elements.append(PageBreak())
@@ -116,7 +115,6 @@ class BricosReportGenerator:
         
         # 4. Input Summary
         self.elements.append(Paragraph(f"{self.chapter_count}. System Configuration & Geometry", self.styles['SwecoSubHeader']))
-        # [cite_start]Removed _add_conventions_text call from here [cite: 1]
         
         self._add_system_input_summary("System A", self.params_A, self.raw_A, self.props_A)
         self.elements.append(PageBreak())
@@ -577,6 +575,23 @@ class BricosReportGenerator:
                 self.elements.append(Spacer(1, 0.3*cm))
         add_veh_table('vehicle', "A")
         add_veh_table('vehicleB', "B")
+
+        # 6. PHI CALCULATION LOG
+        if p.get('phi_mode', 'Calculate') == 'Calculate' and raw_res and raw_res.get('phi_log'):
+            self.elements.append(Spacer(1, 0.2*cm))
+            self.elements.append(Paragraph("Dynamic Factor Calculation (<i>&Phi;</i>):", self.styles['SwecoSmall']))
+            
+            log_lines = raw_res['phi_log']
+            formatted_lines = []
+            for line in log_lines:
+                # Math text formatting for known variables
+                txt = line.replace("L_phi", "<i>L<sub>&Phi;</sub></i>")\
+                          .replace("L_mean", "<i>L<sub>mean</sub></i>")\
+                          .replace("Phi", "<i>&Phi;</i>")
+                formatted_lines.append(txt)
+            
+            for line in formatted_lines:
+                self.elements.append(Paragraph(f"• {line}", self.styles['SwecoCell']))
 
     # -----------------------------------------------
     # PARALLEL RENDERING HELPER (WITH PROGRESS)

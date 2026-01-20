@@ -779,28 +779,53 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
                 st.session_state[input_key_l] = p[key_loads]; st.session_state[input_key_s] = p[key_space] 
                 st.rerun()
         
-        p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, disabled=ui_locked)
-        p[key_space] = st.text_input(f"Space {prefix} [m]", key=input_key_s, disabled=ui_locked)
+        # --- TOOLTIP CONFIGURATION ---
+        help_loads = "Define axle loads in tonnes [t], separated by commas. Example: '10, 10, 15'"
+        help_space = "Define spacing between axles in meters [m]. Must start with 0. The list length must equal the number of loads. Example: '0, 1.5, 3.0'"
+        
+        p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, disabled=ui_locked, help=help_loads)
+        p[key_space] = st.text_input(f"Space {prefix} [m]", key=input_key_s, disabled=ui_locked, help=help_space)
         
         valid_veh = False
+        err_msg = ""
+        
         try:
             if p[key_loads].strip():
-                l_arr = [float(x) for x in p[key_loads].split(',') if x.strip()]
-                s_arr = [float(x) for x in p[key_space].split(',') if x.strip()]
-                if len(l_arr) != len(s_arr): pass
-                elif len(s_arr) > 0 and s_arr[0] != 0: pass
-                elif len(l_arr) == 0: pass
-                else:
-                    valid_veh = True
-                    p[struct_key]['loads'] = l_arr; p[struct_key]['spacing'] = s_arr
+                try:
+                    l_arr = [float(x) for x in p[key_loads].split(',') if x.strip()]
+                except ValueError:
+                    l_arr = []
+                    err_msg = "Load input contains non-numeric values."
+
+                try:
+                    s_arr = [float(x) for x in p[key_space].split(',') if x.strip()]
+                except ValueError:
+                    s_arr = []
+                    err_msg = "Spacing input contains non-numeric values."
+                
+                if not err_msg:
+                    if len(l_arr) != len(s_arr):
+                        err_msg = f"Mismatch: {len(l_arr)} loads vs {len(s_arr)} spacings."
+                    elif len(s_arr) > 0 and s_arr[0] != 0:
+                        err_msg = "Spacing must start with 0."
+                    elif len(l_arr) == 0:
+                        err_msg = "Vehicle definition empty."
+                    else:
+                        valid_veh = True
+                        p[struct_key]['loads'] = l_arr; p[struct_key]['spacing'] = s_arr
             else:
                 p[struct_key]['loads'] = []; p[struct_key]['spacing'] = []
-        except: pass
+        except Exception as e:
+            err_msg = f"Parsing Error: {str(e)}"
         
         if not valid_veh:
-            if p[key_loads].strip(): st.error(f"Invalid Vehicle."); p[struct_key]['loads'] = []
-            else: st.caption("No vehicle defined.")
-        else: st.success("Vehicle Valid")
+            if p[key_loads].strip(): 
+                st.error(f"Invalid Vehicle {prefix}: {err_msg}")
+                p[struct_key]['loads'] = [] # Ensure invalid data doesn't propagate to solver
+            else: 
+                st.caption("No vehicle defined.")
+        else: 
+            st.success(f"Vehicle {prefix} Valid")
 
     st.markdown("**Vehicle A**")
     handle_veh_inputs("A", f"{curr}_vehA_class", 'vehicle_loads', 'vehicle_space', 'vehicle')
