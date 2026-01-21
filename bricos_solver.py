@@ -266,36 +266,51 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
 def aggregate_member_results(detailed_results, global_loads_override=None):
     agg_res = {}
     grouped = {}
+    
+    # 1. Group by Parent
     for eid, res in detailed_results.items():
         parent = res.get('parent', eid)
         if parent not in grouped: grouped[parent] = []
         grouped[parent].append(res)
     
+    # 2. Optimized Aggregation
     for parent, parts in grouped.items():
         parts.sort(key=lambda x: x['local_offset'])
+        
+        # Calculate Total Points upfront for Pre-allocation
+        total_pts = sum(len(p['x']) for p in parts)
+        
+        # Pre-allocate Arrays
+        x_agg = np.zeros(total_pts)
+        M_agg = np.zeros(total_pts)
+        V_agg = np.zeros(total_pts)
+        N_agg = np.zeros(total_pts)
+        dx_agg = np.zeros(total_pts)
+        dy_agg = np.zeros(total_pts)
+        
+        raw_loads_all = []
+        
         base = parts[0]
         last = parts[-1]
         total_L = sum(p['L'] for p in parts)
         
-        x_all = []
-        M_all, V_all, N_all = [], [], []
-        dx_all, dy_all = [], []
-        raw_loads_all = []
-        
-        ni_final = base['ni']
-        nj_final = last['nj']
-        ni_id_final = base['ni_id']
-        nj_id_final = last['nj_id']
+        current_idx = 0
         
         for p in parts:
+            n_p = len(p['x'])
             offset = p['local_offset']
-            x_all.append(p['x'] + offset)
-            M_all.append(p['M'])
-            V_all.append(p['V'])
-            N_all.append(p['N'])
-            dx_all.append(p['def_x'])
-            dy_all.append(p['def_y'])
             
+            # Direct Slice Filling (Faster than append + concat)
+            x_agg[current_idx : current_idx + n_p] = p['x'] + offset
+            M_agg[current_idx : current_idx + n_p] = p['M']
+            V_agg[current_idx : current_idx + n_p] = p['V']
+            N_agg[current_idx : current_idx + n_p] = p['N']
+            dx_agg[current_idx : current_idx + n_p] = p['def_x']
+            dy_agg[current_idx : current_idx + n_p] = p['def_y']
+            
+            current_idx += n_p
+            
+            # Load Aggregation (Lists are unavoidable here, but less critical)
             if not global_loads_override or parent not in global_loads_override:
                 for load in p['loads']:
                     new_load = copy.deepcopy(load)
@@ -307,6 +322,7 @@ def aggregate_member_results(detailed_results, global_loads_override=None):
                         params[3] += offset
                     raw_loads_all.append(new_load)
         
+        # Load Deduplication / Override Logic
         final_loads = []
         if global_loads_override and parent in global_loads_override:
             final_loads = global_loads_override[parent]
@@ -344,16 +360,16 @@ def aggregate_member_results(detailed_results, global_loads_override=None):
                 final_loads.append(curr)
 
         agg_res[parent] = {
-            'x': np.concatenate(x_all),
-            'M': np.concatenate(M_all),
-            'V': np.concatenate(V_all),
-            'N': np.concatenate(N_all),
-            'def_x': np.concatenate(dx_all),
-            'def_y': np.concatenate(dy_all),
+            'x': x_agg,
+            'M': M_agg,
+            'V': V_agg,
+            'N': N_agg,
+            'def_x': dx_agg,
+            'def_y': dy_agg,
             'L': total_L,
             'cx': base['cx'], 'cy': base['cy'],
-            'ni': ni_final, 'nj': nj_final,
-            'ni_id': ni_id_final, 'nj_id': nj_id_final,
+            'ni': base['ni'], 'nj': last['nj'],
+            'ni_id': base['ni_id'], 'nj_id': last['nj_id'],
             'loads': final_loads, 
             'f_start_local': base['f_start_local'],
             'f_end_local': last['f_end_local']
@@ -613,10 +629,12 @@ def run_raw_analysis(params, phi_val_override=None):
 
     K_glob, node_map, elem_objects, NDOF = build_stiffness_matrix(nodes, elems_base, restraints, shear_config)
     
-    try:
-        K_inv = np.linalg.inv(K_glob)
-    except np.linalg.LinAlgError:
-        raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
+    # --- REPLACED EXPLICIT INVERSION WITH DIRECT SOLVER ---
+    # K_inv calculation removed for speed/stability
+    # We now check for singularity by attempting to solve dummy or catching errors later
+    
+    # Basic stability check using condition number is too expensive for real-time.
+    # We rely on the solver throwing LinAlgError if singular.
 
     def solve_static(loads_dict):
         F = np.zeros(NDOF)
@@ -635,7 +653,13 @@ def run_raw_analysis(params, phi_val_override=None):
                 idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
                 indices = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
                 F[indices] -= f_glob
-        D = K_inv @ F
+        
+        # OPTIMIZATION: Use direct solver instead of inverse multiplication
+        try:
+            D = np.linalg.solve(K_glob, F)
+        except np.linalg.LinAlgError:
+             raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
+             
         return get_detailed_results_optimized(elem_objects, elems_base, nodes, D, loads_dict, params.get('mesh_size', 0.5))
 
     def add_member_load(target_map, parent_id, load_type, is_gravity, params_list):
@@ -843,7 +867,12 @@ def run_raw_analysis(params, phi_val_override=None):
                 is_init_chunk = (is_first_run and start_idx == 0)
                 
                 F_chunk = kernels.jit_build_batch_F(NDOF, n_chunk, x_chunk, v_loads_raw, v_dists_run, sp_start_x, sp_lens, sp_el_indices, el_L, el_T, el_dof_indices)
-                D_chunk = K_inv @ F_chunk
+                
+                # OPTIMIZATION: Use direct solver batch processing
+                try:
+                    D_chunk = np.linalg.solve(K_glob, F_chunk)
+                except np.linalg.LinAlgError:
+                    raise ValueError("Structural Instability Detected during Vehicle Analysis.")
                 
                 kernels.jit_envelope_batch_parallel(
                     n_chunk, n_elems, n_pts_kernel,
