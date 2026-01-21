@@ -218,7 +218,7 @@ class BricosReportGenerator:
         self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
         
         self.elements.append(Paragraph("<b>Table 8.1: Critical Vehicle Effects (Raw Envelope Values)</b>", self.styles['SwecoSmall']))
-        self.elements.append(Paragraph("Values represent the raw Min/Max envelope before application of Partial Factors (Gamma) and Dynamic Factor (Phi).", self.styles['SwecoCell']))
+        self.elements.append(Paragraph("Values represent the raw Min/Max envelope before application of Partial Factors (Gamma, KFI) and Dynamic Factor (Phi).", self.styles['SwecoCell']))
         self._add_unfactored_vehicle_table()
         self.elements.append(Spacer(1, 0.4*cm))
 
@@ -254,81 +254,44 @@ class BricosReportGenerator:
         self.elements.append(Paragraph(conventions_text, self.styles['SwecoSmall']))
 
     def _add_theory_section(self):
-        """Adds standard background theory text."""
+        """Adds standard background theory text, condensed to fit on one page."""
         styles = self.styles
         def add_sub(title, text):
             self.elements.append(Paragraph(f"<b>{title}</b>", styles['SwecoBody']))
             self.elements.append(Paragraph(text, styles['SwecoBody']))
             self.elements.append(Spacer(1, 0.2*cm))
 
-        add_sub("1.1 Calculation Method", 
-            f"The structural analysis is performed using <b>BriCoS v{self.version}</b>, a proprietary Finite Element Analysis (FEM) tool based on the Matrix Stiffness Method for 2D planar frames.")
+        # Condensed 1.1 & 1.2
+        add_sub("1.1 Calculation Method & Element Formulation",
+            f"The analysis is performed using <b>BriCoS v{self.version}</b>, a 2D Matrix Stiffness FEM tool. "
+            "The structure is discretized using beam elements with two available formulations: "
+            "<b>Euler-Bernoulli</b> (slender members, neglecting shear deformation) or <b>Timoshenko</b> "
+            "(deep members, accounting for shear deformation via the parameter <i>&Phi;<sub>s</sub></i> = 12<i>EI</i> / (<i>GA<sub>s</sub>L</i><sup>2</sup>)). "
+            "Non-prismatic (tapered) elements are handled via numerical integration of the flexibility matrix. "
+            "Material behavior is assumed Linear Elastic.")
 
-        add_sub("1.2 Element Formulation", 
-            "The structure is discretized using advanced beam elements that account for both constant and variable cross-sections. Two formulations are available:")
+        # Condensed 1.3
+        add_sub("1.2 Boundary Conditions", 
+            "Supports are modeled using the Penalty Method with high-stiffness springs for Fixed/Pinned supports (<i>k</i> &approx; 10<sup>14</sup>) "
+            "and discrete springs for elastic foundations based on user-specified stiffness (<i>K<sub>x</sub>, K<sub>y</sub>, K<sub>&theta;</sub></i>).")
+
+        # Condensed 1.4
+        add_sub("1.3 Moving Load Analysis",
+            "Traffic actions are evaluated using a Quasi-Static algorithm, stepping the vehicle model across the structure to compute absolute maximum and minimum envelopes for forces and displacements. "
+            "The Dynamic Amplification Factor (<i>&Phi;</i>) is calculated automatically based on the influence length (compliant with <b>DS/EN 1991-2 DK NA</b>) or defined manually.")
+
+        # Condensed 1.5
+        add_sub("1.4 Load Combinations", 
+            "Design values (<i>E<sub>d</sub></i>) are computed by superposition of factored envelopes: "
+            "<i>E<sub>d</sub></i> = <i>K<sub>FI</sub></i> &middot; (<i>&gamma;<sub>G</sub>E<sub>SW</sub></i> + <i>&gamma;<sub>Soil</sub>E<sub>Soil</sub></i> + <i>&gamma;<sub>Q</sub>&Phi;E<sub>Veh</sub></i> + <i>&gamma;<sub>Q</sub>E<sub>Surch</sub></i>). "
+            "Partial factors (<i>&gamma;</i>) and Consequence Class factor (<i>K<sub>FI</sub></i>) are applied as defined in settings. "
+            "Traffic surcharge interaction is applied according to user selection (Exclusive or Simultaneous with vehicle load).")
+
+        # Condensed 1.6
+        add_sub("1.5 Member Connectivity & Local Axes",
+            "All element connections are modeled as fully rigid (no releases). Elements are defined along cross-section centerlines without eccentricities. "
+            "<b>Local Coordinate Systems</b> for interpreting N and V:")
         
-        bullets = [
-            "<b>Euler-Bernoulli Theory:</b> Classical beam theory assuming plane sections remain plane and perpendicular to the neutral axis. Shear deformations are neglected (<i>&Phi;<sub>s</sub></i> = 0). Suitable for slender members.",
-            "<b>Timoshenko Theory:</b> Explicitly accounts for shear deformation, ensuring accuracy for deep members (e.g., piers, thick slabs). The stiffness matrix is modified by the shear parameter:"
-        ]
-        
-        eq_phi = "<i>&Phi;<sub>s</sub></i> = 12<i>EI</i> / (<i>GA<sub>s</sub>L</i><sup>2</sup>)"
-        
-        bullets2 = [
-            "Where <i>A<sub>s</sub></i> is the effective shear area. Poisson's ratio (<i>&nu;</i>) is user-defined (default 0.2).",
-            "<b>Variable Stiffness (Non-Prismatic):</b> For tapered or haunched elements, the stiffness matrix is computed via numerical integration of the flexibility matrix, ensuring accurate distribution of forces in varying geometries.",
-            "<b>Material Behavior:</b> The analysis assumes Linear Elastic material behavior. Geometric non-linearity (P-Delta) is not currently included."
-        ]
-
-        for b in bullets:
-            self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))
-        self.elements.append(Paragraph(eq_phi, styles['SwecoMath']))
-        for b in bullets2:
-            self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))    
-        self.elements.append(Spacer(1, 0.2*cm))
-
-        add_sub("1.3 Boundary Conditions", "Supports are modeled using the Penalty Method.")
-        bullets_bc = [
-            "<b>Fixed/Pinned Supports:</b> Represented by high-stiffness springs (<i>k</i> &approx; 10<sup>14</sup> kN/m or kNm/rad).",
-            "<b>Elastic Foundations:</b> Modeled as discrete springs based on user-specified stiffness (<i>K<sub>x</sub>, K<sub>y</sub>, K<sub>&theta;</sub></i>)."
-        ]
-        for b in bullets_bc: self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))
-        self.elements.append(Spacer(1, 0.2*cm))
-
-        add_sub("1.4 Moving Load Analysis", "Traffic actions are evaluated using a Quasi-Static Moving Load algorithm.")
-        bullets_mv = [
-            "<b>Stepping:</b> The vehicle model is stepped across the structure in user-defined increments.",
-            "<b>Envelopes:</b> The software computes the absolute maximum and minimum envelopes for Internal Forces (<i>M, V, N</i>), Displacements, and Reactions.",
-            "<b>Dynamic Factor:</b> The Dynamic Amplification Factor (<i>&Phi;</i>) is calculated automatically based on the influence length (compliant with <b>DS/EN 1991-2 DK NA</b>), or defined manually."
-        ]
-        for b in bullets_mv: self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))
-        self.elements.append(Spacer(1, 0.2*cm))
-
-        add_sub("1.5 Load Combinations", 
-            "Results are combined using the Principle of Superposition. The final design values (<i>E<sub>d</sub></i>) are computed by summing the factored envelopes.")
-        
-        eq_comb = "<i>E<sub>d</sub></i> = <i>&gamma;<sub>G</sub>E<sub>SW</sub></i> + <i>&gamma;<sub>Soil</sub>E<sub>Soil</sub></i> + <i>&gamma;<sub>Q</sub>&Phi;E<sub>Veh</sub></i> + <i>&gamma;<sub>Q</sub>E<sub>Surch</sub></i>"
-        self.elements.append(Paragraph(eq_comb, styles['SwecoMath']))
-        
-        bullets_lc = [
-            "<b>Surcharge Interaction:</b> Traffic surcharge is combined with the main vehicle load based on the user selection (either <i>Exclusive</i> or <i>Simultaneous</i>).",
-            "<b>Partial Factors:</b> Factors for self-weight (<i>&gamma;<sub>G</sub></i>), soil/earth pressure (<i>&gamma;<sub>Soil</sub></i>), variable loads (<i>&gamma;<sub>Q</sub></i>), and Consequence Class (<i>K<sub>FI</sub></i>) are applied as defined in the project settings."
-        ]
-        for b in bullets_lc: self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))
-        self.elements.append(Spacer(1, 0.2*cm))
-
-        # --- NEW SECTION: MEMBER CONNECTIVITY & ORIENTATION ---
-        add_sub("1.6 Member Connectivity & Orientation",
-            "To correctly interpret the tabular results for Normal Force (N) and Shear Force (V), the following conventions regarding member connectivity and local axes must be observed:")
-
-        bullets_conn = [
-            "<b>Joint Rigidity:</b> All element connections are modeled as fully rigid. No internal member end releases (hinges) or rotational springs are applied at the element-node interface.",
-            "<b>Eccentricities:</b> Elements are defined along the centerlines of the cross-sections. Rigid offsets or eccentricities are not considered."
-        ]
-        for b in bullets_conn: self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))
-
-        self.elements.append(Spacer(1, 0.2*cm))
-        self.elements.append(Paragraph("<b>Local Coordinate Systems:</b>", styles['SwecoBody']))
         bullets_axes = [
             "<b>Horizontal Members (Spans):</b> Local x-axis aligns with Global X. Thus, <b>N</b> represents horizontal axial force, and <b>V</b> represents vertical shear.",
             "<b>Vertical Members (Walls/Piers):</b> Local x-axis aligns with the member axis (Vertical). Thus, <b>N</b> represents vertical axial load, and <b>V</b> represents horizontal shear force."
@@ -413,16 +376,21 @@ class BricosReportGenerator:
         
         use_shear = p.get('use_shear_def', False)
         shear_status = "Enabled (Timoshenko)" if use_shear else "Disabled (Euler-Bernoulli)"
-        data.append(["Shear Deformation", shear_status, "stiffness matrix formulation"])
+        data.append(["Shear Deformation", shear_status, "Stiffness matrix formulation"])
+        
         # Use Paragraph to render HTML tags (subscript)
-        # We use SwecoBody style to match the table's default font size (9pt)
         lbl_beff = Paragraph("Effective Width (<i>b<sub>eff</sub></i>)", self.styles['SwecoBody'])
-        data.append([lbl_beff, f"{p.get('b_eff', 1.0)} m", "Used for Shear Area & Axial Area estimation"])
+        data.append([lbl_beff, f"{p.get('b_eff', 1.0)} m", "Used for shear area & axial area estimation"])
 
         if use_shear:
-            data.append(["Poisson's Ratio (ν)", f"{p.get('nu', 0.2)}", "Used for Shear Modulus G"])
-        
-        t = self._make_std_table(data, [4*cm, 5*cm, 7*cm])
+            data.append(["Poisson's Ratio (ν)", f"{p.get('nu', 0.2)}", "Used for shear modulus G"])
+            
+        # --- NEW: Surcharge Interaction Mode ---
+        surch_mode = p.get('surch_mode', 'Exclusive')
+        surch_txt = "Exclusive from Traffic" if surch_mode == 'Exclusive' else "Simultaneous with Traffic"
+        data.append(["Surcharge Interaction", surch_txt, "Vehicle load & surcharge combination"])
+
+        t = self._make_std_table(data, [4*cm, 5.5*cm, 6.5*cm])
         self.elements.append(KeepTogether([t]))
 
     def _draw_vehicle_stick_model(self, loads, spacing, width=400, height=80):
@@ -911,8 +879,9 @@ class BricosReportGenerator:
             for group in section['groups']:
                 self.elements.append(Paragraph(f"<b>{group['header']}</b>", self.styles['SwecoBody']))
                 for plot_req in group['plots']:
-                    full_title = plot_req['title']
-                    self.elements.append(Paragraph(full_title, self.styles['SwecoCell']))
+                    # REMOVED: Redundant text description (now in plot title)
+                    # full_title = plot_req['title']
+                    # self.elements.append(Paragraph(full_title, self.styles['SwecoCell']))
                     
                     if img_cursor < len(rendered_images):
                         img_data = rendered_images[img_cursor]
@@ -976,7 +945,11 @@ class BricosReportGenerator:
                 
                 step = steps[idx]
                 x_loc = step['x']
-                title = f"{veh_label} Step {idx}: {label} @ X={x_loc:.2f}m"
+                
+                # UPDATED: Construct unified plot title with System and Vehicle Info
+                s_short = "Sys A" if "A" in sys_label else "Sys B"
+                v_short = "Veh A" if "A" in veh_label else "Veh B"
+                title = f"{s_short} - {v_short} - Step {idx}: {label} @ X={x_loc:.2f}m"
                 
                 is_A = (sys_label == "System A")
                 
