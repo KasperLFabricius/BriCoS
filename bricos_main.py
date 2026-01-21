@@ -360,7 +360,8 @@ with st.sidebar.container():
     st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'], disabled=ui_locked)
 
     sys_map = {"sysA": f"{st.session_state['sysA']['name']} (Blue)", "sysB": f"{st.session_state['sysB']['name']} (Red)"}
-    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True, disabled=ui_locked)
+    # FIXED: Added persistent key to prevent reset during report generation
+    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True, disabled=ui_locked, key="active_system_radio_sidebar")
 
     if active_sys_key == 'sysA':
         st.markdown("""<style>[data-testid="stSidebar"] { background-color: #F0F8FF; }</style>""", unsafe_allow_html=True)
@@ -752,12 +753,12 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
     
     def handle_veh_inputs(prefix, key_class, key_loads, key_space, struct_key):
         sess_key = f"{curr}_{prefix}_class"
-        default_class = "Class 100" if prefix == "A" else "Custom"
-        if sess_key not in st.session_state: st.session_state[sess_key] = default_class
         
-        if prefix == "A" and st.session_state[sess_key] == "Class 100" and st.session_state[sess_key] in veh_data and not p[struct_key]['loads']:
-             p[key_loads] = veh_data["Class 100"]['loads']
-             p[key_space] = veh_data["Class 100"]['spacing']
+        # FIXED: Robust initialization using identifying logic if session key missing
+        if sess_key not in st.session_state:
+            curr_loads = p[struct_key].get('loads', [])
+            curr_space = p[struct_key].get('spacing', [])
+            st.session_state[sess_key] = data_mod.identify_vehicle_class(curr_loads, curr_space)
         
         sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key, disabled=ui_locked, help=veh_help_txt)
         input_key_l = f"{curr}_{prefix}_loads_input"

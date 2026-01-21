@@ -107,6 +107,40 @@ def load_vehicle_from_csv(target_name):
             pass
     return None
 
+def identify_vehicle_class(loads, spacing):
+    """
+    Matches current load/spacing arrays against the library to find the class name.
+    Returns 'Custom' if no match found.
+    """
+    if not loads: return "Custom"
+    
+    _, lib_data = get_vehicle_library()
+    
+    # Convert inputs to numpy arrays for comparison
+    try:
+        curr_l = np.array(loads, dtype=float)
+        curr_s = np.array(spacing, dtype=float)
+    except:
+        return "Custom"
+
+    for name, data in lib_data.items():
+        try:
+            # Parse lib strings to arrays
+            lib_l = np.fromstring(data['loads'], sep=',')
+            lib_s = np.fromstring(data['spacing'], sep=',')
+            
+            # 1. Check lengths
+            if len(lib_l) != len(curr_l) or len(lib_s) != len(curr_s):
+                continue
+            
+            # 2. Check values with tolerance
+            if np.allclose(lib_l, curr_l, atol=1e-3) and np.allclose(lib_s, curr_s, atol=1e-3):
+                return name
+        except:
+            continue
+            
+    return "Custom"
+
 def sanitize_input_data(data):
     """
     Ensures input dictionaries are clean and devoid of placeholder zeros.
@@ -366,8 +400,17 @@ def force_ui_update(sys_key, data):
     st.session_state[f"{sys_key}_B_loads_input"] = data.get('vehicleB_loads', "")
     st.session_state[f"{sys_key}_B_space_input"] = data.get('vehicleB_space', "")
     
-    if f"{sys_key}_vehA_class" in st.session_state: del st.session_state[f"{sys_key}_vehA_class"]
-    if f"{sys_key}_vehB_class" in st.session_state: del st.session_state[f"{sys_key}_vehB_class"]
+    # Identify and set Class for Vehicle A
+    vehA = data.get('vehicle', {})
+    cls_A = identify_vehicle_class(vehA.get('loads', []), vehA.get('spacing', []))
+    st.session_state[f"{sys_key}_vehA_class"] = cls_A
+    st.session_state[f"{sys_key}_vehA_class_last"] = cls_A # Sync 'last' tracker to prevent change detection loop
+
+    # Identify and set Class for Vehicle B
+    vehB = data.get('vehicleB', {})
+    cls_B = identify_vehicle_class(vehB.get('loads', []), vehB.get('spacing', []))
+    st.session_state[f"{sys_key}_vehB_class"] = cls_B
+    st.session_state[f"{sys_key}_vehB_class_last"] = cls_B
     
     # 7. Supports
     prefix = f"{sys_key}_"

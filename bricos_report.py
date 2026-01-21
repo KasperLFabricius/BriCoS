@@ -16,8 +16,10 @@ from reportlab.pdfgen import canvas
 from reportlab.graphics.shapes import Drawing, Line, String, Polygon, Group
 from reportlab.graphics import renderPDF
 
+# Internal Modules
 import bricos_solver as solver
 import bricos_viz as viz
+import bricos_data as data_mod
 
 # ==========================================
 # CUSTOM CANVAS FOR PAGE NUMBERING
@@ -72,7 +74,7 @@ class BricosReportGenerator:
         self.styles.add(ParagraphStyle(name='SwecoCell', parent=self.styles['Normal'], fontSize=8, leading=9))
         self.styles.add(ParagraphStyle(name='SwecoMath', parent=self.styles['Normal'], fontSize=10, leading=12, alignment=TA_CENTER, spaceAfter=6, spaceBefore=6))
         
-        # Increased leading for Log to prevent overlap
+        # New style for logs with increased leading to prevent overlap
         self.styles.add(ParagraphStyle(name='SwecoLog', parent=self.styles['Normal'], fontSize=8, leading=14))
 
         # Use pre-calculated results passed from Main UI to avoid redundant Numba execution
@@ -95,6 +97,43 @@ class BricosReportGenerator:
         if self.progress_callback:
             self.progress_callback(val)
 
+    def _match_vehicle_class(self, current_loads, current_spacing):
+        """
+        Checks if the current load/spacing configuration matches a standard vehicle 
+        defined in vehicles.csv. Returns the name if found, else 'Custom'.
+        """
+        try:
+            csv_path = data_mod.resource_path("vehicles.csv")
+            # Fail silently if CSV is missing
+            try:
+                df = pd.read_csv(csv_path)
+            except FileNotFoundError:
+                return "Custom"
+            
+            # Convert current config to arrays for comparison
+            curr_L = np.array(current_loads, dtype=float)
+            curr_S = np.array(current_spacing, dtype=float)
+            
+            for index, row in df.iterrows():
+                try:
+                    # Parse CSV strings "1.0, 2.0" -> numpy array
+                    std_L = np.fromstring(row['Loads'], sep=',')
+                    std_S = np.fromstring(row['Spacing'], sep=',')
+                    
+                    # 1. Compare Lengths
+                    if len(std_L) != len(curr_L) or len(std_S) != len(curr_S):
+                        continue
+                        
+                    # 2. Compare Values with tolerance
+                    if np.allclose(std_L, curr_L, atol=1e-3) and np.allclose(std_S, curr_S, atol=1e-3):
+                        return row['Name']
+                except Exception:
+                    continue
+                    
+            return "Custom"
+        except Exception:
+            return "Custom"
+
     def generate(self):
         self._update_progress(0.05)
         
@@ -102,7 +141,7 @@ class BricosReportGenerator:
         self._add_header_section()
         self.elements.append(PageBreak())
         
-        # [cite_start]2. Background Theory & Methodology [cite: 1]
+        # 2. Background Theory & Methodology
         self.elements.append(Paragraph(f"{self.chapter_count}. Basis of Analysis & Methodology", self.styles['SwecoSubHeader']))
         self._add_theory_section()
         self.elements.append(Spacer(1, 0.5*cm))
@@ -571,9 +610,8 @@ class BricosReportGenerator:
             v_spac = veh.get('spacing', [])
             
             if v_loads:
-                # Retrieve class from session state
-                sess_key = f"{sys_key_id}_{prefix}_class" # e.g. sysA_A_class
-                class_name = self.state.get(sess_key, "Custom")
+                # Match current configuration against standard vehicles.csv
+                class_name = self._match_vehicle_class(v_loads, v_spac)
                 
                 header_text = f"Vehicle {title_suffix}: {class_name}"
                 if class_name != "Custom":
@@ -590,7 +628,7 @@ class BricosReportGenerator:
         # 6. PHI CALCULATION LOG
         if p.get('phi_mode', 'Calculate') == 'Calculate' and raw_res and raw_res.get('phi_log'):
             self.elements.append(Spacer(1, 0.2*cm))
-            self.elements.append(Paragraph("Dynamic Factor Calculation (<i>&Phi;</i>):", self.styles['SwecoSmall']))
+            self.elements.append(Paragraph("Dynamic Factor Calculation (<i>Φ</i>):", self.styles['SwecoSmall']))
             
             log_lines = raw_res['phi_log']
             formatted_lines = []
@@ -789,10 +827,23 @@ class BricosReportGenerator:
                 vmx = get_v('V_max'); vmn = get_v('V_min')
                 data.append([eid, f"{mmx:.1f}", f"{mmn:.1f}", f"{vmx:.1f}", f"{vmn:.1f}", sys_name])
 
-        process_sys(self.raw_A.get('Vehicle Envelope A', {}), "A")
-        # FIX: System B also uses 'Vehicle Envelope A' if referencing its primary vehicle
-        # raw_B is the result set for System B. Inside it, 'Vehicle Envelope A' corresponds to the vehicle defined at params_B['vehicle'].
-        process_sys(self.raw_B.get('Vehicle Envelope A', {}), "B")
+        # Helper to safely check if a vehicle is defined (has loads) in the params
+        def has_veh(p, key):
+            # Safe access: params -> vehicle_key -> loads list
+            return bool(p.get(key, {}).get('loads'))
+
+        # Only process systems if the vehicle is actually defined in the input parameters
+        if has_veh(self.params_A, 'vehicle'):
+            process_sys(self.raw_A.get('Vehicle Envelope A', {}), "A (Veh A)")
+        
+        if has_veh(self.params_A, 'vehicleB'):
+            process_sys(self.raw_A.get('Vehicle Envelope B', {}), "A (Veh B)")
+
+        if has_veh(self.params_B, 'vehicle'):
+            process_sys(self.raw_B.get('Vehicle Envelope A', {}), "B (Veh A)")
+            
+        if has_veh(self.params_B, 'vehicleB'):
+            process_sys(self.raw_B.get('Vehicle Envelope B', {}), "B (Veh B)")
         
         if len(data) > 1:
             t = self._make_std_table(data, [2*cm, 3*cm, 3*cm, 3*cm, 3*cm, 2*cm])
@@ -801,33 +852,44 @@ class BricosReportGenerator:
             self.elements.append(Paragraph("No vehicle results found.", self.styles['SwecoSmall']))
 
     def _add_smart_vehicle_steps(self, prog_range=(0.0, 0.0)):
-        tasks_A = self._identify_critical_steps(self.params_A, self.raw_A, "System A", self.nodes_A)
-        tasks_B = self._identify_critical_steps(self.params_B, self.raw_B, "System B", self.nodes_B)
+        # Define 4 specific combos: SysA-VehA, SysA-VehB, SysB-VehA, SysB-VehB
+        combos = [
+            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps A', "Vehicle A"),
+            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps B', "Vehicle B"),
+            (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps A', "Vehicle A"),
+            (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps B', "Vehicle B")
+        ]
         
-        all_render_configs = []
-        flat_configs = []
+        all_task_groups = []
         
-        def collect_configs(task_groups):
-            for group in task_groups:
-                for plot_req in group['plots']:
-                    flat_configs.append(plot_req['config'])
+        for p, r, s_lbl, n, step_key, veh_lbl in combos:
+            # Only process if results exist for this vehicle
+            if r.get(step_key):
+                g = self._identify_critical_steps(p, r, s_lbl, n, step_key, veh_lbl)
+                if g:
+                    all_task_groups.append({
+                        'main_header': f"{s_lbl} - {veh_lbl}", 
+                        'groups': g
+                    })
 
-        collect_configs(tasks_A)
-        collect_configs(tasks_B)
+        all_render_configs = []
         
-        if flat_configs:
-            rendered_images = self._submit_parallel_plots(flat_configs, prog_range)
+        for section in all_task_groups:
+            for group in section['groups']:
+                for plot_req in group['plots']:
+                    all_render_configs.append(plot_req['config'])
+
+        if all_render_configs:
+            rendered_images = self._submit_parallel_plots(all_render_configs, prog_range)
         else:
             rendered_images = []
         
         img_cursor = 0
         
-        def build_sys_section(task_groups, label, p_name):
-            nonlocal img_cursor
-            if not task_groups: return
-            self.elements.append(Paragraph(f"<b>{label} ({p_name})</b>", self.styles['Heading4']))
+        for section in all_task_groups:
+            self.elements.append(Paragraph(f"<b>{section['main_header']}</b>", self.styles['Heading4']))
             
-            for group in task_groups:
+            for group in section['groups']:
                 self.elements.append(Paragraph(f"<b>{group['header']}</b>", self.styles['SwecoBody']))
                 for plot_req in group['plots']:
                     full_title = plot_req['title']
@@ -843,16 +905,11 @@ class BricosReportGenerator:
                         else:
                             self.elements.append(Paragraph("[Plot Generation Failed]", self.styles['SwecoCell']))
                     self.elements.append(Spacer(1, 0.2*cm))
+            
+            self.elements.append(Spacer(1, 0.5*cm))
 
-        build_sys_section(tasks_A, "System A", self.params_A.get('name'))
-        if tasks_A: self.elements.append(Spacer(1, 0.5*cm))
-        build_sys_section(tasks_B, "System B", self.params_B.get('name'))
-
-    def _identify_critical_steps(self, params, raw_data, sys_label, sys_nodes):
-        steps = raw_data.get('Vehicle Steps A', [])
-        # FIX: Check 'Vehicle Steps A' first (Primary), then B if needed, but usually we just want primary critical steps
-        if not steps: steps = raw_data.get('Vehicle Steps B', [])
-        
+    def _identify_critical_steps(self, params, raw_data, sys_label, sys_nodes, step_key, veh_label):
+        steps = raw_data.get(step_key, [])
         if not steps: return []
 
         output_groups = []
@@ -882,7 +939,7 @@ class BricosReportGenerator:
             
             if not found_data: continue
             
-            group = {'header': f"Element {eid}", 'plots': []}
+            group = {'header': f"Element {eid} (Critical Steps)", 'plots': []}
             
             critical_cases = [
                 (idx_min_M, "Min M", 'M'),
@@ -900,7 +957,7 @@ class BricosReportGenerator:
                 
                 step = steps[idx]
                 x_loc = step['x']
-                title = f"Step {idx}: {label} @ X={x_loc:.2f}m"
+                title = f"{veh_label} Step {idx}: {label} @ X={x_loc:.2f}m"
                 
                 is_A = (sys_label == "System A")
                 
