@@ -15,7 +15,7 @@ import bricos_report as report_mod
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.31"
+APP_VERSION = "0.40"
 AUTOSAVE_FILE = "latest_session.csv"
 
 st.set_page_config(layout="wide", page_title=f"BriCoS v{APP_VERSION}")

@@ -315,6 +315,25 @@ class BricosReportGenerator:
             "<b>Partial Factors:</b> Factors for self-weight (<i>&gamma;<sub>G</sub></i>), soil/earth pressure (<i>&gamma;<sub>Soil</sub></i>), variable loads (<i>&gamma;<sub>Q</sub></i>), and Consequence Class (<i>K<sub>FI</sub></i>) are applied as defined in the project settings."
         ]
         for b in bullets_lc: self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))
+        self.elements.append(Spacer(1, 0.2*cm))
+
+        # --- NEW SECTION: MEMBER CONNECTIVITY & ORIENTATION ---
+        add_sub("1.6 Member Connectivity & Orientation",
+            "To correctly interpret the tabular results for Normal Force (N) and Shear Force (V), the following conventions regarding member connectivity and local axes must be observed:")
+
+        bullets_conn = [
+            "<b>Joint Rigidity:</b> All element connections are modeled as fully rigid. No internal member end releases (hinges) or rotational springs are applied at the element-node interface.",
+            "<b>Eccentricities:</b> Elements are defined along the centerlines of the cross-sections. Rigid offsets or eccentricities are not considered."
+        ]
+        for b in bullets_conn: self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))
+
+        self.elements.append(Spacer(1, 0.2*cm))
+        self.elements.append(Paragraph("<b>Local Coordinate Systems:</b>", styles['SwecoBody']))
+        bullets_axes = [
+            "<b>Horizontal Members (Spans):</b> Local x-axis aligns with Global X. Thus, <b>N</b> represents horizontal axial force, and <b>V</b> represents vertical shear.",
+            "<b>Vertical Members (Walls/Piers):</b> Local x-axis aligns with the member axis (Vertical). Thus, <b>N</b> represents vertical axial load, and <b>V</b> represents horizontal shear force."
+        ]
+        for b in bullets_axes: self.elements.append(Paragraph(f"• {b}", styles['SwecoBody']))
 
     def _build_uls_equation_text(self):
         def get_eq(p, raw):
