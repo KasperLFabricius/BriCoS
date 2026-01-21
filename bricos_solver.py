@@ -619,7 +619,8 @@ def run_raw_analysis(params, phi_val_override=None):
         model_props['Spans'][f'S{i+1}'] = {'E': e_val}
 
     if len(elems_base) == 0:
-        return get_safe_error_result(), {}, {}, "No valid structural elements defined."
+        # Return None for nodes and props to signal invalid geometry to UI/Report
+        return get_safe_error_result(), None, None, "No valid structural elements defined."
 
     shear_config = {
         'use': params.get('use_shear_def', False),

@@ -46,13 +46,10 @@ def calc_diff(val_a, val_b, is_max_case=True):
     
     if is_max_case:
         # For MAX: Algebraic Increase = Red.
-        # (B - A) > 0 -> Increase -> Red
-        # (B - A) < 0 -> Decrease -> Green
         diff = (val_b - val_a)
         return (diff / denom) * 100.0
     else:
         # For MIN: Algebraic Decrease (More Negative) = Red.
-        # (A - B) > 0 => A > B => B is smaller/more negative -> Red
         diff = (val_a - val_b)
         return (diff / denom) * 100.0
 
@@ -149,6 +146,8 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
     Main controller for the Results UI section.
     Handles Toolbar, Result Combination, and Tab Rendering.
     """
+    # --- 0. VALIDITY GATEKEEPING ---
+    valid_B = (nodes_B is not None)
     
     # --- 1. VISUAL CONTROL SETTINGS ---
     r1_col1, r1_col2 = st.columns([3, 1])
@@ -187,10 +186,13 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
 
         view_case = c_res_tool1.selectbox("Load Case", view_options, index=v_idx, key="view_case_selector", on_change=set_view_case, disabled=ui_locked)
 
-        show_sys_mode = "Both"
+        show_sys_mode = "System A"
         if view_case != "Vehicle Steps":
-            tog_map = {"Both": "Both", "System A": sysA['name'], "System B": sysB['name']}
-            show_sys_mode = c_res_tool2.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle", disabled=ui_locked)
+            if valid_B:
+                tog_map = {"Both": "Both", "System A": sysA['name'], "System B": sysB['name']}
+                show_sys_mode = c_res_tool2.radio("Active Systems View", ["Both", "System A", "System B"], format_func=lambda x: tog_map[x], horizontal=True, key="sys_view_toggle", disabled=ui_locked)
+            else:
+                c_res_tool2.info("Comparison Disabled (Sys B Empty)")
 
         curr_res_mode = st.session_state.get('result_mode', "Design (ULS)")
         res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
@@ -204,14 +206,16 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
     has_res_B = (raw_res_B is not None) and (nodes_B is not None)
 
     res_A = solver.combine_results(raw_res_A, sysA, result_mode_val) if has_res_A else {}
-    res_B = solver.combine_results(raw_res_B, sysB, result_mode_val) if has_res_B else {}
+    res_B = {}
+    if valid_B and has_res_B:
+        res_B = solver.combine_results(raw_res_B, sysB, result_mode_val)
 
     # --- 4. PREPARE VIEW DATA (STEPS VS ENVELOPE) ---
     rA, rB = {}, {}
     step_view_sys = "System A"
     active_veh_step = "Vehicle A"
     show_A_step = True
-    show_B_step = True
+    show_B_step = False
     list_A = []
     list_B = []
 
@@ -242,26 +246,31 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
         veh_key_res = f"{base_key}{step_dir_suffix}"
         
         list_A = res_A.get(veh_key_res, [])
-        list_B = res_B.get(veh_key_res, [])
+        list_B = res_B.get(veh_key_res, []) if valid_B else []
         
-        def set_step_sys(): st.session_state.keep_step_view_sys = st.session_state.step_sys_radio
-        try: ss_idx = ["Both", "System A", "System B"].index(st.session_state.keep_step_view_sys)
-        except ValueError: ss_idx = 0
-        step_tog_map = {"Both": "Both", "System A": sysA['name'], "System B": sysB['name']}
-        step_view_sys = c_step_tog.radio("View System:", ["Both", "System A", "System B"], index=ss_idx, format_func=lambda x: step_tog_map[x], horizontal=True, key="step_sys_radio", on_change=set_step_sys, disabled=ui_locked)
+        if valid_B:
+            def set_step_sys(): st.session_state.keep_step_view_sys = st.session_state.step_sys_radio
+            try: ss_idx = ["Both", "System A", "System B"].index(st.session_state.keep_step_view_sys)
+            except ValueError: ss_idx = 0
+            step_tog_map = {"Both": "Both", "System A": sysA['name'], "System B": sysB['name']}
+            step_view_sys = c_step_tog.radio("View System:", ["Both", "System A", "System B"], index=ss_idx, format_func=lambda x: step_tog_map[x], horizontal=True, key="step_sys_radio", on_change=set_step_sys, disabled=ui_locked)
+            
+            show_A_step = (step_view_sys == "Both" or step_view_sys == "System A")
+            show_B_step = (step_view_sys == "Both" or step_view_sys == "System B")
+        else:
+             c_step_tog.caption(f"View: {sysA['name']}")
+             show_A_step = True
+             show_B_step = False
         
-        show_A_step = (step_view_sys == "Both" or step_view_sys == "System A")
-        show_B_step = (step_view_sys == "Both" or step_view_sys == "System B")
+        valid_A_dat = len(list_A) > 0
+        valid_B_dat = len(list_B) > 0
         
-        valid_A = len(list_A) > 0
-        valid_B = len(list_B) > 0
-        
-        if show_A_step and not valid_A:
+        if show_A_step and not valid_A_dat:
             st.warning(f"⚠️ {active_veh_step} is not defined for {sysA['name']} (or has no steps).")
-        if show_B_step and not valid_B:
+        if show_B_step and not valid_B_dat:
             st.warning(f"⚠️ {active_veh_step} is not defined for {sysB['name']} (or has no steps).")
             
-        if (show_A_step and valid_A) or (show_B_step and valid_B):
+        if (show_A_step and valid_A_dat) or (show_B_step and valid_B_dat):
             max_steps = max(1, len(list_A), len(list_B))
             step_idx = c_step_slide.slider("Step Index", 0, max_steps-1, 0, key="veh_step_slider_persistent", disabled=ui_locked)
             
@@ -295,30 +304,30 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                 return {}
 
             f_A = res_A['f_vehA'] if active_veh_step == "Vehicle A" and has_res_A else 1.0
-            f_B = res_B['f_vehA'] if active_veh_step == "Vehicle A" and has_res_B else 1.0
+            f_B = res_B['f_vehA'] if active_veh_step == "Vehicle A" and valid_B and has_res_B else 1.0
             if active_veh_step == "Vehicle B":
                  f_A = res_A['f_vehB'] if has_res_A else 1.0
-                 f_B = res_B['f_vehB'] if has_res_B else 1.0
+                 f_B = res_B['f_vehB'] if valid_B and has_res_B else 1.0
                  
             rA = get_step(res_A, step_idx, veh_key_res, f_A)
-            rB = get_step(res_B, step_idx, veh_key_res, f_B)
+            rB = get_step(res_B, step_idx, veh_key_res, f_B) if valid_B else {}
     else:
         key_map = {"Total Envelope": "Total Envelope", "Selfweight": "Selfweight", "Soil": "Soil", "Surcharge": "Surcharge", "Vehicle Envelope": "Vehicle Envelope"}
         target_key = key_map.get(view_case, "Total Envelope")
         rA = res_A.get(target_key, {})
-        rB = res_B.get(target_key, {})
+        rB = res_B.get(target_key, {}) if valid_B else {}
 
     # --- 5. RENDER TABS ---
     t1, t2, t3 = st.tabs(["Visualization", "Tabular Data", "Summary"])
     name_A = sysA['name']
-    name_B = sysB['name']
+    name_B = sysB['name'] if valid_B else "System B"
     
     # --- TAB 1: VISUALIZATION ---
     with t1:
         if view_case == "Vehicle Steps":
-            valid_A = len(list_A) > 0
-            valid_B = len(list_B) > 0
-            has_vis_content = (show_A_step and valid_A) or (show_B_step and valid_B)
+            valid_A_dat = len(list_A) > 0
+            valid_B_dat = len(list_B) > 0
+            has_vis_content = (show_A_step and valid_A_dat) or (show_B_step and valid_B_dat)
             
             if not has_vis_content:
                  st.info("No visualization available for selected system/vehicle combination.")
@@ -329,10 +338,10 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                 _render_viz_chart("Deformation [mm]", nodes_A, rA, rB, 'Def', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
         else:
             show_A = (show_sys_mode == "Both" or show_sys_mode == "System A")
-            show_B = (show_sys_mode == "Both" or show_sys_mode == "System B")
+            show_B = (valid_B and (show_sys_mode == "Both" or show_sys_mode == "System B"))
             
             geom_invalid_A = (nodes_A is None) or (len(nodes_A)==0)
-            geom_invalid_B = (nodes_B is None) or (len(nodes_B)==0)
+            geom_invalid_B = (valid_B) and ((nodes_B is None) or (len(nodes_B)==0))
             
             if geom_invalid_A and geom_invalid_B: 
                  st.warning("⚠️ No structural geometry defined. Please configure Spans/Walls in the sidebar.")
@@ -394,7 +403,8 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                         })
 
         process_detailed(rA, name_A)
-        process_detailed(rB, name_B)
+        if valid_B:
+            process_detailed(rB, name_B)
         
         if detailed_rows:
             df_detailed = pd.DataFrame(detailed_rows)
@@ -411,14 +421,14 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
 
     # --- TAB 3: SUMMARY COMPARISON ---
     with t3:
-        st.subheader(f"Comparison Summary ({view_case})")
+        st.subheader(f"Summary ({view_case})")
         
         all_elems = sorted(list(set(rA.keys()) | set(rB.keys())), key=lambda x: (x[0], int(x[1:])))
 
         # A. Forces Tables
-        _render_summary_table("Bending Moment", [("M_max", "M_min", "M [kNm]")], all_elems, rA, rB)
-        _render_summary_table("Shear Force", [("V_max", "V_min", "V [kN]")], all_elems, rA, rB)
-        _render_summary_table("Normal Force", [("N_max", "N_min", "N [kN]")], all_elems, rA, rB)
+        _render_summary_table("Bending Moment", [("M_max", "M_min", "M [kNm]")], all_elems, rA, rB, valid_B)
+        _render_summary_table("Shear Force", [("V_max", "V_min", "V [kN]")], all_elems, rA, rB, valid_B)
+        _render_summary_table("Normal Force", [("N_max", "N_min", "N [kN]")], all_elems, rA, rB, valid_B)
 
         # B. Deformations Table
         st.markdown("##### Deformations (Spans: Vertical, Walls: Horizontal)")
@@ -426,7 +436,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
         for eid in all_elems:
             row_dat = {"Element": eid}
             dataA = rA.get(eid, {})
-            dataB = rB.get(eid, {})
+            dataB = rB.get(eid, {}) if valid_B else {}
             
             is_wall = eid.startswith("W")
             k_max = "def_x_max" if is_wall else "def_y_max"
@@ -435,19 +445,20 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             a_mx, a_mn = get_peaks(dataA, k_max, k_min)
             if a_mx is not None: a_mx *= 1000; a_mn *= 1000
             
-            b_mx, b_mn = get_peaks(dataB, k_max, k_min)
-            if b_mx is not None: b_mx *= 1000; b_mn *= 1000
-            
-            d_mx = calc_diff(a_mx, b_mx, True)
-            d_mn = calc_diff(a_mn, b_mn, False)
-            
-            row_dat[f"Def (Max) A"] = f"{a_mx:.1f}" if a_mx is not None else "--"
-            row_dat[f"Def (Max) B"] = f"{b_mx:.1f}" if b_mx is not None else "--"
-            row_dat[f"Def (Max) %"] = d_mx 
-            
-            row_dat[f"Def (Min) A"] = f"{a_mn:.1f}" if a_mn is not None else "--"
-            row_dat[f"Def (Min) B"] = f"{b_mn:.1f}" if b_mn is not None else "--"
-            row_dat[f"Def (Min) %"] = d_mn
+            if valid_B:
+                b_mx, b_mn = get_peaks(dataB, k_max, k_min)
+                if b_mx is not None: b_mx *= 1000; b_mn *= 1000
+                d_mx = calc_diff(a_mx, b_mx, True)
+                d_mn = calc_diff(a_mn, b_mn, False)
+                row_dat[f"Def (Max) A"] = f"{a_mx:.1f}" if a_mx is not None else "--"
+                row_dat[f"Def (Max) B"] = f"{b_mx:.1f}" if b_mx is not None else "--"
+                row_dat[f"Def (Max) %"] = d_mx 
+                row_dat[f"Def (Min) A"] = f"{a_mn:.1f}" if a_mn is not None else "--"
+                row_dat[f"Def (Min) B"] = f"{b_mn:.1f}" if b_mn is not None else "--"
+                row_dat[f"Def (Min) %"] = d_mn
+            else:
+                 row_dat[f"Def (Max) [mm]"] = f"{a_mx:.1f}" if a_mx is not None else "--"
+                 row_dat[f"Def (Min) [mm]"] = f"{a_mn:.1f}" if a_mn is not None else "--"
             
             row_dat["Type"] = "Wall (Horiz)" if is_wall else "Span (Vert)"
             def_rows.append(row_dat)
@@ -465,7 +476,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
         # C. Reactions
         st.markdown("##### Envelope Support Reactions")
         reactsA = get_reaction_envelope(rA, nodes_A, sysA['mode'])
-        reactsB = get_reaction_envelope(rB, nodes_B, sysB['mode'])
+        reactsB = get_reaction_envelope(rB, nodes_B, sysB['mode']) if valid_B else {}
         
         all_react_nodes = sorted(list(set(reactsA.keys()) | set(reactsB.keys())))
         r_rows = []
@@ -477,17 +488,20 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             
             row = {"Location": label}
             dA = reactsA.get(nid, {})
-            dB = reactsB.get(nid, {})
+            dB = reactsB.get(nid, {}) if valid_B else {}
             
             for comp in ['Rx', 'Ry', 'Mz']:
                 for bnd in ['max', 'min']:
                     key = f"{comp}_{bnd}"
                     valA = dA.get(key)
-                    valB = dB.get(key)
                     
-                    row[f"{comp} ({bnd}) A"] = f"{valA:.1f}" if valA is not None else "--"
-                    row[f"{comp} ({bnd}) B"] = f"{valB:.1f}" if valB is not None else "--"
-                    row[f"{comp} ({bnd}) %"] = calc_diff(valA, valB, is_max_case=(bnd=='max'))
+                    if valid_B:
+                        valB = dB.get(key)
+                        row[f"{comp} ({bnd}) A"] = f"{valA:.1f}" if valA is not None else "--"
+                        row[f"{comp} ({bnd}) B"] = f"{valB:.1f}" if valB is not None else "--"
+                        row[f"{comp} ({bnd}) %"] = calc_diff(valA, valB, is_max_case=(bnd=='max'))
+                    else:
+                        row[f"{comp} ({bnd})"] = f"{valA:.1f}" if valA is not None else "--"
             r_rows.append(row)
         
         if r_rows:
@@ -511,14 +525,14 @@ def _render_viz_chart(title, nodes, rA, rB, type_base, scale, show_A, show_B, sh
         show_supports=show_supports, support_size=support_size
     ), width='stretch', key=f"chart_{type_base}")
 
-def _render_summary_table(title, metrics_list, all_elems, rA, rB):
+def _render_summary_table(title, metrics_list, all_elems, rA, rB, valid_B):
     st.markdown(f"##### {title}")
     rows = []
     
     for eid in all_elems:
         row_dat = {"Element": eid}
         dataA = rA.get(eid, {})
-        dataB = rB.get(eid, {})
+        dataB = rB.get(eid, {}) if valid_B else {}
         
         for k_max, k_min, label in metrics_list:
             is_def = "def" in k_max
@@ -527,21 +541,25 @@ def _render_summary_table(title, metrics_list, all_elems, rA, rB):
             a_mx, a_mn = get_peaks(dataA, k_max, k_min)
             if a_mx is not None: a_mx *= scale; a_mn *= scale
             
-            b_mx, b_mn = get_peaks(dataB, k_max, k_min)
-            if b_mx is not None: b_mx *= scale; b_mn *= scale
-            
-            d_mx = calc_diff(a_mx, b_mx, is_max_case=True)
-            d_mn = calc_diff(a_mn, b_mn, is_max_case=False)
-            
-            # Max Cols
-            row_dat[f"{label} (Max) A"] = f"{a_mx:.1f}" if a_mx is not None else "--"
-            row_dat[f"{label} (Max) B"] = f"{b_mx:.1f}" if b_mx is not None else "--"
-            row_dat[f"{label} (Max) %"] = d_mx 
-            
-            # Min Cols
-            row_dat[f"{label} (Min) A"] = f"{a_mn:.1f}" if a_mn is not None else "--"
-            row_dat[f"{label} (Min) B"] = f"{b_mn:.1f}" if b_mn is not None else "--"
-            row_dat[f"{label} (Min) %"] = d_mn
+            if valid_B:
+                b_mx, b_mn = get_peaks(dataB, k_max, k_min)
+                if b_mx is not None: b_mx *= scale; b_mn *= scale
+                
+                d_mx = calc_diff(a_mx, b_mx, is_max_case=True)
+                d_mn = calc_diff(a_mn, b_mn, is_max_case=False)
+                
+                # Max Cols
+                row_dat[f"{label} (Max) A"] = f"{a_mx:.1f}" if a_mx is not None else "--"
+                row_dat[f"{label} (Max) B"] = f"{b_mx:.1f}" if b_mx is not None else "--"
+                row_dat[f"{label} (Max) %"] = d_mx 
+                
+                # Min Cols
+                row_dat[f"{label} (Min) A"] = f"{a_mn:.1f}" if a_mn is not None else "--"
+                row_dat[f"{label} (Min) B"] = f"{b_mn:.1f}" if b_mn is not None else "--"
+                row_dat[f"{label} (Min) %"] = d_mn
+            else:
+                row_dat[f"{label} (Max)"] = f"{a_mx:.1f}" if a_mx is not None else "--"
+                row_dat[f"{label} (Min)"] = f"{a_mn:.1f}" if a_mn is not None else "--"
         
         rows.append(row_dat)
         

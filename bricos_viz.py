@@ -2,7 +2,9 @@ import plotly.graph_objects as go
 import numpy as np
 import bricos_kernels as kernels
 
-# ... (Previous helper functions solve_annotations and _add_support_icon remain unchanged) ...
+# ==========================================
+# ANNOTATION SOLVER & HELPERS
+# ==========================================
 
 def solve_annotations(annotations):
     """
@@ -131,6 +133,9 @@ def _add_support_icon(fig, x, y, supp_type, size, color='black'):
             hoverinfo='skip', showlegend=False
         ))
 
+# ==========================================
+# MAIN PLOTTING FUNCTION
+# ==========================================
 
 def create_plotly_fig(
     nodes, sysA_data, sysB_data, type_base='M', target_height=2.0, title="", 
@@ -201,14 +206,9 @@ def create_plotly_fig(
     legend_flags = {'struct': False, 'A': False, 'B': False}
 
     # --- FONT SIZING & LAYOUT ADJUSTMENTS ---
-    # Adjusted to prevent 'huge' text in PDF reports while keeping readability.
     base_font_size = 10 * font_scale
     marker_size = 8 * font_scale
-    
-    # Specialized font size for dense vehicle loads
     veh_load_font_size = 10 * (1 + (font_scale - 1) * 0.4) 
-    
-    # Margin fixed (not scaled) to ensure plot area doesn't shrink in PDF
     margin_base = 30
     top_margin = 40 
     
@@ -227,9 +227,12 @@ def create_plotly_fig(
                 nid = base_idx + i
                 pos_x, pos_y = None, None
                 
+                # Check if we have valid nodes for this system
                 if sys_nodes_dict and nid in sys_nodes_dict:
                     pos_x, pos_y = sys_nodes_dict[nid]
                 else:
+                    # Fallback logic removed/guarded by caller check on geom availability
+                    # But if we are here, we attempt fallback in case node dict is partial
                     current_x = 0.0
                     L_list = params.get('L_list', [])
                     for span_i in range(i):
@@ -249,8 +252,15 @@ def create_plotly_fig(
                 
                 _add_support_icon(fig, pos_x, pos_y, s_type, support_size, color_override)
 
-        if show_A and params_A: render_system_supports(params_A, nodes, 'blue')
-        if show_B and params_B: render_system_supports(params_B, nodes, 'red')
+        # UPDATED: Only draw supports if geometry data (geom_A/geom_B) is present and non-empty.
+        # geom_A/B are typically the 'Selfweight' result dictionaries containing element definitions.
+        # If the solver returns an error state, these will be empty.
+        
+        if show_A and params_A and geom_A: 
+             render_system_supports(params_A, nodes, 'blue')
+             
+        if show_B and params_B and geom_B: 
+             render_system_supports(params_B, nodes, 'red')
 
     def add_traces(sys_data, sys_name, color, line_style, offset_dir):
         if not sys_data: return
@@ -258,9 +268,10 @@ def create_plotly_fig(
         sys_key = 'A' if is_sys_A else 'B'
         geom_source = geom_A if (is_sys_A and geom_A) else (geom_B if (not is_sys_A and geom_B) else sys_data)
 
+        # 1. Structure Geometry Trace (Background)
         x_struct, y_struct = [], []
         if geom_source:
-            sorted_ids = sorted(geom_source.keys(), key=lambda x: int(x[1:]))
+            sorted_ids = sorted(geom_source.keys(), key=lambda x: (x[0], int(x[1:])))
             for eid in sorted_ids:
                 if eid not in geom_source: continue
                 dat = geom_source[eid]
@@ -281,7 +292,31 @@ def create_plotly_fig(
             hoverinfo='skip', showlegend=show_struct
         ))
 
-        for eid, data in sys_data.items():
+        # 2. Result Traces Aggregation
+        # We accumulate all coordinates into single lists (separated by None) to create ONE trace per type.
+        # This significantly improves Plotly rendering performance.
+        
+        # Accumulators
+        X_pos_list, Y_pos_list = [], []
+        X_neg_list, Y_neg_list = [], []
+        C_pos_list, C_neg_list = [], [] # customdata
+        
+        # Fill Accumulators (Closed polygons for fill)
+        X_fill_list, Y_fill_list = [], []
+        
+        is_envelope = False
+        sorted_eids = sorted(sys_data.keys(), key=lambda x: (x[0], int(x[1:])))
+        
+        # Prepare "None" break arrays
+        nan_pt = np.array([None])
+        nan_cust = np.array([[None, None]])
+
+        htemp_max = f"<b>{sys_name} (Max)</b><br>Loc: %{{customdata[0]:.2f}} m<br>Val: %{{customdata[1]:.1f}} {unit}<extra></extra>"
+        htemp_min = f"<b>{sys_name} (Min)</b><br>Loc: %{{customdata[0]:.2f}} m<br>Val: %{{customdata[1]:.1f}} {unit}<extra></extra>"
+        htemp_step = f"<b>{sys_name}</b><br>Loc: %{{customdata[0]:.2f}} m<br>Val: %{{customdata[1]:.1f}} {unit}<extra></extra>"
+
+        for eid in sorted_eids:
+            data = sys_data[eid]
             if 'x' not in data: continue 
             
             L = data['L']
@@ -317,11 +352,9 @@ def create_plotly_fig(
                     vals_neg = vals_pos
                     fill_mode = False
 
-            # --- SANITIZATION BLOCK ---
-            # Replace NaNs or Infs with 0.0 to prevent Plotly failures
+            # Sanitization
             vals_pos = np.nan_to_num(vals_pos, nan=0.0, posinf=0.0, neginf=0.0)
             vals_neg = np.nan_to_num(vals_neg, nan=0.0, posinf=0.0, neginf=0.0)
-            # --------------------------
 
             nx, ny = -s, c
             x_plot_pos = x_glob + nx * vals_pos * scale * inv
@@ -332,176 +365,33 @@ def create_plotly_fig(
             custom_pos = np.stack((x_local, vals_pos), axis=-1)
             custom_neg = np.stack((x_local, vals_neg), axis=-1)
             
-            htemp_max = f"<b>{sys_name} (Max)</b><br>Loc: %{{customdata[0]:.2f}} m<br>Val: %{{customdata[1]:.1f}} {unit}<extra></extra>"
-            htemp_min = f"<b>{sys_name} (Min)</b><br>Loc: %{{customdata[0]:.2f}} m<br>Val: %{{customdata[1]:.1f}} {unit}<extra></extra>"
-            htemp_step = f"<b>{sys_name}</b><br>Loc: %{{customdata[0]:.2f}} m<br>Val: %{{customdata[1]:.1f}} {unit}<extra></extra>"
-
-            show_leg = False
-            if not legend_flags[sys_key]:
-                show_leg = True
-                legend_flags[sys_key] = True
+            # --- ACCUMULATE TRACE DATA ---
+            # Max Line (or Single Line)
+            X_pos_list.append(x_plot_pos); X_pos_list.append(nan_pt)
+            Y_pos_list.append(y_plot_pos); Y_pos_list.append(nan_pt)
+            C_pos_list.append(custom_pos); C_pos_list.append(nan_cust)
 
             if fill_mode:
-                fig.add_trace(go.Scatter(
-                    x=np.concatenate([x_plot_pos, x_plot_neg[::-1]]),
-                    y=np.concatenate([y_plot_pos, y_plot_neg[::-1]]),
-                    fill='toself', fillcolor=color, opacity=0.2, line=dict(width=0),
-                    name=f"{sys_name}", showlegend=show_leg, hoverinfo='skip'
-                ))
-                fig.add_trace(go.Scatter(
-                    x=x_plot_pos, y=y_plot_pos, mode='lines', 
-                    line=dict(color=color, width=2.5, dash=line_style), showlegend=False, 
-                    customdata=custom_pos, hovertemplate=htemp_max
-                ))
-                fig.add_trace(go.Scatter(
-                    x=x_plot_neg, y=y_plot_neg, mode='lines', 
-                    line=dict(color=color, width=2.5, dash=line_style), showlegend=False, 
-                    customdata=custom_neg, hovertemplate=htemp_min
-                ))
+                is_envelope = True
+                # Min Line
+                X_neg_list.append(x_plot_neg); X_neg_list.append(nan_pt)
+                Y_neg_list.append(y_plot_neg); Y_neg_list.append(nan_pt)
+                C_neg_list.append(custom_neg); C_neg_list.append(nan_cust)
+                
+                # Fill Polygon (Max -> Min Reverse)
+                poly_x = np.concatenate([x_plot_pos, x_plot_neg[::-1]])
+                poly_y = np.concatenate([y_plot_pos, y_plot_neg[::-1]])
+                X_fill_list.append(poly_x); X_fill_list.append(nan_pt)
+                Y_fill_list.append(poly_y); Y_fill_list.append(nan_pt)
             else:
-                fig.add_trace(go.Scatter(
-                    x=x_plot_pos, y=y_plot_pos, mode='lines', 
-                    line=dict(color=color, width=3.0, dash=line_style), 
-                    name=f"{sys_name}", showlegend=show_leg,
-                    customdata=custom_pos, hovertemplate=htemp_step
-                ))
-                fig.add_trace(go.Scatter(
-                    x=np.concatenate([x_glob, x_plot_pos[::-1]]),
-                    y=np.concatenate([y_glob, y_plot_pos[::-1]]),
-                    fill='toself', fillcolor=color, opacity=0.1, line=dict(width=0),
-                    showlegend=False, hoverinfo='skip'
-                ))
-
-            if 'Envelope' not in load_case_name and 'loads' in data:
-                # Enumerate to handle staggering
-                for i_load, load in enumerate(data['loads']):
-                    l_type = load['type']
-                    
-                    if load_case_name == "Vehicle Steps" and l_type == 'point':
-                        p_val = load['params'][0]
-                        lx = load['params'][1]
-                        bas_x = ni[0] + c * lx; bas_y = ni[1] + s * lx
-                        dx, dy = 0.0, -1.0 
-                        
-                        base_len = 2.0
-                        # Enforce Minimum Tail Length to prevent overlap with diagram line
-                        tail_len = max(base_len * (abs(p_val) / max_P_veh), 1.0) 
-                        
-                        tail_x = bas_x - dx * tail_len; tail_y = bas_y - dy * tail_len
-                        
-                        fig.add_annotation(
-                            x=bas_x, y=bas_y, ax=tail_x, ay=tail_y,
-                            xref='x', yref='y', axref='x', ayref='y',
-                            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2.5, 
-                            arrowcolor='orange', opacity=1.0
-                        )
-                        
-                        # --- STAGGER LOGIC ---
-                        # Alternate yshift based on index (even/odd) with SIGNIFICANT gap
-                        is_staggered = (i_load % 2 == 1)
-                        # Increased separation: 15 vs 45 (scaled) to ensure vertical clearance
-                        shift_val = (25 if is_staggered else 10) * font_scale
-                        
-                        # Round to nearest whole number
-                        load_text = f"{int(round(abs(p_val)))} kN"
-                        
-                        fig.add_annotation(
-                            x=tail_x, y=tail_y, text=load_text, 
-                            showarrow=False, yshift=shift_val, 
-                            font=dict(color='orange', size=veh_load_font_size, weight="bold")
-                        )
-
-                    elif load_case_name == "Selfweight" and l_type == 'distributed_trapezoid' and load.get('is_gravity', False):
-                        q_val = load['params'][0]
-                        nx, ny = -s, c
-                        h_vis = 0.6 * (abs(q_val) / max_q_sw)
-                        if h_vis < 0.1: h_vis = 0.1
-                        x_start = ni[0]; y_start = ni[1]
-                        x_end = ni[0] + c * L; y_end = ni[1] + s * L
-                        x_st = x_start + nx * h_vis; y_st = y_start + ny * h_vis
-                        x_et = x_end + nx * h_vis; y_et = y_end + ny * h_vis
-                        
-                        fig.add_trace(go.Scatter(
-                            x=[x_start, x_end, x_et, x_st, x_start],
-                            y=[y_start, y_end, y_et, y_st, y_start],
-                            fill='toself', fillcolor='orange', opacity=0.3, mode='none',
-                            hoverinfo='skip', showlegend=False
-                        ))
-                        xm = (x_st + x_et) / 2; ym = (y_st + y_et) / 2
-                        fig.add_annotation(
-                            x=xm, y=ym, text=f"{q_val:.1f}", showarrow=False, 
-                            font=dict(color='orange', size=marker_size, weight="bold"), yshift=5*font_scale
-                        )
-
-                    elif load_case_name == "Soil" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
-                        q_bot, q_top, x_s, L_load = load['params']
-                        nx, ny = -s, c
-                        target_width = 1.5 
-                        w_bot = target_width * (abs(q_bot) / max_q_soil)
-                        w_top = target_width * (abs(q_top) / max_q_soil)
-                        
-                        b_x_bot = ni[0] + c * x_s; b_y_bot = ni[1] + s * x_s
-                        b_x_top = ni[0] + c * (x_s + L_load); b_y_top = ni[1] + s * (x_s + L_load)
-                        
-                        dir_sign = 1.0 if q_bot >= 0 else -1.0
-                        draw_dir_x = dir_sign * nx; draw_dir_y = dir_sign * ny
-                        
-                        t_x_bot = b_x_bot + draw_dir_x * w_bot; t_y_bot = b_y_bot + draw_dir_y * w_bot
-                        t_x_top = b_x_top + draw_dir_x * w_top; t_y_top = b_y_top + draw_dir_y * w_top
-                        
-                        fig.add_trace(go.Scatter(
-                            x=[b_x_bot, b_x_top, t_x_top, t_x_bot, b_x_bot],
-                            y=[b_y_bot, b_y_top, t_y_top, t_y_bot, b_y_bot],
-                            fill='toself', fillcolor='orange', opacity=0.4, mode='none',
-                            hoverinfo='skip', showlegend=False
-                        ))
-                        for k in [0.25, 0.5, 0.75]:
-                            bx = b_x_bot + k*(b_x_top - b_x_bot); by = b_y_bot + k*(b_y_top - b_y_bot)
-                            tx = t_x_bot + k*(t_x_top - t_x_bot); ty = t_y_bot + k*(t_y_top - t_y_bot)
-                            fig.add_annotation(
-                                x=bx, y=by, ax=tx, ay=ty, xref='x', yref='y', axref='x', ayref='y',
-                                showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5, arrowcolor='orange', opacity=0.6
-                            )
-                        fig.add_annotation(
-                            x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, 
-                            font=dict(color='orange', size=marker_size*0.9, weight="bold")
-                        )
-                        fig.add_annotation(
-                            x=t_x_top, y=t_y_top, text=f"{abs(q_top):.1f}", showarrow=False, 
-                            font=dict(color='orange', size=marker_size*0.9, weight="bold")
-                        )
-
-                    elif load_case_name == "Surcharge" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
-                        q_bot, q_top, x_s, L_load = load['params']
-                        nx, ny = -s, c
-                        target_width = 1.0 
-                        w_vis = target_width * (abs(q_bot) / max_q_surch)
-                        if w_vis < 0.1: w_vis = 0.1
-                        b_x_bot = ni[0] + c * x_s; b_y_bot = ni[1] + s * x_s
-                        b_x_top = ni[0] + c * (x_s + L_load); b_y_top = ni[1] + s * (x_s + L_load)
-                        dir_sign = 1.0 if q_bot >= 0 else -1.0
-                        draw_dir_x = dir_sign * nx; draw_dir_y = dir_sign * ny
-                        t_x_bot = b_x_bot + draw_dir_x * w_vis; t_y_bot = b_y_bot + draw_dir_y * w_vis
-                        t_x_top = b_x_top + draw_dir_x * w_vis; t_y_top = b_y_top + draw_dir_y * w_vis
-                        
-                        fig.add_trace(go.Scatter(
-                            x=[b_x_bot, b_x_top, t_x_top, t_x_bot, b_x_bot],
-                            y=[b_y_bot, b_y_top, t_y_top, t_y_bot, b_y_bot],
-                            fill='toself', fillcolor='purple', opacity=0.4, mode='none',
-                            hoverinfo='skip', showlegend=False
-                        ))
-                        for k in [0.5]:
-                            bx = b_x_bot + k*(b_x_top - b_x_bot); by = b_y_bot + k*(b_y_top - b_y_bot)
-                            tx = t_x_bot + k*(t_x_top - t_x_bot); ty = t_y_bot + k*(t_y_top - t_y_bot)
-                            fig.add_annotation(
-                                x=bx, y=by, ax=tx, ay=ty, xref='x', yref='y', axref='x', ayref='y',
-                                showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5, arrowcolor='purple', opacity=0.6
-                            )
-                        fig.add_annotation(
-                            x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, 
-                            font=dict(color='purple', size=marker_size*0.9, weight="bold")
-                        )
-
+                # Step Fill (Geometry -> Value Reverse)
+                poly_x = np.concatenate([x_glob, x_plot_pos[::-1]])
+                poly_y = np.concatenate([y_glob, y_plot_pos[::-1]])
+                X_fill_list.append(poly_x); X_fill_list.append(nan_pt)
+                Y_fill_list.append(poly_y); Y_fill_list.append(nan_pt)
+            
+            # --- ANNOTATION CANDIDATES ---
+            # (Annotations are sparse, so we keep this logic here)
             if annotate:
                 threshold = max_val * 0.05
                 if fill_mode:
@@ -530,6 +420,152 @@ def create_plotly_fig(
                             'perp_x': nx, 'perp_y': ny
                         })
 
+            # --- LOADS (Cannot be easily merged due to diverse shapes) ---
+            if 'Envelope' not in load_case_name and 'loads' in data:
+                for i_load, load in enumerate(data['loads']):
+                    l_type = load['type']
+                    
+                    if load_case_name == "Vehicle Steps" and l_type == 'point':
+                        p_val = load['params'][0]
+                        lx = load['params'][1]
+                        bas_x = ni[0] + c * lx; bas_y = ni[1] + s * lx
+                        dx, dy = 0.0, -1.0 
+                        base_len = 2.0
+                        tail_len = max(base_len * (abs(p_val) / max_P_veh), 1.0) 
+                        tail_x = bas_x - dx * tail_len; tail_y = bas_y - dy * tail_len
+                        
+                        fig.add_annotation(
+                            x=bas_x, y=bas_y, ax=tail_x, ay=tail_y,
+                            xref='x', yref='y', axref='x', ayref='y',
+                            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2.5, 
+                            arrowcolor='orange', opacity=1.0
+                        )
+                        is_staggered = (i_load % 2 == 1)
+                        shift_val = (25 if is_staggered else 10) * font_scale
+                        load_text = f"{int(round(abs(p_val)))} kN"
+                        fig.add_annotation(
+                            x=tail_x, y=tail_y, text=load_text, 
+                            showarrow=False, yshift=shift_val, 
+                            font=dict(color='orange', size=veh_load_font_size, weight="bold")
+                        )
+
+                    elif load_case_name == "Selfweight" and l_type == 'distributed_trapezoid' and load.get('is_gravity', False):
+                        q_val = load['params'][0]
+                        h_vis = 0.6 * (abs(q_val) / max_q_sw)
+                        if h_vis < 0.1: h_vis = 0.1
+                        x_st = ni[0] - s * h_vis; y_st = ni[1] + c * h_vis
+                        x_et = (ni[0] + c * L) - s * h_vis; y_et = (ni[1] + s * L) + c * h_vis
+                        
+                        fig.add_trace(go.Scatter(
+                            x=[ni[0], ni[0]+c*L, x_et, x_st, ni[0]],
+                            y=[ni[1], ni[1]+s*L, y_et, y_st, ni[1]],
+                            fill='toself', fillcolor='orange', opacity=0.3, mode='none',
+                            hoverinfo='skip', showlegend=False
+                        ))
+                        xm = (x_st + x_et) / 2; ym = (y_st + y_et) / 2
+                        fig.add_annotation(
+                            x=xm, y=ym, text=f"{q_val:.1f}", showarrow=False, 
+                            font=dict(color='orange', size=marker_size, weight="bold"), yshift=5*font_scale
+                        )
+
+                    elif load_case_name == "Soil" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
+                        q_bot, q_top, x_s, L_load = load['params']
+                        target_width = 1.5 
+                        w_bot = target_width * (abs(q_bot) / max_q_soil)
+                        w_top = target_width * (abs(q_top) / max_q_soil)
+                        
+                        b_x_bot = ni[0] + c * x_s; b_y_bot = ni[1] + s * x_s
+                        b_x_top = ni[0] + c * (x_s + L_load); b_y_top = ni[1] + s * (x_s + L_load)
+                        
+                        dir_sign = 1.0 if q_bot >= 0 else -1.0
+                        draw_dir_x = dir_sign * (-s); draw_dir_y = dir_sign * c
+                        
+                        t_x_bot = b_x_bot + draw_dir_x * w_bot; t_y_bot = b_y_bot + draw_dir_y * w_bot
+                        t_x_top = b_x_top + draw_dir_x * w_top; t_y_top = b_y_top + draw_dir_y * w_top
+                        
+                        fig.add_trace(go.Scatter(
+                            x=[b_x_bot, b_x_top, t_x_top, t_x_bot, b_x_bot],
+                            y=[b_y_bot, b_y_top, t_y_top, t_y_bot, b_y_bot],
+                            fill='toself', fillcolor='orange', opacity=0.4, mode='none',
+                            hoverinfo='skip', showlegend=False
+                        ))
+                        fig.add_annotation(x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, font=dict(color='orange', size=marker_size*0.9, weight="bold"))
+                        fig.add_annotation(x=t_x_top, y=t_y_top, text=f"{abs(q_top):.1f}", showarrow=False, font=dict(color='orange', size=marker_size*0.9, weight="bold"))
+
+                    elif load_case_name == "Surcharge" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
+                        q_bot, q_top, x_s, L_load = load['params']
+                        target_width = 1.0 
+                        w_vis = target_width * (abs(q_bot) / max_q_surch)
+                        if w_vis < 0.1: w_vis = 0.1
+                        b_x_bot = ni[0] + c * x_s; b_y_bot = ni[1] + s * x_s
+                        b_x_top = ni[0] + c * (x_s + L_load); b_y_top = ni[1] + s * (x_s + L_load)
+                        dir_sign = 1.0 if q_bot >= 0 else -1.0
+                        draw_dir_x = dir_sign * (-s); draw_dir_y = dir_sign * c
+                        t_x_bot = b_x_bot + draw_dir_x * w_vis; t_y_bot = b_y_bot + draw_dir_y * w_vis
+                        t_x_top = b_x_top + draw_dir_x * w_vis; t_y_top = b_y_top + draw_dir_y * w_vis
+                        
+                        fig.add_trace(go.Scatter(
+                            x=[b_x_bot, b_x_top, t_x_top, t_x_bot, b_x_bot],
+                            y=[b_y_bot, b_y_top, t_y_top, t_y_bot, b_y_bot],
+                            fill='toself', fillcolor='purple', opacity=0.4, mode='none',
+                            hoverinfo='skip', showlegend=False
+                        ))
+                        fig.add_annotation(x=t_x_bot, y=t_y_bot, text=f"{abs(q_bot):.1f}", showarrow=False, font=dict(color='purple', size=marker_size*0.9, weight="bold"))
+
+        # 3. Add Merged Traces to Figure
+        show_leg = False
+        if not legend_flags[sys_key]:
+            show_leg = True
+            legend_flags[sys_key] = True
+
+        if X_pos_list:
+            # Flatten accumulators
+            X_pos_all = np.concatenate(X_pos_list)
+            Y_pos_all = np.concatenate(Y_pos_list)
+            C_pos_all = np.concatenate(C_pos_list)
+            
+            # Fill Trace (Background)
+            if X_fill_list:
+                X_fill_all = np.concatenate(X_fill_list)
+                Y_fill_all = np.concatenate(Y_fill_list)
+                
+                # Attach legend to fill for consistency with envelope mode, or main line
+                # Original code put legend on Fill for fill_mode, line for step.
+                # Here we use one consolidated legend entry on the fill.
+                fig.add_trace(go.Scatter(
+                    x=X_fill_all, y=Y_fill_all,
+                    fill='toself', fillcolor=color, opacity=0.2 if is_envelope else 0.1, line=dict(width=0),
+                    name=f"{sys_name}", showlegend=show_leg, hoverinfo='skip'
+                ))
+                show_leg = False # Don't duplicate legend on lines
+            
+            if is_envelope:
+                X_neg_all = np.concatenate(X_neg_list)
+                Y_neg_all = np.concatenate(Y_neg_list)
+                C_neg_all = np.concatenate(C_neg_list)
+                
+                # Max Line
+                fig.add_trace(go.Scatter(
+                    x=X_pos_all, y=Y_pos_all, mode='lines',
+                    line=dict(color=color, width=2.5, dash=line_style), showlegend=False,
+                    customdata=C_pos_all, hovertemplate=htemp_max
+                ))
+                # Min Line
+                fig.add_trace(go.Scatter(
+                    x=X_neg_all, y=Y_neg_all, mode='lines',
+                    line=dict(color=color, width=2.5, dash=line_style), showlegend=False,
+                    customdata=C_neg_all, hovertemplate=htemp_min
+                ))
+            else:
+                # Single Line (Step)
+                # If fill didn't exist (unlikely in this logic), legend goes here
+                fig.add_trace(go.Scatter(
+                    x=X_pos_all, y=Y_pos_all, mode='lines',
+                    line=dict(color=color, width=3.0, dash=line_style), 
+                    name=f"{sys_name}", showlegend=show_leg,
+                    customdata=C_pos_all, hovertemplate=htemp_step
+                ))
+
     if show_A: add_traces(sysA_data, name_A, "blue", "solid", 1)
     if show_B: add_traces(sysB_data, name_B, "red", "dash", -1)
     
@@ -546,7 +582,6 @@ def create_plotly_fig(
         yaxis=dict(scaleanchor="x", scaleratio=1, visible=False),
         xaxis=dict(visible=False),
         plot_bgcolor='white',
-        # INCREASED MARGINS TO PREVENT CUT-OFF
         margin=dict(l=margin_base, r=margin_base, t=top_margin, b=margin_base),
         showlegend=True,
         legend=dict(

@@ -61,6 +61,9 @@ class BricosReportGenerator:
         self.version = version
         self.progress_callback = progress_callback
         
+        # Validity Check
+        self.valid_B = (nodes_B is not None)
+        
         self.styles = getSampleStyleSheet()
         self.elements = []
         self.chapter_count = 1
@@ -160,8 +163,11 @@ class BricosReportGenerator:
         
         self._add_system_input_summary("System A", self.params_A, self.raw_A, self.props_A, "sysA")
         self.elements.append(PageBreak())
-        self._add_system_input_summary("System B", self.params_B, self.raw_B, self.props_B, "sysB")
-        self.elements.append(PageBreak())
+        
+        if self.valid_B:
+            self._add_system_input_summary("System B", self.params_B, self.raw_B, self.props_B, "sysB")
+            self.elements.append(PageBreak())
+            
         self.chapter_count += 1
         
         self._update_progress(0.15)
@@ -184,9 +190,15 @@ class BricosReportGenerator:
         self.chapter_count += 1
         
         # 7. Load Components (Unfactored)
-        has_sw = any(v > 0 for v in self.params_A['sw_list']) or any(v > 0 for v in self.params_B['sw_list'])
-        has_soil = len(self.params_A.get('soil', [])) > 0 or len(self.params_B.get('soil', [])) > 0
-        has_surch = len(self.params_A.get('surcharge', [])) > 0 or len(self.params_B.get('surcharge', [])) > 0
+        # Check active components across BOTH systems if valid_B, else just A
+        has_sw = any(v > 0 for v in self.params_A['sw_list'])
+        has_soil = len(self.params_A.get('soil', [])) > 0
+        has_surch = len(self.params_A.get('surcharge', [])) > 0
+        
+        if self.valid_B:
+            if any(v > 0 for v in self.params_B['sw_list']): has_sw = True
+            if len(self.params_B.get('soil', [])) > 0: has_soil = True
+            if len(self.params_B.get('surcharge', [])) > 0: has_surch = True
         
         active_comps = sum([has_sw, has_soil, has_surch])
         prog_start = 0.50
@@ -320,6 +332,9 @@ class BricosReportGenerator:
             return perm + var
             
         eqA = get_eq(self.params_A, self.raw_A)
+        if not self.valid_B:
+            return eqA
+        
         eqB = get_eq(self.params_B, self.raw_B)
         if eqA == eqB: return f"Design = {eqA}"
         return f"SysA: {eqA} <br/> SysB: {eqB}"
@@ -678,7 +693,9 @@ class BricosReportGenerator:
 
     def _add_results_section(self, res_mode, prog_range=(0.0, 0.0)):
         res_A = solver.combine_results(self.raw_A, self.params_A, res_mode)
-        res_B = solver.combine_results(self.raw_B, self.params_B, res_mode)
+        res_B = {}
+        if self.valid_B:
+            res_B = solver.combine_results(self.raw_B, self.params_B, res_mode)
         
         self.elements.append(Paragraph(f"Visualizations - {res_mode}", self.styles['Heading4']))
         
@@ -697,38 +714,42 @@ class BricosReportGenerator:
                 'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5
             })
             
-        for t_code, t_title in types:
-            tasks.append({
-                'nodes': self.nodes_B, 'sysA_data': {}, 'sysB_data': res_B.get("Total Envelope", {}),
-                'type_base': t_code, 'title': f"{t_title} - {self.params_B['name']}", 
-                'load_case_name': "Total Envelope",
-                'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
-                'params_A': self.params_A, 'params_B': self.params_B,
-                'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
-            })
+        if self.valid_B:
+            for t_code, t_title in types:
+                tasks.append({
+                    'nodes': self.nodes_B, 'sysA_data': {}, 'sysB_data': res_B.get("Total Envelope", {}),
+                    'type_base': t_code, 'title': f"{t_title} - {self.params_B['name']}", 
+                    'load_case_name': "Total Envelope",
+                    'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
+                    'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
+                    'params_A': self.params_A, 'params_B': self.params_B,
+                    'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
+                })
 
         images = self._submit_parallel_plots(tasks, prog_range)
         
         self.elements.append(Paragraph("System A", self.styles['SwecoSmall']))
         self._append_image_grid(images[0:4]) 
         
-        self.elements.append(Spacer(1, 0.3*cm))
-        self.elements.append(Paragraph("System B", self.styles['SwecoSmall']))
-        self._append_image_grid(images[4:8]) 
+        if self.valid_B:
+            self.elements.append(Spacer(1, 0.3*cm))
+            self.elements.append(Paragraph("System B", self.styles['SwecoSmall']))
+            self._append_image_grid(images[4:8]) 
 
         self.elements.append(Spacer(1, 0.5*cm))
         
         title_str = f"Tabular Summary - {res_mode.upper()}"
         self.elements.append(Paragraph(title_str, self.styles['Heading3']))
         
-        self._add_force_summary_table(res_A['Total Envelope'], res_B['Total Envelope'])
+        self._add_force_summary_table(res_A['Total Envelope'], res_B.get('Total Envelope', {}))
         self.elements.append(Spacer(1, 0.3*cm))
         self._add_reaction_table(res_A, self.params_A, res_B, self.params_B)
 
     def _add_component_section(self, load_key, prog_range=(0.0, 0.0)):
         res_A = solver.combine_results(self.raw_A, self.params_A, "Characteristic (No Dynamic Factor)")
-        res_B = solver.combine_results(self.raw_B, self.params_B, "Characteristic (No Dynamic Factor)")
+        res_B = {}
+        if self.valid_B:
+             res_B = solver.combine_results(self.raw_B, self.params_B, "Characteristic (No Dynamic Factor)")
         
         tasks = []
         types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'), 
@@ -744,33 +765,35 @@ class BricosReportGenerator:
                 'params_A': self.params_A, 'params_B': self.params_B,
                 'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5
             })
-            
-        for t_code, t_title in types:
-            tasks.append({
-                'nodes': self.nodes_B, 'sysA_data': {}, 'sysB_data': res_B.get(load_key, {}),
-                'type_base': t_code, 'title': f"{t_title} - {self.params_B['name']}", 
-                'load_case_name': load_key,
-                'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
-                'params_A': self.params_A, 'params_B': self.params_B,
-                'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
-            })
+        
+        if self.valid_B:
+            for t_code, t_title in types:
+                tasks.append({
+                    'nodes': self.nodes_B, 'sysA_data': {}, 'sysB_data': res_B.get(load_key, {}),
+                    'type_base': t_code, 'title': f"{t_title} - {self.params_B['name']}", 
+                    'load_case_name': load_key,
+                    'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
+                    'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
+                    'params_A': self.params_A, 'params_B': self.params_B,
+                    'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
+                })
 
         images = self._submit_parallel_plots(tasks, prog_range)
         
         self.elements.append(Paragraph("System A", self.styles['SwecoSmall']))
         self._append_image_grid(images[0:4])
         
-        self.elements.append(Spacer(1, 0.3*cm))
-        self.elements.append(Paragraph("System B", self.styles['SwecoSmall']))
-        self._append_image_grid(images[4:8])
+        if self.valid_B:
+            self.elements.append(Spacer(1, 0.3*cm))
+            self.elements.append(Paragraph("System B", self.styles['SwecoSmall']))
+            self._append_image_grid(images[4:8])
         
         self.elements.append(Spacer(1, 0.5*cm))
         self._add_force_summary_table(res_A.get(load_key, {}), res_B.get(load_key, {}))
         self.elements.append(Spacer(1, 0.3*cm))
         
         wrap_A = {'Total Envelope': res_A.get(load_key, {})}
-        wrap_B = {'Total Envelope': res_B.get(load_key, {})}
+        wrap_B = {'Total Envelope': res_B.get(load_key, {})} if self.valid_B else {}
         self._add_reaction_table(wrap_A, self.params_A, wrap_B, self.params_B)
 
     def _append_image_grid(self, img_bytes_list):
@@ -826,11 +849,12 @@ class BricosReportGenerator:
         if has_veh(self.params_A, 'vehicleB'):
             process_sys(self.raw_A.get('Vehicle Envelope B', {}), "A (Veh B)")
 
-        if has_veh(self.params_B, 'vehicle'):
-            process_sys(self.raw_B.get('Vehicle Envelope A', {}), "B (Veh A)")
-            
-        if has_veh(self.params_B, 'vehicleB'):
-            process_sys(self.raw_B.get('Vehicle Envelope B', {}), "B (Veh B)")
+        if self.valid_B:
+            if has_veh(self.params_B, 'vehicle'):
+                process_sys(self.raw_B.get('Vehicle Envelope A', {}), "B (Veh A)")
+                
+            if has_veh(self.params_B, 'vehicleB'):
+                process_sys(self.raw_B.get('Vehicle Envelope B', {}), "B (Veh B)")
         
         if len(data) > 1:
             t = self._make_std_table(data, [2*cm, 3*cm, 3*cm, 3*cm, 3*cm, 2*cm])
@@ -842,10 +866,14 @@ class BricosReportGenerator:
         # Define 4 specific combos: SysA-VehA, SysA-VehB, SysB-VehA, SysB-VehB
         combos = [
             (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps A', "Vehicle A"),
-            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps B', "Vehicle B"),
-            (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps A', "Vehicle A"),
-            (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps B', "Vehicle B")
+            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps B', "Vehicle B")
         ]
+        
+        if self.valid_B:
+            combos.extend([
+                (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps A', "Vehicle A"),
+                (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps B', "Vehicle B")
+            ])
         
         all_task_groups = []
         
@@ -879,10 +907,6 @@ class BricosReportGenerator:
             for group in section['groups']:
                 self.elements.append(Paragraph(f"<b>{group['header']}</b>", self.styles['SwecoBody']))
                 for plot_req in group['plots']:
-                    # REMOVED: Redundant text description (now in plot title)
-                    # full_title = plot_req['title']
-                    # self.elements.append(Paragraph(full_title, self.styles['SwecoCell']))
-                    
                     if img_cursor < len(rendered_images):
                         img_data = rendered_images[img_cursor]
                         img_cursor += 1
@@ -1042,9 +1066,18 @@ class BricosReportGenerator:
                 if 'min' in k: return np.min(arr)
                 return np.max(arr)
             def cell_txt(k):
-                vA = fmt_val(dA, k); vB = fmt_val(dB, k)
-                if "def" in k: vA *= 1000.0; vB *= 1000.0
-                return f"{vA:.1f} / {vB:.1f}"
+                vA = fmt_val(dA, k)
+                
+                is_def = "def" in k
+                if is_def: vA *= 1000.0
+                
+                if self.valid_B:
+                    vB = fmt_val(dB, k)
+                    if is_def: vB *= 1000.0
+                    return f"{vA:.1f} / {vB:.1f}"
+                else:
+                    return f"{vA:.1f}"
+            
             row.extend([cell_txt('M_max'), cell_txt('M_min'), cell_txt('V_max'), cell_txt('V_min'), cell_txt('N_max'), cell_txt('N_min')])
             k_def_max = 'def_x_max' if eid.startswith('W') else 'def_y_max'
             k_def_min = 'def_x_min' if eid.startswith('W') else 'def_y_min'
@@ -1053,12 +1086,19 @@ class BricosReportGenerator:
         
         t = self._make_std_table(table_data, col_widths, font_size=7, header_rows=2)
         self.elements.append(KeepTogether([t]))
-        self.elements.append(Paragraph("Values shown as: Sys A / Sys B", self.styles['Italic']))
+        if self.valid_B:
+            self.elements.append(Paragraph("Values shown as: Sys A / Sys B", self.styles['Italic']))
 
     def _add_reaction_table(self, resA_full, paramsA, resB_full, paramsB):
-        self.elements.append(Paragraph("Support Reactions (Sys A / Sys B)", self.styles['SwecoTableHead']))
+        if self.valid_B:
+            self.elements.append(Paragraph("Support Reactions (Sys A / Sys B)", self.styles['SwecoTableHead']))
+        else:
+            self.elements.append(Paragraph("Support Reactions (System A)", self.styles['SwecoTableHead']))
+            
         reactA = self._calculate_reaction_envelope(resA_full, self.nodes_A)
-        reactB = self._calculate_reaction_envelope(resB_full, self.nodes_B)
+        reactB = {}
+        if self.valid_B:
+            reactB = self._calculate_reaction_envelope(resB_full, self.nodes_B)
         
         def get_valid_supports(p):
             mode = p.get('mode', 'Frame'); num = p.get('num_spans', 1)
@@ -1067,7 +1107,11 @@ class BricosReportGenerator:
             for i in range(num + 1): valid_ids.append(base + i)
             return set(valid_ids)
             
-        valid_A = get_valid_supports(paramsA); valid_B = get_valid_supports(paramsB)
+        valid_A = get_valid_supports(paramsA)
+        valid_B = set()
+        if self.valid_B:
+            valid_B = get_valid_supports(paramsB)
+            
         all_nodes = sorted(list(set(reactA.keys()) | set(reactB.keys())))
         filtered_nodes = [n for n in all_nodes if (n in valid_A) or (n in valid_B)]
         
@@ -1087,8 +1131,12 @@ class BricosReportGenerator:
             for comp in ['Rx', 'Ry', 'Mz']:
                 for bound in ['max', 'min']:
                     k = f"{comp}_{bound}"
-                    vA = dA.get(k, 0.0); vB = dB.get(k, 0.0)
-                    row.append(f"{vA:.1f} / {vB:.1f}")
+                    vA = dA.get(k, 0.0)
+                    if self.valid_B:
+                         vB = dB.get(k, 0.0)
+                         row.append(f"{vA:.1f} / {vB:.1f}")
+                    else:
+                         row.append(f"{vA:.1f}")
             table_data.append(row)
         
         t = self._make_std_table(table_data, col_widths, font_size=7, header_rows=2)
