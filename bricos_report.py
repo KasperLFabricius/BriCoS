@@ -71,6 +71,9 @@ class BricosReportGenerator:
         self.styles.add(ParagraphStyle(name='SwecoSmall', parent=self.styles['Normal'], fontSize=8, leading=10))
         self.styles.add(ParagraphStyle(name='SwecoCell', parent=self.styles['Normal'], fontSize=8, leading=9))
         self.styles.add(ParagraphStyle(name='SwecoMath', parent=self.styles['Normal'], fontSize=10, leading=12, alignment=TA_CENTER, spaceAfter=6, spaceBefore=6))
+        
+        # Increased leading for Log to prevent overlap
+        self.styles.add(ParagraphStyle(name='SwecoLog', parent=self.styles['Normal'], fontSize=8, leading=14))
 
         # Use pre-calculated results passed from Main UI to avoid redundant Numba execution
         self.params_A = self.state['sysA']
@@ -116,9 +119,9 @@ class BricosReportGenerator:
         # 4. Input Summary
         self.elements.append(Paragraph(f"{self.chapter_count}. System Configuration & Geometry", self.styles['SwecoSubHeader']))
         
-        self._add_system_input_summary("System A", self.params_A, self.raw_A, self.props_A)
+        self._add_system_input_summary("System A", self.params_A, self.raw_A, self.props_A, "sysA")
         self.elements.append(PageBreak())
-        self._add_system_input_summary("System B", self.params_B, self.raw_B, self.props_B)
+        self._add_system_input_summary("System B", self.params_B, self.raw_B, self.props_B, "sysB")
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
@@ -199,7 +202,6 @@ class BricosReportGenerator:
 
     def _add_conventions_text(self, params):
         """Adds audit-required conventions text."""
-        # Removed explicit shear deformation bullet as requested
         conventions_text = f"""
         <b>Model Assumptions & Conventions:</b><br/>
         • <b>Coordinate System:</b> 2D Plane Frame (X: Horizontal, Y: Vertical, M: Counter-clockwise positive).<br/>
@@ -439,7 +441,7 @@ class BricosReportGenerator:
                 desc += f"<br/>Slope: {inc_txt}"
         return desc
 
-    def _add_system_input_summary(self, sys_label, p, raw_res, props):
+    def _add_system_input_summary(self, sys_label, p, raw_res, props, sys_key_id):
         self.elements.append(Paragraph(f"<b>{sys_label} ({p.get('name', '')})</b> - {p['mode']}", self.styles['Heading3']))
         
         phi_val = p.get('phi', 1.0)
@@ -472,12 +474,11 @@ class BricosReportGenerator:
             if p['L_list'][i] > 0.001:
                 pid = f"S{i+1}"
                 e_real = props['Spans'].get(pid, {}).get('E', 0.0) / 1e6 
-                # E real is calculated in kPa, e_real here is in GPa (33e6 / 1e6 = 33)
-                # Formatted material string per user request
+                
                 if p['e_mode'] == 'Eurocode':
                     fck = p['fck_span_list'][i]
                 else:
-                    fck = 0 # Not relevant for Custom E
+                    fck = 0 
                     
                 if p['e_mode'] == 'Eurocode':
                     mat_str = f"fck = {fck:.0f} MPa / E = {e_real:.0f} GPa"
@@ -564,17 +565,27 @@ class BricosReportGenerator:
 
         # 5. VEHICLES
         self.elements.append(Spacer(1, 0.2*cm))
-        def add_veh_table(key, title_suffix):
+        def add_veh_table(key, title_suffix, prefix):
             veh = p.get(key, {})
             v_loads = veh.get('loads', [])
             v_spac = veh.get('spacing', [])
+            
             if v_loads:
-                self.elements.append(Paragraph(f"Vehicle {title_suffix}:", self.styles['SwecoSmall']))
+                # Retrieve class from session state
+                sess_key = f"{sys_key_id}_{prefix}_class" # e.g. sysA_A_class
+                class_name = self.state.get(sess_key, "Custom")
+                
+                header_text = f"Vehicle {title_suffix}: {class_name}"
+                if class_name != "Custom":
+                    header_text += " - In accordance with DS/EN 1991-2, DK:NA (bridges):2017"
+                
+                self.elements.append(Paragraph(header_text, self.styles['SwecoSmall']))
                 drawing = self._draw_vehicle_stick_model(v_loads, v_spac, width=400, height=60)
                 self.elements.append(drawing)
                 self.elements.append(Spacer(1, 0.3*cm))
-        add_veh_table('vehicle', "A")
-        add_veh_table('vehicleB', "B")
+        
+        add_veh_table('vehicle', "A", "vehA")
+        add_veh_table('vehicleB', "B", "vehB")
 
         # 6. PHI CALCULATION LOG
         if p.get('phi_mode', 'Calculate') == 'Calculate' and raw_res and raw_res.get('phi_log'):
@@ -584,14 +595,15 @@ class BricosReportGenerator:
             log_lines = raw_res['phi_log']
             formatted_lines = []
             for line in log_lines:
-                # Math text formatting for known variables
-                txt = line.replace("L_phi", "<i>L<sub>&Phi;</sub></i>")\
+                # Use Unicode directly instead of entities to avoid & display issues
+                txt = line.replace("L_phi", "<i>L<sub>Φ</sub></i>")\
                           .replace("L_mean", "<i>L<sub>mean</sub></i>")\
-                          .replace("Phi", "<i>&Phi;</i>")
+                          .replace("Phi", "<i>Φ</i>")
                 formatted_lines.append(txt)
             
             for line in formatted_lines:
-                self.elements.append(Paragraph(f"• {line}", self.styles['SwecoCell']))
+                # Use SwecoLog (leading=14) to prevent overlap
+                self.elements.append(Paragraph(f"• {line}", self.styles['SwecoLog']))
 
     # -----------------------------------------------
     # PARALLEL RENDERING HELPER (WITH PROGRESS)
