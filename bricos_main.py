@@ -898,6 +898,11 @@ if st.session_state.is_generating_report:
         st.success("Report Generated!")
         
     except Exception as e:
+        # --- NEW: Write error to file so we can read it ---
+        import traceback
+        with open("crash_log.txt", "w") as f:
+            traceback.print_exc(file=f)
+        # -------------------------------------------------
         st.error(f"Report Generation Failed: {e}")
     
     finally:

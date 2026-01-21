@@ -3,30 +3,28 @@ import os, sys
 
 def resolve_path(path):
     """
-    Locates the file in either the source directory (development)
-    or the PyInstaller temporary _MEI folder (runtime).
+    Locates files whether running as a script or a frozen EXE.
+    PyInstaller unpacks data to sys._MEIPASS.
     """
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-    
-    return os.path.join(base_path, path)
+    if getattr(sys, 'frozen', False):
+        basedir = sys._MEIPASS
+    else:
+        basedir = os.path.dirname(__file__)
+    return os.path.join(basedir, path)
 
 if __name__ == "__main__":
-    # 1. Locate the main Streamlit file
-    main_script = resolve_path("bricos_main.py")
-
-    # 2. Modify sys.argv to emulate "streamlit run bricos_main.py"
-    # The first argument is the script name (streamlit), the rest are args
+    # 1. Resolve the path to the main application script inside the bundle
+    # Note: We bundle bricos_main.py as a data file in the spec.
+    app_path = resolve_path("bricos_main.py")
+    
+    # 2. Construct the system arguments to mimic "streamlit run bricos_main.py"
+    # We disable development mode to hide the "Connect to..." menu items.
     sys.argv = [
         "streamlit",
         "run",
-        main_script,
+        app_path,
         "--global.developmentMode=false",
-        "--server.headless=true",  # Don't show server dialogs
     ]
-
-    # 3. Launch Streamlit
-    print("Launching BriCoS v0.30...")
+    
+    # 3. Execute Streamlit
     sys.exit(stcli.main())
