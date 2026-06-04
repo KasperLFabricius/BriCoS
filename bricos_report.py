@@ -157,12 +157,33 @@ class BricosReportGenerator:
         return "Exclusive: envelope of vehicle traffic or surcharge"
 
     @staticmethod
+    def _has_vehicle_loads(params):
+        return bool(params.get('vehicle', {}).get('loads')) or bool(params.get('vehicleB', {}).get('loads'))
+
+    @staticmethod
+    def _has_surcharge_loads(params):
+        return bool(params.get('surcharge'))
+
+    @staticmethod
     def _characteristic_formula_text(params):
-        if params.get('combine_surcharge_vehicle', False):
-            variable = "1.0 · Phi · Vehicle traffic + 1.0 · Surcharge"
+        has_vehicle = BricosReportGenerator._has_vehicle_loads(params)
+        has_surcharge = BricosReportGenerator._has_surcharge_loads(params)
+
+        if has_vehicle and has_surcharge:
+            if params.get('combine_surcharge_vehicle', False):
+                variable = "1.0 · Phi · Vehicle traffic + 1.0 · Surcharge"
+            else:
+                variable = "Envelope(1.0 · Phi · Vehicle traffic, 1.0 · Surcharge)"
+        elif has_vehicle:
+            variable = "1.0 · Phi · Vehicle traffic"
+        elif has_surcharge:
+            variable = "1.0 · Surcharge"
         else:
-            variable = "Envelope(1.0 · Phi · Vehicle traffic, 1.0 · Surcharge)"
-        return f"1.0 · Permanent + {variable} + 1.0 · Other variable actions"
+            variable = ""
+
+        if not variable:
+            return "1.0 · Permanent"
+        return f"1.0 · Permanent + {variable}"
 
     def _build_characteristic_formula_text(self):
         eqA = self._characteristic_formula_text(self.params_A)
