@@ -9,7 +9,9 @@ import bricos_kernels as kernels
 
 class FrameElement:
     def __init__(self, node_i, node_j, E, geom_data, shear_config):
-        # geom_data: {'type': 0(I)/1(H), 'shape': 0(Const)/1(Lin)/2(3pt), 'vals': [v1, v2, v3]}
+        # geom_data convention: {'type': 0(I)/1(H), 'shape': 0(Const)/1(Lin)/2(3pt),
+        # 'vals': [start, mid, end]}. Linear profiles use start/end and reserve
+        # vals[1] for the mid point so the UI, parent geometry, and kernels agree.
         # shear_config: {'use': bool, 'b_eff': float, 'nu': float}
         
         # Calculate Geometry
@@ -50,20 +52,28 @@ class FrameElement:
         rel_end = (local_off + self.L_calc) / parent_L
         rel_mid = (rel_start + rel_end) / 2.0
         
-        # Effective values for this sub-element
+        # Effective [start, mid, end] values for this sub-element. Keep this
+        # convention aligned with bricos_kernels.get_section_value_at_x. Even
+        # when a parent 3-point kink falls inside a sub-element, sampling the
+        # sub-element midpoint prevents a symmetric [start == end, mid higher]
+        # profile from being mistaken for a constant section.
         v_start = interp_val(rel_start)
+        v_mid = interp_val(rel_mid)
         v_end = interp_val(rel_end)
-        
+
         # --- FIX: DETECT "FAKE" TAPER ---
-        # If the user defined a Linear Taper but Start == End, treat as Constant (Prismatic).
-        # This forces the use of Exact Analytical Kernels instead of Numerical Integration,
-        # preventing integration errors (aliasing) for point loads on constant sections.
-        is_effectively_constant = (abs(v_start - v_end) < 1e-6)
-        
-        eff_vals = [v_start, v_end, v_end] 
-        # Default shape is linear (1) unless overridden
-        eff_shape = 1 if geom_data.get('shape', 0) != 0 else 0
-        
+        # Treat as prismatic only when start, mid, and end all match.
+        is_effectively_constant = (
+            abs(v_start - v_mid) < 1e-6 and
+            abs(v_mid - v_end) < 1e-6
+        )
+
+        eff_vals = [v_start, v_mid, v_end]
+        # Use a three-point sub-element representation for all genuine variable
+        # sections. Linear parents have a collinear midpoint, while 3-point
+        # parents retain the local kink shape.
+        eff_shape = 2 if geom_data.get('shape', 0) != 0 else 0
+
         if is_effectively_constant:
             eff_shape = 0
             eff_vals = [v_start, v_start, v_start]
@@ -74,12 +84,12 @@ class FrameElement:
         
         if v_type == 1:
             # Input was H (Height).
-            h_avg = (v_start + v_end)/2.0
+            h_avg = (v_start + 4.0 * v_mid + v_end) / 6.0
             I_avg = (b_eff * h_avg**3) / 12.0
             A_approx = b_eff * h_avg
         else:
             # Input was I.
-            I_avg = (v_start + v_end)/2.0
+            I_avg = (v_start + 4.0 * v_mid + v_end) / 6.0
             h_est = (12.0 * I_avg / b_eff)**(1.0/3.0)
             A_approx = b_eff * h_est
 
@@ -107,7 +117,7 @@ class FrameElement:
         # --- STORE GEOM DATA FOR LOAD KERNEL ---
         self.eff_shape = eff_shape
         self.v_type = v_type
-        self.eff_vals = np.array([v_start, v_end, 0.0])
+        self.eff_vals = np.array(eff_vals, dtype=np.float64)
         self.b_eff = float(b_eff)
         self.As_avg = float(As_avg)
         self.G_val = float(G_val)
@@ -131,7 +141,7 @@ class FrameElement:
             # NON-PRISMATIC (TAPERED) PATH
             k_loc, k_glob, T, L, cx, cy = kernels.jit_non_prismatic_matrices(
                 node_i[0], node_i[1], node_j[0], node_j[1], float(E), float(G_val),
-                1, v_type, self.eff_vals, float(A_approx), float(As_avg),
+                self.eff_shape, v_type, self.eff_vals, float(A_approx), float(As_avg),
                 float(b_eff) 
             )
             # For variable elements, store start I as representative
@@ -151,37 +161,19 @@ class FrameElement:
         self.cy = cy
 
     def get_fixed_end_forces(self, load_type, params):
-        # 1. Determine Load Type Integer
-        l_int = 0
-        if load_type == 'point': l_int = 1
-        elif load_type == 'distributed_trapezoid': l_int = 2
-        elif load_type == 'axial_point': l_int = 3
-        elif load_type == 'axial_distributed_trapezoid': l_int = 4
-
-        # 2. Pad Params to 4 for numba kernel consistency
-        p_arr = np.zeros(4)
-        n_p = len(params)
-        for i in range(min(4, n_p)): p_arr[i] = params[i]
-
         if load_type == 'axial_point':
             return kernels.jit_fef_axial_point(params[0], params[1], self.L)
         elif load_type == 'axial_distributed_trapezoid':
             return kernels.jit_fef_axial_trapezoid(params[0], params[1], params[2], params[3], self.L)
 
-        # 3. Choose Kernel based on Element Shape
-        if self.eff_shape == 0:
-            # Use Exact Analytical Formulas for Prismatic
-            if load_type == 'point':
-                return kernels.jit_fef_point(params[0], params[1], self.L)
-            elif load_type == 'distributed_trapezoid':
-                return kernels.jit_fef_trapezoid(params[0], params[1], params[2], params[3], self.L)
-        else:
-            # Use Numerical Integration for Non-Prismatic
-            return kernels.jit_numerical_fef(
-                l_int, p_arr, self.L, float(self.E), self.G_val,
-                self.eff_shape, self.v_type, self.eff_vals, self.b_eff, self.As_avg
-            )
-            
+        # Hermite-consistent transverse equivalent nodal loads are independent
+        # of EI(x), so use the same analytical kernels for both prismatic and
+        # non-prismatic elements.
+        if load_type == 'point':
+            return kernels.jit_fef_point(params[0], params[1], self.L)
+        elif load_type == 'distributed_trapezoid':
+            return kernels.jit_fef_trapezoid(params[0], params[1], params[2], params[3], self.L)
+
         return np.zeros(6)
 
 def decompose_gravity_params(load_type, params, cx, cy):

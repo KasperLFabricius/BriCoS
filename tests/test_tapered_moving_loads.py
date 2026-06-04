@@ -60,23 +60,19 @@ def test_vehicle_transverse_point_fef_matches_analytical_for_prismatic_members()
     np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
 
-def test_vehicle_transverse_point_fef_matches_numerical_for_tapered_members():
+def test_vehicle_transverse_point_fef_matches_analytical_for_tapered_members():
     P = 100.0
     L = 10.0
     a = 4.0
     E = 30e6
     G = 0.0
-    eff_vals = np.array([1.0, 0.6, 0.0], dtype=np.float64)
+    eff_vals = np.array([1.0, 0.8, 0.6], dtype=np.float64)
     b_eff = 1.0
     As_avg = 0.75
-    params = np.array([P, a, 0.0, 0.0], dtype=np.float64)
-
     actual = kernels.jit_vehicle_transverse_point_fef(
         P, a, L, E, G, 1, 1, eff_vals, b_eff, As_avg,
     )
-    expected = kernels.jit_numerical_fef(
-        1, params, L, E, G, 1, 1, eff_vals, b_eff, As_avg,
-    )
+    expected = kernels.jit_fef_point(P, a, L)
 
     np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
