@@ -244,8 +244,7 @@ with st.sidebar.expander("Copy Data", expanded=False):
         c_yes, c_no = st.columns(2)
         if c_yes.button("Confirm", disabled=ui_locked):
             nm = st.session_state['sysB']['name']
-            st.session_state['sysB'] = copy.deepcopy(st.session_state['sysA'])
-            st.session_state['sysB']['name'] = nm
+            st.session_state['sysB'] = data_mod.copy_system_data(st.session_state['sysA'], nm)
             data_mod.force_ui_update('sysB', st.session_state['sysB'])
             st.session_state.copy_confirm_mode = None
             st.rerun()
@@ -258,8 +257,7 @@ with st.sidebar.expander("Copy Data", expanded=False):
         c_yes, c_no = st.columns(2)
         if c_yes.button("Confirm", disabled=ui_locked):
             nm = st.session_state['sysA']['name']
-            st.session_state['sysA'] = copy.deepcopy(st.session_state['sysB'])
-            st.session_state['sysA']['name'] = nm
+            st.session_state['sysA'] = data_mod.copy_system_data(st.session_state['sysB'], nm)
             data_mod.force_ui_update('sysA', st.session_state['sysA'])
             st.session_state.copy_confirm_mode = None
             st.rerun()
@@ -756,23 +754,27 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
     veh_help_txt = "Standard LM3 vehicles are defined in accordance with DS/EN 1991-2, DK:NA (bridges):2017."
     
     def handle_veh_inputs(prefix, key_class, key_loads, key_space, struct_key):
-        sess_key = f"{curr}_{prefix}_class"
-        
-        # FIXED: Robust initialization using identifying logic if session key missing
-        if sess_key not in st.session_state:
-            curr_loads = p[struct_key].get('loads', [])
-            curr_space = p[struct_key].get('spacing', [])
-            st.session_state[sess_key] = data_mod.identify_vehicle_class(curr_loads, curr_space)
-        
-        sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key, disabled=ui_locked, help=veh_help_txt)
+        sess_key = key_class
         input_key_l = f"{curr}_{prefix}_loads_input"
         input_key_s = f"{curr}_{prefix}_space_input"
-        if input_key_l not in st.session_state: st.session_state[input_key_l] = p[key_loads]
-        if input_key_s not in st.session_state: st.session_state[input_key_s] = p[key_space]
-
         last_key = f"{key_class}_last"
-        if last_key not in st.session_state: st.session_state[last_key] = sel_class
-        
+
+        # The calculation dictionary is the source of truth. Initialize only
+        # missing widget keys from normalized params; forced UI updates set these
+        # keys before reruns after copy/reset/load operations.
+        data_mod.normalize_vehicle_fields(p, struct_key, key_loads, key_space)
+        if input_key_l not in st.session_state:
+            st.session_state[input_key_l] = p.get(key_loads, "")
+        if input_key_s not in st.session_state:
+            st.session_state[input_key_s] = p.get(key_space, "")
+        if sess_key not in st.session_state:
+            curr_vehicle = p.get(struct_key, {}) if isinstance(p.get(struct_key), dict) else {}
+            st.session_state[sess_key] = data_mod.identify_vehicle_class(curr_vehicle.get('loads', []), curr_vehicle.get('spacing', []))
+        if last_key not in st.session_state:
+            st.session_state[last_key] = st.session_state[sess_key]
+
+        sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key, disabled=ui_locked, help=veh_help_txt)
+
         if sel_class != st.session_state[last_key]:
             st.session_state[last_key] = sel_class
             if sel_class == "Custom":
@@ -780,10 +782,8 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
                 st.rerun()
             elif sel_class in veh_data:
                 p[key_loads] = veh_data[sel_class]['loads']; p[key_space] = veh_data[sel_class]['spacing']
+                data_mod.normalize_vehicle_fields(p, struct_key, key_loads, key_space)
                 st.session_state[input_key_l] = p[key_loads]; st.session_state[input_key_s] = p[key_space]
-                parsed_vehicle, parse_errors = data_mod.parse_vehicle_text(p[key_loads], p[key_space])
-                if not parse_errors:
-                    p[struct_key] = parsed_vehicle
                 st.rerun()
 
         # --- TOOLTIP CONFIGURATION ---
@@ -801,16 +801,17 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
             st.session_state[last_key] = "Custom"
             st.rerun()
 
-        parsed_vehicle, parse_errors = data_mod.parse_vehicle_text(p[key_loads], p[key_space])
+        if not str(p.get(key_loads, "")).strip() and not str(p.get(key_space, "")).strip():
+            data_mod.clear_vehicle_definition(p, struct_key, key_loads, key_space)
+            parse_errors = []
+        else:
+            parse_errors = data_mod.normalize_vehicle_fields(p, struct_key, key_loads, key_space)
 
         if parse_errors:
             st.error(f"Invalid Vehicle {prefix}: {' '.join(parse_errors)}")
-            p[struct_key] = {'loads': [], 'spacing': []}  # Ensure invalid data doesn't propagate to solver.
-        elif parsed_vehicle['loads']:
-            p[struct_key] = parsed_vehicle
+        elif p.get(struct_key, {}).get('loads'):
             st.success(f"Vehicle {prefix} Valid")
         else:
-            p[struct_key] = {'loads': [], 'spacing': []}
             st.caption("No vehicle defined.")
 
     st.markdown("**Vehicle A**")

@@ -81,8 +81,12 @@ def _assert_thicker_midspan_frame_is_not_more_flexible(*, use_shear_def):
     span_b = _selfweight_span(thicker_mid)
 
     assert abs(np.min(span_b["def_y"])) <= abs(np.min(span_a["def_y"])) * 1.02
-    assert np.max(span_b["M"]) > np.max(span_a["M"])
-    assert abs(np.min(span_b["M"])) < abs(np.min(span_a["M"]))
+    # In this frame sign convention, midspan sagging is represented by the
+    # negative moment peak, while the positive peak occurs near the frame corners.
+    # A thicker midspan should therefore increase abs(M_min) and reduce the
+    # positive corner peak.
+    assert abs(np.min(span_b["M"])) > abs(np.min(span_a["M"]))
+    assert np.max(span_b["M"]) < np.max(span_a["M"])
 
 
 def test_one_span_frame_midspan_thickening_is_stiffer_with_shear_disabled():
