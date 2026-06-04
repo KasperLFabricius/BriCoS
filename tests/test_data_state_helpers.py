@@ -10,8 +10,13 @@ import bricos_solver as solver
 
 
 def test_app_version_is_centralized_from_data_module():
-    assert data.APP_VERSION == "0.40"
+    assert isinstance(data.APP_VERSION, str)
+    assert data.APP_VERSION
     assert bricos_report.data_mod.APP_VERSION == data.APP_VERSION
+
+    parts = data.APP_VERSION.split(".")
+    assert len(parts) >= 2
+    assert all(part.isdigit() for part in parts)
 
 
 def test_get_clear_initializes_empty_vehicle_and_surcharge_state():
