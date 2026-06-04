@@ -758,20 +758,23 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         input_key_l = f"{curr}_{prefix}_loads_input"
         input_key_s = f"{curr}_{prefix}_space_input"
         last_key = f"{key_class}_last"
+        sig_key = f"{curr}_{prefix}_vehicle_sig"
 
-        # The calculation dictionary is the source of truth. Initialize only
-        # missing widget keys from normalized params; forced UI updates set these
-        # keys before reruns after copy/reset/load operations.
+        # The calculation dictionary is the source of truth. If copy/reset/load
+        # changed it since the last render, refresh widget keys before widgets
+        # are constructed so stale Streamlit values cannot overwrite it.
         data_mod.normalize_vehicle_fields(p, struct_key, key_loads, key_space)
-        if input_key_l not in st.session_state:
+        current_sig = data_mod.vehicle_state_signature(p, struct_key, key_loads, key_space)
+        if st.session_state.get(sig_key) != current_sig:
             st.session_state[input_key_l] = p.get(key_loads, "")
-        if input_key_s not in st.session_state:
             st.session_state[input_key_s] = p.get(key_space, "")
-        if sess_key not in st.session_state:
             curr_vehicle = p.get(struct_key, {}) if isinstance(p.get(struct_key), dict) else {}
-            st.session_state[sess_key] = data_mod.identify_vehicle_class(curr_vehicle.get('loads', []), curr_vehicle.get('spacing', []))
-        if last_key not in st.session_state:
+            st.session_state[sess_key] = data_mod.identify_vehicle_class(
+                curr_vehicle.get('loads', []),
+                curr_vehicle.get('spacing', []),
+            )
             st.session_state[last_key] = st.session_state[sess_key]
+            st.session_state[sig_key] = current_sig
 
         sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key, disabled=ui_locked, help=veh_help_txt)
 
@@ -784,6 +787,7 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
                 p[key_loads] = veh_data[sel_class]['loads']; p[key_space] = veh_data[sel_class]['spacing']
                 data_mod.normalize_vehicle_fields(p, struct_key, key_loads, key_space)
                 st.session_state[input_key_l] = p[key_loads]; st.session_state[input_key_s] = p[key_space]
+                st.session_state[sig_key] = data_mod.vehicle_state_signature(p, struct_key, key_loads, key_space)
                 st.rerun()
 
         # --- TOOLTIP CONFIGURATION ---
@@ -799,6 +803,7 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
             st.session_state[input_key_s] = ""
             st.session_state[sess_key] = "Custom"
             st.session_state[last_key] = "Custom"
+            st.session_state[sig_key] = data_mod.vehicle_state_signature(p, struct_key, key_loads, key_space)
             st.rerun()
 
         if not str(p.get(key_loads, "")).strip() and not str(p.get(key_space, "")).strip():
@@ -806,6 +811,7 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
             parse_errors = []
         else:
             parse_errors = data_mod.normalize_vehicle_fields(p, struct_key, key_loads, key_space)
+        st.session_state[sig_key] = data_mod.vehicle_state_signature(p, struct_key, key_loads, key_space)
 
         if parse_errors:
             st.error(f"Invalid Vehicle {prefix}: {' '.join(parse_errors)}")

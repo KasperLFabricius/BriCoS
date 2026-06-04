@@ -70,16 +70,19 @@ def test_clear_vehicle_definition_requires_explicit_state_change():
 
 
 def _class_100_params():
+    params = data.get_def()
     veh = data.load_vehicle_from_csv("Class 100")
-    vehicle = {"loads": veh["loads"], "spacing": veh["spacing"]}
-    return {
-        "vehicle": vehicle,
-        "vehicle_loads": veh["l_str"],
-        "vehicle_space": veh["s_str"],
-        "vehicleB": {"loads": [], "spacing": []},
-        "vehicleB_loads": "",
-        "vehicleB_space": "",
-    }
+    assert veh is not None
+
+    params["vehicle"] = {"loads": veh["loads"], "spacing": veh["spacing"]}
+    params["vehicle_loads"] = veh["l_str"]
+    params["vehicle_space"] = veh["s_str"]
+
+    params["vehicleB"] = {"loads": [], "spacing": []}
+    params["vehicleB_loads"] = ""
+    params["vehicleB_space"] = ""
+
+    return params
 
 
 def test_force_ui_update_preserves_copied_vehicle_and_class_state():
@@ -112,6 +115,38 @@ def test_force_ui_update_ignores_stale_blank_widget_keys_for_non_empty_vehicle()
     assert copied["vehicle_space"]
     assert st.session_state["sysB_A_loads_input"] == copied["vehicle_loads"]
     assert st.session_state["sysB_A_space_input"] == copied["vehicle_space"]
+
+
+def test_signature_refresh_overwrites_stale_widget_values_after_state_change():
+    st = data.st
+    st.session_state.clear()
+    params = _class_100_params()
+    old_sig = data.vehicle_state_signature(params, "vehicle", "vehicle_loads", "vehicle_space")
+    st.session_state["sysB_A_vehicle_sig"] = old_sig
+    st.session_state["sysB_A_loads_input"] = "1"
+    st.session_state["sysB_A_space_input"] = "0"
+
+    data.apply_standard_vehicle_definition(params, "Class 150", "vehicle", "vehicle_loads", "vehicle_space")
+    data.sync_vehicle_widgets_from_params("sysB", params)
+
+    assert st.session_state["sysB_A_loads_input"] == params["vehicle_loads"]
+    assert st.session_state["sysB_A_space_input"] == params["vehicle_space"]
+    assert st.session_state["sysB_A_vehicle_sig"] == data.vehicle_state_signature(
+        params, "vehicle", "vehicle_loads", "vehicle_space"
+    )
+    assert st.session_state["sysB_A_loads_input"] != "1"
+
+
+def test_normal_user_vehicle_text_edit_updates_calculation_dictionary():
+    params = _class_100_params()
+    params["vehicle_loads"] = "10, 20"
+    params["vehicle_space"] = "0, 1.5"
+
+    errors = data.normalize_vehicle_fields(params, "vehicle", "vehicle_loads", "vehicle_space")
+
+    assert errors == []
+    assert params["vehicle"] == {"loads": [10.0, 20.0], "spacing": [0.0, 1.5]}
+    assert data.vehicle_state_signature(params, "vehicle", "vehicle_loads", "vehicle_space")
 
 
 def test_copy_a_to_b_helper_preserves_vehicle_text_object_and_class_widgets():
