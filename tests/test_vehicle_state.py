@@ -22,11 +22,29 @@ def test_parse_vehicle_text_rejects_spacing_not_starting_with_zero():
     assert any("start with 0.0" in e for e in errors)
 
 
-def test_parse_vehicle_text_rejects_decreasing_spacing():
-    vehicle, errors = data.parse_vehicle_text("10, 20, 30", "0, 2, 1")
+def test_parse_vehicle_text_rejects_negative_incremental_spacing():
+    vehicle, errors = data.parse_vehicle_text("10, 20", "0, -1.5")
 
     assert vehicle == {"loads": [], "spacing": []}
-    assert any("nondecreasing" in e for e in errors)
+    assert any("finite and non-negative" in e for e in errors)
+
+
+def test_parse_vehicle_text_rejects_non_numeric_spacing():
+    vehicle, errors = data.parse_vehicle_text("10, 20", "0, bad")
+
+    assert vehicle == {"loads": [], "spacing": []}
+    assert any("non-numeric" in e for e in errors)
+
+
+def test_parse_vehicle_text_accepts_incremental_spacing_that_is_not_nondecreasing():
+    vehicle, errors = data.parse_vehicle_text(
+        "7.0, 7.0, 9.5, 9.5, 17.8, 17.8",
+        "0, 1.4, 3.2, 1.4, 6.0, 1.4",
+    )
+
+    assert errors == []
+    assert vehicle["loads"] == [7.0, 7.0, 9.5, 9.5, 17.8, 17.8]
+    assert vehicle["spacing"] == [0.0, 1.4, 3.2, 1.4, 6.0, 1.4]
 
 
 def test_parse_empty_vehicle_text_returns_inactive_vehicle_without_error():

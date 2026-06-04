@@ -291,8 +291,6 @@ def parse_vehicle_text(load_text: str, spacing_text: str):
         errors.append("Vehicle axle loads must be finite and non-negative.")
     if any(not np.isfinite(v) or v < 0.0 for v in spacing):
         errors.append("Vehicle spacing values must be finite and non-negative.")
-    if any(spacing[i] < spacing[i - 1] for i in range(1, len(spacing))):
-        errors.append("Vehicle spacing values must be nondecreasing.")
     if not loads and load_text.strip():
         errors.append("Vehicle definition is empty.")
 
@@ -324,8 +322,6 @@ def _validate_vehicle(vehicle, label, system_label):
         errors.append(f"{system_label}: {label} axle loads must be finite and non-negative.")
     if any(not _is_finite_number(v) or float(v) < 0.0 for v in spacing):
         errors.append(f"{system_label}: {label} spacing values must be finite and non-negative.")
-    if any(float(spacing[i]) < float(spacing[i - 1]) for i in range(1, len(spacing))):
-        errors.append(f"{system_label}: {label} spacing values must be nondecreasing.")
     return errors
 
 
