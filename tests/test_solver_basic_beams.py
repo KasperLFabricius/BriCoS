@@ -83,6 +83,26 @@ def test_simply_supported_beam_moving_point_load_regression():
     assert critical_step["x"] == pytest_approx(length / 2.0, abs=0.25)
 
 
+def test_loaded_tapered_member_solver_path_stays_finite():
+    params = _beam_params(load_q=10.0, mesh_size=0.5)
+    params["span_geom_0"] = {
+        "type": 1,
+        "shape": 1,
+        "vals": [1.0, 0.6, 0.6],
+    }
+
+    raw, nodes, _ = _run(params)
+
+    assert nodes is not None
+    assert "S1" in raw["Selfweight"]
+    span = raw["Selfweight"]["S1"]
+
+    for key in ["M", "V", "N", "def_x", "def_y"]:
+        assert np.all(np.isfinite(span[key]))
+
+    assert np.max(np.abs(span["def_y"])) < 1.0
+
+
 def test_partial_distributed_load_split_uses_local_start_and_end_coordinates():
     sub = solver.split_distributed_trapezoid_for_sub_element(
         [10.0, 20.0, 2.0, 5.0],
