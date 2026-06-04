@@ -293,8 +293,10 @@ def jit_numerical_fef(load_type, params, L, E, G, shape_mode, val_mode, geom_val
         
         fac = (weight * d_step / 3.0) / EI
         
+        # Unit end-moment diagrams with compatible frame-element signs.
+        # Keep this convention aligned with jit_non_prismatic_matrices.
         m1 = 1.0 - x/L
-        m2 = x/L
+        m2 = -x/L
         
         # Flexibility Accumulation (Same as stiffness kernel)
         f11 += m1 * m1 * fac
@@ -321,16 +323,17 @@ def jit_numerical_fef(load_type, params, L, E, G, shape_mode, val_mode, geom_val
             # Factor: (weight * d_step / 3.0) / (G * As_avg)
             fac_s = (weight * d_step / 3.0) / (G * As_avg)
             theta_i += V0 * (-1.0/L) * fac_s
-            theta_j += V0 * (1.0/L) * fac_s
+            theta_j += V0 * (-1.0/L) * fac_s
 
     # Add Shear Flexibility to Matrix
     f11 += shear_flex_term
     f22 += shear_flex_term
-    f12 -= shear_flex_term
+    f12 += shear_flex_term
     
-    # Solve System F * M = -Theta
-    # | f11 f12 | | Mi | = | -theta_i |
-    # | f12 f22 | | Mj |   | -theta_j |
+    # Solve System F * M = Theta using the generalized end-moment
+    # convention m1 = 1 - x/L and m2 = -x/L.
+    # | f11 f12 | | Mi | = | theta_i |
+    # | f12 f22 | | Mj |   | theta_j |
     
     det = f11 * f22 - f12 * f12
     if abs(det) < 1e-12: det = 1e-12
@@ -341,8 +344,8 @@ def jit_numerical_fef(load_type, params, L, E, G, shape_mode, val_mode, geom_val
     k12 = -f12 / det
     
     # FEF Moments
-    Mi = -(k11 * theta_i + k12 * theta_j)
-    Mj = -(k12 * theta_i + k22 * theta_j)
+    Mi = k11 * theta_i + k12 * theta_j
+    Mj = k12 * theta_i + k22 * theta_j
     
     # FEF Shears (Equilibrium)
     # Total Reaction = Simple Reaction + (Mi + Mj)/L
