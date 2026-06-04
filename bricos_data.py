@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.41"
+APP_VERSION = "0.42"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -175,6 +175,228 @@ def sanitize_input_data(data):
     while len(data['E_wall_list']) < 11: data['E_wall_list'].append(30e6)
     
     return data
+
+# ==========================================
+# VALIDATION HELPERS
+# ==========================================
+
+MIN_ENGINEERING_HEIGHT_M = 0.05
+MIN_ENGINEERING_INERTIA_M4 = 1e-8
+MIN_EFFECTIVE_WIDTH_M = 0.01
+ACTIVE_WALL_TOLERANCE_M = 1e-4
+
+
+def _is_finite_number(value):
+    try:
+        return np.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _as_float(value, default=None):
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not np.isfinite(val):
+        return default
+    return val
+
+
+def _list_value(values, index, default=None):
+    if not isinstance(values, (list, tuple)) or index >= len(values):
+        return default
+    return values[index]
+
+
+def _active_geom_indices(shape):
+    try:
+        shape = int(shape)
+    except (TypeError, ValueError):
+        return [0]
+    if shape == 1:
+        return [0, 2]
+    if shape == 2:
+        return [0, 1, 2]
+    return [0]
+
+
+def _validate_section_geometry(params, geom_key, fallback_key, index, label, system_label):
+    errors = []
+    fallback_val = _list_value(params.get(fallback_key, []), index, 0.0)
+    geom = params.get(geom_key) or {'type': 1, 'shape': 0, 'vals': [fallback_val, fallback_val, fallback_val]}
+    vals = geom.get('vals', [])
+    if not isinstance(vals, (list, tuple)):
+        vals = []
+
+    val_mode = int(geom.get('type', 1) or 1)
+    shape = geom.get('shape', 0)
+    active_indices = _active_geom_indices(shape)
+    quantity = "inertia" if val_mode == 0 else "height"
+    symbol = "I" if val_mode == 0 else "h"
+    minimum = MIN_ENGINEERING_INERTIA_M4 if val_mode == 0 else MIN_ENGINEERING_HEIGHT_M
+    units = "m^4" if val_mode == 0 else "m"
+
+    for val_idx in active_indices:
+        value = _as_float(_list_value(vals, val_idx, None), None)
+        if value is None or value < minimum:
+            if val_mode == 0:
+                value_text = "non-numeric" if value is None else f"{value:.3e}"
+                min_text = f"{minimum:.1e}"
+            else:
+                value_text = "non-numeric" if value is None else f"{value:.3f}"
+                min_text = f"{minimum:.2f}"
+            errors.append(
+                f"{system_label}: {label} has invalid section {quantity} {symbol} = {value_text} {units}. "
+                f"Minimum allowed {quantity} is {min_text} {units}."
+            )
+    return errors
+
+
+def parse_vehicle_text(load_text: str, spacing_text: str):
+    """Parse vehicle text inputs without mutating UI state."""
+    load_text = "" if load_text is None else str(load_text)
+    spacing_text = "" if spacing_text is None else str(spacing_text)
+
+    if not load_text.strip() and not spacing_text.strip():
+        return {'loads': [], 'spacing': []}, []
+
+    errors = []
+    try:
+        loads = [float(x) for x in load_text.split(',') if x.strip()]
+    except ValueError:
+        loads = []
+        errors.append("Load input contains non-numeric values.")
+
+    try:
+        spacing = [float(x) for x in spacing_text.split(',') if x.strip()]
+    except ValueError:
+        spacing = []
+        errors.append("Spacing input contains non-numeric values.")
+
+    if errors:
+        return {'loads': [], 'spacing': []}, errors
+
+    if len(loads) != len(spacing):
+        errors.append(f"Vehicle has {len(loads)} axle loads but {len(spacing)} spacing values.")
+    if loads and spacing and spacing[0] != 0.0:
+        errors.append("Vehicle spacing must start with 0.0 m.")
+    if any(not np.isfinite(v) or v < 0.0 for v in loads):
+        errors.append("Vehicle axle loads must be finite and non-negative.")
+    if any(not np.isfinite(v) or v < 0.0 for v in spacing):
+        errors.append("Vehicle spacing values must be finite and non-negative.")
+    if any(spacing[i] < spacing[i - 1] for i in range(1, len(spacing))):
+        errors.append("Vehicle spacing values must be nondecreasing.")
+    if not loads and load_text.strip():
+        errors.append("Vehicle definition is empty.")
+
+    if errors:
+        return {'loads': [], 'spacing': []}, errors
+    return {'loads': loads, 'spacing': spacing}, []
+
+
+def clear_vehicle_definition(params: dict, vehicle_key: str, load_text_key: str, spacing_text_key: str) -> None:
+    """Clear one vehicle definition explicitly while preserving other state."""
+    params[load_text_key] = ""
+    params[spacing_text_key] = ""
+    params[vehicle_key] = {'loads': [], 'spacing': []}
+
+
+def _validate_vehicle(vehicle, label, system_label):
+    loads = vehicle.get('loads', []) if isinstance(vehicle, dict) else []
+    spacing = vehicle.get('spacing', []) if isinstance(vehicle, dict) else []
+    if not loads:
+        return []
+
+    errors = []
+    if len(loads) != len(spacing):
+        errors.append(f"{system_label}: {label} has {len(loads)} axle loads but {len(spacing)} spacing values.")
+        return errors
+    if spacing[0] != 0.0:
+        errors.append(f"{system_label}: {label} spacing must start with 0.0 m.")
+    if any(not _is_finite_number(v) or float(v) < 0.0 for v in loads):
+        errors.append(f"{system_label}: {label} axle loads must be finite and non-negative.")
+    if any(not _is_finite_number(v) or float(v) < 0.0 for v in spacing):
+        errors.append(f"{system_label}: {label} spacing values must be finite and non-negative.")
+    if any(float(spacing[i]) < float(spacing[i - 1]) for i in range(1, len(spacing))):
+        errors.append(f"{system_label}: {label} spacing values must be nondecreasing.")
+    return errors
+
+
+def validate_analysis_inputs(params: dict, system_label: str = "System") -> list[str]:
+    """Return actionable engineering validation errors before analysis/reporting."""
+    errors = []
+    params = params or {}
+
+    mode = params.get('mode', 'Frame')
+    if mode not in ("Frame", "Beam", "Superstructure"):
+        errors.append(f"{system_label}: Mode must be Frame, Beam, or Superstructure.")
+
+    num_spans = params.get('num_spans', 1)
+    if not isinstance(num_spans, int) or isinstance(num_spans, bool):
+        errors.append(f"{system_label}: Number of spans must be an integer between 1 and 10.")
+        num_spans_int = 0
+    else:
+        num_spans_int = num_spans
+        if num_spans_int < 1 or num_spans_int > 10:
+            errors.append(f"{system_label}: Number of spans must be between 1 and 10.")
+
+    b_eff = _as_float(params.get('b_eff', None), None)
+    if b_eff is None or b_eff < MIN_EFFECTIVE_WIDTH_M:
+        errors.append(f"{system_label}: Effective width b_eff must be positive and at least {MIN_EFFECTIVE_WIDTH_M:.2f} m.")
+
+    mesh_size = _as_float(params.get('mesh_size', None), None)
+    if mesh_size is None or mesh_size <= 0.0:
+        errors.append(f"{system_label}: Mesh size must be positive.")
+
+    has_vehicle = bool(params.get('vehicle', {}).get('loads')) or bool(params.get('vehicleB', {}).get('loads'))
+    step_size = _as_float(params.get('step_size', None), None)
+    if has_vehicle and (step_size is None or step_size <= 0.0):
+        errors.append(f"{system_label}: Vehicle step size must be positive when vehicle loads exist.")
+
+    e_default = _as_float(params.get('E', None), None)
+    active_spans = max(0, min(num_spans_int, 10))
+    for i in range(active_spans):
+        L = _as_float(_list_value(params.get('L_list', []), i, None), None)
+        if L is None or L <= 0.0:
+            errors.append(f"{system_label}: Span S{i+1} length must be positive.")
+
+        e_span = _as_float(_list_value(params.get('E_span_list', []), i, e_default), e_default)
+        if e_span is None or e_span <= 0.0:
+            errors.append(f"{system_label}: Span S{i+1} E modulus must be positive.")
+
+        errors.extend(_validate_section_geometry(params, f"span_geom_{i}", 'Is_list', i, f"Span S{i+1}", system_label))
+
+    supports = params.get('supports', [])
+    if supports and len(supports) != num_spans_int + 1:
+        errors.append(f"{system_label}: Supports list must contain {num_spans_int + 1} support definitions.")
+    for i, support in enumerate(supports[:num_spans_int + 1]):
+        k_vec = support.get('k') if isinstance(support, dict) else support
+        if not isinstance(k_vec, (list, tuple)) or len(k_vec) != 3:
+            errors.append(f"{system_label}: Support {i+1} stiffness vector must contain exactly 3 numeric values.")
+            continue
+        if any(not _is_finite_number(v) for v in k_vec):
+            errors.append(f"{system_label}: Support {i+1} stiffness values must be finite.")
+        elif any(float(v) < 0.0 for v in k_vec):
+            errors.append(f"{system_label}: Support {i+1} stiffness values must not be negative.")
+
+    if mode == "Frame":
+        for i in range(active_spans + 1):
+            h = _as_float(_list_value(params.get('h_list', []), i, 0.0), 0.0)
+            if h > ACTIVE_WALL_TOLERANCE_M:
+                if h < MIN_ENGINEERING_HEIGHT_M:
+                    errors.append(
+                        f"{system_label}: Wall W{i+1} member height h = {h:.3f} m is invalid. "
+                        f"Minimum wall member height is {MIN_ENGINEERING_HEIGHT_M:.2f} m."
+                    )
+                e_wall = _as_float(_list_value(params.get('E_wall_list', []), i, e_default), e_default)
+                if e_wall is None or e_wall <= 0.0:
+                    errors.append(f"{system_label}: Wall W{i+1} E modulus must be positive.")
+                errors.extend(_validate_section_geometry(params, f"wall_geom_{i}", 'Iw_list', i, f"Wall W{i+1}", system_label))
+
+    errors.extend(_validate_vehicle(params.get('vehicle', {}), "Vehicle A", system_label))
+    errors.extend(_validate_vehicle(params.get('vehicleB', {}), "Vehicle B", system_label))
+    return errors
 
 # ==========================================
 # DEFAULT STATES & TEMPLATES

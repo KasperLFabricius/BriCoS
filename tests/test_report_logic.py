@@ -4,7 +4,7 @@ import bricos_data as data
 from bricos_report import BricosReportGenerator
 
 
-def _params(vehicle=None, vehicle_b=None, direction="Forward", combine_surcharge_vehicle=False):
+def _params(vehicle=None, vehicle_b=None, direction="Forward", combine_surcharge_vehicle=False, surcharge=None):
     params = data.get_clear("A", "Beam")
     params.update({
         "name": "System",
@@ -12,6 +12,7 @@ def _params(vehicle=None, vehicle_b=None, direction="Forward", combine_surcharge
         "vehicleB": vehicle_b if vehicle_b is not None else {"loads": [], "spacing": []},
         "vehicle_direction": direction,
         "combine_surcharge_vehicle": combine_surcharge_vehicle,
+        "surcharge": [] if surcharge is None else surcharge,
     })
     return params
 
@@ -46,35 +47,58 @@ def test_surcharge_interaction_wording_uses_actual_combination_flag():
     )
 
 
-def test_characteristic_formula_includes_phi_and_does_not_label_no_phi_as_sls():
+def test_characteristic_formula_reports_permanent_only_without_vehicle_or_surcharge():
     formula = BricosReportGenerator._characteristic_formula_text(_params())
 
-    assert "Phi" in formula
-    assert "No Phi" not in formula
+    assert formula == "1.0 · Permanent"
+    assert "Other variable actions" not in formula
+
+
+def test_characteristic_formula_reports_surcharge_only_without_vehicle():
+    formula = BricosReportGenerator._characteristic_formula_text(
+        _params(surcharge=[{"q": 10.0}])
+    )
+
+    assert formula == "1.0 · Permanent + 1.0 · Surcharge"
+    assert "Vehicle traffic" not in formula
+    assert "Other variable actions" not in formula
+
+
+def test_characteristic_formula_reports_vehicle_only_without_surcharge():
+    formula = BricosReportGenerator._characteristic_formula_text(
+        _params(vehicle={"loads": [10.0], "spacing": [0.0]})
+    )
+
+    assert formula == "1.0 · Permanent + 1.0 · Phi · Vehicle traffic"
+    assert "Surcharge" not in formula
+    assert "Other variable actions" not in formula
 
 
 def test_characteristic_formula_exclusive_mode_reports_vehicle_surcharge_envelope():
     formula = BricosReportGenerator._characteristic_formula_text(
-        _params(combine_surcharge_vehicle=False)
+        _params(
+            vehicle={"loads": [10.0], "spacing": [0.0]},
+            surcharge=[{"q": 10.0}],
+            combine_surcharge_vehicle=False,
+        )
     )
 
-    assert "Phi" in formula
-    assert "Vehicle traffic" in formula
-    assert "Envelope" in formula
-    assert "Vehicle traffic + 1.0 · Surcharge" not in formula
-    assert "No Phi" not in formula
+    assert formula == "1.0 · Permanent + Envelope(1.0 · Phi · Vehicle traffic, 1.0 · Surcharge)"
+    assert "Other variable actions" not in formula
 
 
 def test_characteristic_formula_simultaneous_mode_reports_vehicle_plus_surcharge():
     formula = BricosReportGenerator._characteristic_formula_text(
-        _params(combine_surcharge_vehicle=True)
+        _params(
+            vehicle={"loads": [10.0], "spacing": [0.0]},
+            surcharge=[{"q": 10.0}],
+            combine_surcharge_vehicle=True,
+        )
     )
 
-    assert "Phi" in formula
-    assert "Vehicle" in formula
-    assert "1.0 · Phi · Vehicle traffic + 1.0 · Surcharge" in formula
+    assert formula == "1.0 · Permanent + 1.0 · Phi · Vehicle traffic + 1.0 · Surcharge"
     assert "Envelope" not in formula
-    assert "No Phi" not in formula
+    assert "Other variable actions" not in formula
 
 
 def test_has_any_vehicle_false_when_all_vehicle_lists_are_empty():

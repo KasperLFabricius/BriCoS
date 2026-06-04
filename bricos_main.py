@@ -772,61 +772,42 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         if sel_class != st.session_state[last_key]:
             st.session_state[last_key] = sel_class
             if sel_class == "Custom":
-                p[key_loads] = ""; p[key_space] = ""; p[struct_key]['loads'] = []; p[struct_key]['spacing'] = []
-                st.session_state[input_key_l] = ""; st.session_state[input_key_s] = ""
+                # Preserve existing text/object state. Clearing is now an explicit action.
                 st.rerun()
             elif sel_class in veh_data:
                 p[key_loads] = veh_data[sel_class]['loads']; p[key_space] = veh_data[sel_class]['spacing']
-                st.session_state[input_key_l] = p[key_loads]; st.session_state[input_key_s] = p[key_space] 
+                st.session_state[input_key_l] = p[key_loads]; st.session_state[input_key_s] = p[key_space]
+                parsed_vehicle, parse_errors = data_mod.parse_vehicle_text(p[key_loads], p[key_space])
+                if not parse_errors:
+                    p[struct_key] = parsed_vehicle
                 st.rerun()
-        
+
         # --- TOOLTIP CONFIGURATION ---
         help_loads = "Define axle loads in tonnes [t], separated by commas. Example: '10, 10, 15'"
         help_space = "Define spacing between axles in meters [m]. Must start with 0. The list length must equal the number of loads. Example: '0, 1.5, 3.0'"
         
         p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, disabled=ui_locked, help=help_loads)
         p[key_space] = st.text_input(f"Space {prefix} [m]", key=input_key_s, disabled=ui_locked, help=help_space)
-        
-        valid_veh = False
-        err_msg = ""
-        
-        try:
-            if p[key_loads].strip():
-                try:
-                    l_arr = [float(x) for x in p[key_loads].split(',') if x.strip()]
-                except ValueError:
-                    l_arr = []
-                    err_msg = "Load input contains non-numeric values."
 
-                try:
-                    s_arr = [float(x) for x in p[key_space].split(',') if x.strip()]
-                except ValueError:
-                    s_arr = []
-                    err_msg = "Spacing input contains non-numeric values."
-                
-                if not err_msg:
-                    if len(l_arr) != len(s_arr):
-                        err_msg = f"Mismatch: {len(l_arr)} loads vs {len(s_arr)} spacings."
-                    elif len(s_arr) > 0 and s_arr[0] != 0:
-                        err_msg = "Spacing must start with 0."
-                    elif len(l_arr) == 0:
-                        err_msg = "Vehicle definition empty."
-                    else:
-                        valid_veh = True
-                        p[struct_key]['loads'] = l_arr; p[struct_key]['spacing'] = s_arr
-            else:
-                p[struct_key]['loads'] = []; p[struct_key]['spacing'] = []
-        except Exception as e:
-            err_msg = f"Parsing Error: {str(e)}"
-        
-        if not valid_veh:
-            if p[key_loads].strip(): 
-                st.error(f"Invalid Vehicle {prefix}: {err_msg}")
-                p[struct_key]['loads'] = [] # Ensure invalid data doesn't propagate to solver
-            else: 
-                st.caption("No vehicle defined.")
-        else: 
+        if st.button(f"Clear Vehicle {prefix}", key=f"{curr}_{prefix}_clear_vehicle", disabled=ui_locked):
+            data_mod.clear_vehicle_definition(p, struct_key, key_loads, key_space)
+            st.session_state[input_key_l] = ""
+            st.session_state[input_key_s] = ""
+            st.session_state[sess_key] = "Custom"
+            st.session_state[last_key] = "Custom"
+            st.rerun()
+
+        parsed_vehicle, parse_errors = data_mod.parse_vehicle_text(p[key_loads], p[key_space])
+
+        if parse_errors:
+            st.error(f"Invalid Vehicle {prefix}: {' '.join(parse_errors)}")
+            p[struct_key] = {'loads': [], 'spacing': []}  # Ensure invalid data doesn't propagate to solver.
+        elif parsed_vehicle['loads']:
+            p[struct_key] = parsed_vehicle
             st.success(f"Vehicle {prefix} Valid")
+        else:
+            p[struct_key] = {'loads': [], 'spacing': []}
+            st.caption("No vehicle defined.")
 
     st.markdown("**Vehicle A**")
     handle_veh_inputs("A", f"{curr}_vehA_class", 'vehicle_loads', 'vehicle_space', 'vehicle')
@@ -838,15 +819,18 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
 # SOLVER EXECUTION
 # ==========================================
 
-def safe_solve(params):
+def safe_solve(params, system_label):
+    validation_errors = data_mod.validate_analysis_inputs(params, system_label)
+    if validation_errors:
+        return None, None, None, "\n".join(validation_errors)
     try:
         # Returns: results, nodes, model_props, error_flag
         return solver.run_raw_analysis(params)
     except ValueError as e:
         return None, None, None, str(e)
 
-raw_res_A, nodes_A, props_A, err_A = safe_solve(st.session_state['sysA'])
-raw_res_B, nodes_B, props_B, err_B = safe_solve(st.session_state['sysB'])
+raw_res_A, nodes_A, props_A, err_A = safe_solve(st.session_state['sysA'], "System A")
+raw_res_B, nodes_B, props_B, err_B = safe_solve(st.session_state['sysB'], "System B")
 
 # Persist Model Props for Report Generator
 st.session_state['model_props_A'] = props_A
@@ -869,6 +853,11 @@ if p.get('phi_mode') == 'Calculate' and raw_res_A and raw_res_B:
 # ==========================================
 
 if st.session_state.is_generating_report:
+    if err_A or err_B:
+        st.error("Report generation blocked: correct the model validation/analysis errors before generating a report.")
+        st.session_state.is_generating_report = False
+        st.rerun()
+
     buffer = io.BytesIO()
     meta = {
         'proj_no': st.session_state.rep_pno,
