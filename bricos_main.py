@@ -785,7 +785,7 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         # --- TOOLTIP CONFIGURATION ---
         help_loads = "Define axle loads in tonnes [t], separated by commas. Example: '10, 10, 15'"
         help_space = "Define incremental axle spacing in meters [m]. The first value must be 0. Subsequent values are distances from the previous axle, not cumulative axle positions. The list length must equal the number of loads. Example: '0, 1.5, 3.0'"
-        
+
         p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, disabled=ui_locked, help=help_loads)
         p[key_space] = st.text_input(f"Axle spacing {prefix} [m]", key=input_key_s, disabled=ui_locked, help=help_space)
 

@@ -244,11 +244,13 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
         d_glob = np.concatenate([D_total[idx_i:idx_i+3], D_total[idx_j:idx_j+3]])
         d_loc = el.T @ d_glob
         
-        f_start = el.k_local @ d_loc
+        f_elem_local = el.k_local @ d_loc
         active_loads = loads_map.get(i, [])
         
         for load in active_loads:
-            f_start += get_local_fixed_end_forces_for_load(el, load)
+            f_elem_local += get_local_fixed_end_forces_for_load(el, load)
+
+        f_start_for_internal = f_elem_local[:3]
 
         load_records = []
         for load in active_loads:
@@ -279,7 +281,7 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
 
         num_pts = max(3, int(el.L / mesh_size) + 1)
         x_vals, M_vals, V_vals, N_vals = kernels.jit_internal_forces(
-            el.L, f_start[:3], num_pts, load_arr
+            el.L, f_start_for_internal, num_pts, load_arr
         )
         ux, uy = kernels.jit_disp_shape(d_loc, el.L, num_pts)
         def_x = el.cx * ux - el.cy * uy
@@ -291,8 +293,8 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
             'def_x': def_x, 'def_y': def_y,
             'L': el.L, 'ni': nodes[ni], 'nj': nodes[nj], 'cx': el.cx, 'cy': el.cy,
             'loads': active_loads,
-            'f_start_local': np.array([N_vals[0], V_vals[0], M_vals[0]]),
-            'f_end_local': np.array([-N_vals[-1], -V_vals[-1], -M_vals[-1]]),
+            'f_start_local': f_elem_local[:3].copy(),
+            'f_end_local': f_elem_local[3:6].copy(),
             'ni_id': ni, 'nj_id': nj,
             'parent': el_data.get('parent'),
             'local_offset': el_data.get('local_offset', 0.0)
