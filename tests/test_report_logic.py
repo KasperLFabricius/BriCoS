@@ -47,7 +47,12 @@ def test_surcharge_interaction_wording_uses_actual_combination_flag():
 
 
 def test_characteristic_formula_includes_phi_and_does_not_label_no_phi_as_sls():
-    formula = BricosReportGenerator._characteristic_formula_text()
+    formula = BricosReportGenerator._characteristic_formula_text(_params())
+
+    assert "Phi" in formula
+    assert "No Phi" not in formula
+
+
 def test_characteristic_formula_exclusive_mode_reports_vehicle_surcharge_envelope():
     formula = BricosReportGenerator._characteristic_formula_text(
         _params(combine_surcharge_vehicle=False)
