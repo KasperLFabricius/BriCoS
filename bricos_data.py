@@ -229,7 +229,13 @@ def _validate_section_geometry(params, geom_key, fallback_key, index, label, sys
     if not isinstance(vals, (list, tuple)):
         vals = []
 
-    val_mode = int(geom.get('type', 1) or 1)
+    try:
+        val_mode = int(geom.get('type', 1))
+    except (TypeError, ValueError):
+        val_mode = 1
+
+    if val_mode not in (0, 1):
+        val_mode = 1
     shape = geom.get('shape', 0)
     active_indices = _active_geom_indices(shape)
     quantity = "inertia" if val_mode == 0 else "height"

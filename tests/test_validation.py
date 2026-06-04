@@ -100,3 +100,42 @@ def test_linear_taper_validates_start_and_end_not_mid():
     errors = data.validate_analysis_inputs(params, "System A")
 
     assert not any("Span S1" in e and "height" in e for e in errors)
+
+
+def _geometry_errors(errors):
+    return [e for e in errors if "section" in e]
+
+
+def test_inertia_based_span_below_minimum_inertia_is_blocked_as_inertia():
+    params = data.get_def()
+    params["mode"] = "Beam"
+    params["num_spans"] = 1
+    params["span_geom_0"] = {"type": 0, "shape": 0, "vals": [9.0e-9, 9.0e-9, 9.0e-9]}
+
+    errors = data.validate_analysis_inputs(params, "System A")
+
+    assert any("Span S1" in e and "inertia" in e for e in errors)
+    assert not any("Span S1" in e and "height" in e for e in errors)
+
+
+def test_inertia_based_span_above_minimum_inertia_has_no_section_geometry_error():
+    params = data.get_def()
+    params["mode"] = "Beam"
+    params["num_spans"] = 1
+    params["span_geom_0"] = {"type": 0, "shape": 0, "vals": [1.1e-8, 1.1e-8, 1.1e-8]}
+
+    errors = data.validate_analysis_inputs(params, "System A")
+
+    assert not _geometry_errors(errors)
+
+
+def test_height_based_span_below_minimum_height_is_still_blocked_as_height():
+    params = data.get_def()
+    params["mode"] = "Beam"
+    params["num_spans"] = 1
+    params["span_geom_0"] = {"type": 1, "shape": 0, "vals": [0.049, 0.049, 0.049]}
+
+    errors = data.validate_analysis_inputs(params, "System A")
+
+    assert any("Span S1" in e and "height" in e for e in errors)
+    assert not any("Span S1" in e and "inertia" in e for e in errors)
