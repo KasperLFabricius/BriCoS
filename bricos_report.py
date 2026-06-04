@@ -372,8 +372,7 @@ class BricosReportGenerator:
             "<i>&Phi;<sub>s</sub></i> = 12<i>EI</i> / (<i>GA<sub>s</sub>L</i><sup>2</sup>)). "
             "Non-prismatic members are handled using displacement-based Euler-Bernoulli "
             "integration of <i>EI(x)</i>; full non-prismatic Timoshenko shear deformation is "
-            "not included in the current implementation. This is intentional in v0.44.1 to "
-            "restore physically consistent monotonic <i>EI</i> behaviour. "
+            "not included in the current implementation. "
             "Material behavior is assumed Linear Elastic.")
 
         # Condensed 1.3

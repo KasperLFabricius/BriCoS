@@ -299,11 +299,133 @@ def parse_vehicle_text(load_text: str, spacing_text: str):
     return {'loads': loads, 'spacing': spacing}, []
 
 
+
+def format_vehicle_text(vehicle: dict) -> tuple[str, str]:
+    """Return comma-separated load and incremental-spacing text for a vehicle object."""
+    if not isinstance(vehicle, dict):
+        return "", ""
+
+    def _fmt(values):
+        out = []
+        for value in values or []:
+            try:
+                out.append(f"{float(value):g}")
+            except (TypeError, ValueError):
+                out.append(str(value))
+        return ", ".join(out)
+
+    return _fmt(vehicle.get('loads', [])), _fmt(vehicle.get('spacing', []))
+
+
+def _set_vehicle_text_error(params: dict, vehicle_key: str, errors: list[str]) -> None:
+    error_map = params.setdefault('_vehicle_text_errors', {})
+    if errors:
+        error_map[vehicle_key] = list(errors)
+    else:
+        error_map.pop(vehicle_key, None)
+    if not error_map:
+        params.pop('_vehicle_text_errors', None)
+
+
+def normalize_vehicle_fields(params: dict, vehicle_key: str, loads_key: str, spacing_key: str) -> list[str]:
+    """Normalize vehicle object/text fields with the calculation dict as source of truth.
+
+    A valid existing vehicle object is never discarded just because text fields are
+    missing or blank; blank text only means inactive when the vehicle object is
+    already empty. Invalid text is preserved and recorded for validation.
+    """
+    params = params if params is not None else {}
+    vehicle = params.get(vehicle_key) if isinstance(params.get(vehicle_key), dict) else {'loads': [], 'spacing': []}
+    loads_text = "" if params.get(loads_key) is None else str(params.get(loads_key, ""))
+    spacing_text = "" if params.get(spacing_key) is None else str(params.get(spacing_key, ""))
+    has_text = bool(loads_text.strip()) or bool(spacing_text.strip())
+    has_vehicle = bool(vehicle.get('loads')) or bool(vehicle.get('spacing'))
+
+    if has_text:
+        parsed_vehicle, errors = parse_vehicle_text(loads_text, spacing_text)
+        params[loads_key] = loads_text
+        params[spacing_key] = spacing_text
+        if errors:
+            # Preserve both the visible invalid text and the last valid vehicle object.
+            params[vehicle_key] = vehicle
+            _set_vehicle_text_error(params, vehicle_key, errors)
+            return errors
+        params[vehicle_key] = parsed_vehicle
+        _set_vehicle_text_error(params, vehicle_key, [])
+        return []
+
+    if has_vehicle:
+        # Treat missing/blank text as stale projection and regenerate from the object.
+        params[loads_key], params[spacing_key] = format_vehicle_text(vehicle)
+        params[vehicle_key] = vehicle
+        _set_vehicle_text_error(params, vehicle_key, [])
+        return []
+
+    params[loads_key] = ""
+    params[spacing_key] = ""
+    params[vehicle_key] = {'loads': [], 'spacing': []}
+    _set_vehicle_text_error(params, vehicle_key, [])
+    return []
+
+
+def vehicle_state_signature(params: dict, vehicle_key: str, loads_key: str, spacing_key: str) -> str:
+    """Return a stable signature for detecting calculation-state vehicle changes."""
+    payload = {
+        'vehicle': params.get(vehicle_key, {}) if params else {},
+        'loads_text': params.get(loads_key, "") if params else "",
+        'spacing_text': params.get(spacing_key, "") if params else "",
+        'errors': (params.get('_vehicle_text_errors', {}) if params else {}).get(vehicle_key, []),
+    }
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+def sync_vehicle_widgets_from_params(sys_key: str, params: dict) -> None:
+    """Project normalized vehicle state into Streamlit widget keys for one system."""
+    normalize_vehicle_fields(params, 'vehicle', 'vehicle_loads', 'vehicle_space')
+    normalize_vehicle_fields(params, 'vehicleB', 'vehicleB_loads', 'vehicleB_space')
+
+    st.session_state[f"{sys_key}_A_loads_input"] = params.get('vehicle_loads', "")
+    st.session_state[f"{sys_key}_A_space_input"] = params.get('vehicle_space', "")
+    st.session_state[f"{sys_key}_B_loads_input"] = params.get('vehicleB_loads', "")
+    st.session_state[f"{sys_key}_B_space_input"] = params.get('vehicleB_space', "")
+
+    veh_a = params.get('vehicle', {}) if isinstance(params.get('vehicle'), dict) else {}
+    veh_b = params.get('vehicleB', {}) if isinstance(params.get('vehicleB'), dict) else {}
+    cls_a = identify_vehicle_class(veh_a.get('loads', []), veh_a.get('spacing', []))
+    cls_b = identify_vehicle_class(veh_b.get('loads', []), veh_b.get('spacing', []))
+    st.session_state[f"{sys_key}_vehA_class"] = cls_a
+    st.session_state[f"{sys_key}_vehA_class_last"] = cls_a
+    st.session_state[f"{sys_key}_vehB_class"] = cls_b
+    st.session_state[f"{sys_key}_vehB_class_last"] = cls_b
+    st.session_state[f"{sys_key}_A_vehicle_sig"] = vehicle_state_signature(params, 'vehicle', 'vehicle_loads', 'vehicle_space')
+    st.session_state[f"{sys_key}_B_vehicle_sig"] = vehicle_state_signature(params, 'vehicleB', 'vehicleB_loads', 'vehicleB_space')
+
+
+def apply_standard_vehicle_definition(params: dict, vehicle_name: str, vehicle_key: str, loads_key: str, spacing_key: str) -> list[str]:
+    """Replace one vehicle with a named library definition."""
+    _, lib_data = get_vehicle_library()
+    if vehicle_name not in lib_data:
+        return [f"Vehicle class '{vehicle_name}' was not found in the library."]
+    params[loads_key] = lib_data[vehicle_name]['loads']
+    params[spacing_key] = lib_data[vehicle_name]['spacing']
+    return normalize_vehicle_fields(params, vehicle_key, loads_key, spacing_key)
+
+
+def copy_system_data(source_data: dict, target_name=None) -> dict:
+    """Deep-copy a system dict while preserving normalized vehicle state."""
+    copied = copy.deepcopy(source_data)
+    if target_name is not None:
+        copied['name'] = target_name
+    normalize_vehicle_fields(copied, 'vehicle', 'vehicle_loads', 'vehicle_space')
+    normalize_vehicle_fields(copied, 'vehicleB', 'vehicleB_loads', 'vehicleB_space')
+    return copied
+
 def clear_vehicle_definition(params: dict, vehicle_key: str, load_text_key: str, spacing_text_key: str) -> None:
     """Clear one vehicle definition explicitly while preserving other state."""
     params[load_text_key] = ""
     params[spacing_text_key] = ""
     params[vehicle_key] = {'loads': [], 'spacing': []}
+    _set_vehicle_text_error(params, vehicle_key, [])
 
 
 def _validate_vehicle(vehicle, label, system_label):
@@ -395,6 +517,14 @@ def validate_analysis_inputs(params: dict, system_label: str = "System") -> list
                 if e_wall is None or e_wall <= 0.0:
                     errors.append(f"{system_label}: Wall W{i+1} E modulus must be positive.")
                 errors.extend(_validate_section_geometry(params, f"wall_geom_{i}", 'Iw_list', i, f"Wall W{i+1}", system_label))
+
+    vehicle_error_map = params.get('_vehicle_text_errors', {})
+    if isinstance(vehicle_error_map, dict):
+        label_map = {'vehicle': 'Vehicle A', 'vehicleB': 'Vehicle B'}
+        for vehicle_key, text_errors in vehicle_error_map.items():
+            label = label_map.get(vehicle_key, vehicle_key)
+            for text_error in text_errors or []:
+                errors.append(f"{system_label}: {label} text input is invalid: {text_error}")
 
     errors.extend(_validate_vehicle(params.get('vehicle', {}), "Vehicle A", system_label))
     errors.extend(_validate_vehicle(params.get('vehicleB', {}), "Vehicle B", system_label))
@@ -523,7 +653,9 @@ def force_ui_update(sys_key, data):
     """
     Explicitly synchronizes the Streamlit session_state keys with the provided data dict.
     """
-    
+    normalize_vehicle_fields(data, 'vehicle', 'vehicle_loads', 'vehicle_space')
+    normalize_vehicle_fields(data, 'vehicleB', 'vehicleB_loads', 'vehicleB_space')
+
     # 1. Main Config Keys
     st.session_state[f"{sys_key}_md_sel"] = data.get('mode', 'Frame')
     st.session_state[f"{sys_key}_emode"] = "Eurocode (f_ck)" if data.get('e_mode') == "Eurocode" else "Manual (E-Modulus)"
@@ -619,23 +751,8 @@ def force_ui_update(sys_key, data):
         st.session_state[f"{sys_key}_sqrt{i}"] = qR_t
 
     # 6. Vehicles
-    st.session_state[f"{sys_key}_A_loads_input"] = data.get('vehicle_loads', "")
-    st.session_state[f"{sys_key}_A_space_input"] = data.get('vehicle_space', "")
-    st.session_state[f"{sys_key}_B_loads_input"] = data.get('vehicleB_loads', "")
-    st.session_state[f"{sys_key}_B_space_input"] = data.get('vehicleB_space', "")
-    
-    # Identify and set Class for Vehicle A
-    vehA = data.get('vehicle', {})
-    cls_A = identify_vehicle_class(vehA.get('loads', []), vehA.get('spacing', []))
-    st.session_state[f"{sys_key}_vehA_class"] = cls_A
-    st.session_state[f"{sys_key}_vehA_class_last"] = cls_A # Sync 'last' tracker to prevent change detection loop
+    sync_vehicle_widgets_from_params(sys_key, data)
 
-    # Identify and set Class for Vehicle B
-    vehB = data.get('vehicleB', {})
-    cls_B = identify_vehicle_class(vehB.get('loads', []), vehB.get('spacing', []))
-    st.session_state[f"{sys_key}_vehB_class"] = cls_B
-    st.session_state[f"{sys_key}_vehB_class_last"] = cls_B
-    
     # 7. Supports
     prefix = f"{sys_key}_"
     supp_keys = [k for k in st.session_state.keys() if k.startswith(prefix) and "_k" in k]
