@@ -460,6 +460,36 @@ def jit_fef_axial_point(Px, a, L):
     return f
 
 @jit(nopython=True, cache=True)
+def jit_vehicle_transverse_point_fef(P, a, L, E, G, eff_shape, v_type, eff_vals, b_eff, As_avg):
+    """Return local transverse point-load FEF for vehicle envelope kernels.
+
+    Prismatic members use the analytical point-load FEF for speed.
+    Non-prismatic members use the numerical FEF path to remain consistent
+    with the non-prismatic stiffness formulation.
+    """
+    if eff_shape == 0:
+        return jit_fef_point(P, a, L)
+
+    params = np.zeros(4)
+    params[0] = P
+    params[1] = a
+    params[2] = 0.0
+    params[3] = 0.0
+    return jit_numerical_fef(
+        1,
+        params,
+        L,
+        E,
+        G,
+        eff_shape,
+        v_type,
+        eff_vals,
+        b_eff,
+        As_avg,
+    )
+
+
+@jit(nopython=True, cache=True)
 def jit_fef_axial_trapezoid(qx_s, qx_e, h_s, h_e, L):
     f = np.zeros(6)
     if h_e > L: h_e = L
@@ -589,7 +619,12 @@ def jit_annotation_solver(data_arr):
 # ----------------------------------------
 
 @jit(nopython=True, cache=True)
-def jit_build_batch_F(NDOF, n_steps, x_steps, v_loads, v_dists, sp_start_x, sp_lens, sp_el_indices, el_L, el_T, el_dof_indices):
+def jit_build_batch_F(
+    NDOF, n_steps, x_steps, v_loads, v_dists,
+    sp_start_x, sp_lens, sp_el_indices,
+    el_L, el_T, el_dof_indices,
+    el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+):
     F_all = np.zeros((NDOF, n_steps))
     num_axles = len(v_loads)
     num_spans = len(sp_start_x)
@@ -610,15 +645,24 @@ def jit_build_batch_F(NDOF, n_steps, x_steps, v_loads, v_dists, sp_start_x, sp_l
                     elif local_x > sp_lens[k]:
                         local_x = sp_lens[k]
                     el_idx = sp_el_indices[k]
-                    # NOTE: Moving load stepping typically uses Point Load kernel.
-                    # For consistency in tapered elements, this should also ideally use the numerical kernel.
-                    # However, batch stepping performance is critical. 
-                    # For now, we retain analytical for speed, accepting minor inconsistency in moving loads
-                    # unless specified otherwise.
+                    # Prismatic members use the analytical point-load FEF for speed.
+                    # Non-prismatic members use the numerical FEF path to remain
+                    # consistent with the non-prismatic stiffness formulation.
                     T = el_T[el_idx]
                     cx = T[0, 0]
                     cy = T[0, 1]
-                    f_local = jit_fef_point(v_loads[j] * cx, local_x, el_L[el_idx])
+                    f_local = jit_vehicle_transverse_point_fef(
+                        v_loads[j] * cx,
+                        local_x,
+                        el_L[el_idx],
+                        el_E[el_idx],
+                        el_G[el_idx],
+                        el_eff_shape[el_idx],
+                        el_v_type[el_idx],
+                        el_eff_vals[el_idx],
+                        el_b_eff[el_idx],
+                        el_As_avg[el_idx],
+                    )
                     f_local += jit_fef_axial_point(v_loads[j] * cy, local_x, el_L[el_idx])
                     f_global_vec = T.T @ f_local
                     dofs = el_dof_indices[el_idx]
@@ -660,7 +704,8 @@ def jit_envelope_batch_parallel(
     n_steps, n_elems, n_pts, 
     x_steps, v_loads, v_dists, 
     sp_start_x, sp_lens, sp_el_indices, 
-    D_all, el_dof_indices, el_T, el_L, 
+    D_all, el_dof_indices, el_T, el_L,
+    el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
     S_matrices,
     res_accum,
     is_init
@@ -725,7 +770,18 @@ def jit_envelope_batch_parallel(
                             local_x = 0.0
                         elif local_x > L_el:
                             local_x = L_el
-                        fef_total += jit_fef_point(v_loads[ax] * cx, local_x, L_el)
+                        fef_total += jit_vehicle_transverse_point_fef(
+                            v_loads[ax] * cx,
+                            local_x,
+                            L_el,
+                            el_E[e],
+                            el_G[e],
+                            el_eff_shape[e],
+                            el_v_type[e],
+                            el_eff_vals[e],
+                            el_b_eff[e],
+                            el_As_avg[e],
+                        )
                         fef_total += jit_fef_axial_point(v_loads[ax] * cy, local_x, L_el)
             
             FEF_N, FEF_V, FEF_M = fef_total[0], fef_total[1], fef_total[2]
