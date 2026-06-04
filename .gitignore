@@ -170,6 +170,11 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Local test/compile cache leftovers
+.pytest_cache/
+.codex_pycache/
+pytest-cache-files-*/
+
 # PyPI configuration file
 .pypirc
 

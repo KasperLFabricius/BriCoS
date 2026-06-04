@@ -398,6 +398,30 @@ def get_safe_error_result():
         'phi_calc': 1.0, 'phi_log': ["System Unstable or Empty"]
     }
 
+def split_distributed_trapezoid_for_sub_element(params_list, loc_start, loc_end, tol=1e-9):
+    q_s_glob, q_e_glob, x_s_glob, L_load = params_list
+    x_e_glob = x_s_glob + L_load
+    overlap_start = max(loc_start, x_s_glob)
+    overlap_end = min(loc_end, x_e_glob)
+
+    if overlap_end <= overlap_start + tol:
+        return None
+
+    len_glob = x_e_glob - x_s_glob
+    if len_glob > tol:
+        q_sub_start = q_s_glob + (q_e_glob - q_s_glob) * (overlap_start - x_s_glob) / len_glob
+        q_sub_end = q_s_glob + (q_e_glob - q_s_glob) * (overlap_end - x_s_glob) / len_glob
+    else:
+        q_sub_start = q_s_glob
+        q_sub_end = q_e_glob
+
+    local_x_s = overlap_start - loc_start
+    local_x_e = overlap_end - loc_start
+    return [q_sub_start, q_sub_end, local_x_s, local_x_e]
+
+def point_load_belongs_to_sub_element(x_pos_glob, loc_start, loc_end, is_last, tol=1e-9):
+    return (loc_start - tol <= x_pos_glob < loc_end - tol) or (is_last and abs(x_pos_glob - loc_end) <= tol)
+
 # ==========================================
 # 2. MAIN SOLVER CONTROLLER
 # ==========================================
@@ -675,32 +699,20 @@ def run_raw_analysis(params, phi_val_override=None):
             loc_end = loc_start + el_obj.L
             
             if load_type == 'distributed_trapezoid':
-                # FIXED: Unpack correctly so variable names match logic below
-                q_s_glob, q_e_glob, x_s_glob, L_load = params_list
-                x_e_glob = x_s_glob + L_load
-                overlap_start = max(loc_start, x_s_glob)
-                overlap_end = min(loc_end, x_e_glob)
-                
-                if overlap_end > overlap_start + 1e-6:
-                    local_x_s = overlap_start - loc_start
-                    len_glob = x_e_glob - x_s_glob
-                    if len_glob > 1e-9:
-                        q_sub_start = q_s_glob + (q_e_glob - q_s_glob) * (overlap_start - x_s_glob) / len_glob
-                        q_sub_end = q_s_glob + (q_e_glob - q_s_glob) * (overlap_end - x_s_glob) / len_glob
-                    else:
-                        q_sub_start = q_s_glob
-                        q_sub_end = q_e_glob
+                sub_params = split_distributed_trapezoid_for_sub_element(params_list, loc_start, loc_end, 1e-6)
+                if sub_params is not None:
                     if idx not in target_map: target_map[idx] = []
                     target_map[idx].append({
                         'type': 'distributed_trapezoid',
                         'is_gravity': is_gravity,
-                        'params': [q_sub_start, q_sub_end, local_x_s, overlap_end - overlap_start]
+                        'params': sub_params
                     })
                     
             elif load_type == 'point':
                 P_val, x_pos_glob = params_list
-                if loc_start <= x_pos_glob <= loc_end:
-                    local_x = x_pos_glob - loc_start
+                is_last = idx == indices[-1]
+                if point_load_belongs_to_sub_element(x_pos_glob, loc_start, loc_end, is_last, 1e-9):
+                    local_x = min(max(x_pos_glob - loc_start, 0.0), el_obj.L)
                     if idx not in target_map: target_map[idx] = []
                     target_map[idx].append({
                         'type': 'point',
@@ -892,9 +904,11 @@ def run_raw_analysis(params, phi_val_override=None):
                     has_loads = False
                     for ax_i, d in enumerate(v_dists_run):
                         ax_x = x_front - d
-                        for (start_x, L_span, el_idx) in sp_elems_info:
+                        for info_idx, (start_x, L_span, el_idx) in enumerate(sp_elems_info):
                             local_x = ax_x - start_x
-                            if 0 <= local_x <= L_span:
+                            is_last = info_idx == len(sp_elems_info) - 1
+                            if point_load_belongs_to_sub_element(ax_x, start_x, start_x + L_span, is_last, 1e-9):
+                                local_x = min(max(ax_x - start_x, 0.0), L_span)
                                 P_val = v_loads_raw[ax_i]
                                 if el_idx not in step_loads_map: step_loads_map[el_idx] = []
                                 load_p = {'type': 'point', 'is_gravity': True, 'params': [P_val, local_x]}
@@ -1007,8 +1021,7 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
                 'M_max': dat['M']*f, 'M_min': dat['M']*f,
                 'V_max': dat['V']*f, 'V_min': dat['V']*f,
                 'N_max': dat['N']*f, 'N_min': dat['N']*f,
-                'def_x': dat['def_x']*f, 'def_x_min': dat['def_x']*f,
-                'def_y_max': dat['def_y']*f, 'def_y_min': dat['def_y']*f,
+                'def_x': dat['def_x']*f, 'def_y': dat['def_y']*f,
                 'def_x_max': dat['def_x']*f, 'def_x_min': dat['def_x']*f,
                 'def_y_max': dat['def_y']*f, 'def_y_min': dat['def_y']*f
             }

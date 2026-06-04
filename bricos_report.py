@@ -54,11 +54,11 @@ class NumberedCanvas(canvas.Canvas):
 # ==========================================
 
 class BricosReportGenerator:
-    def __init__(self, buffer, meta_data, session_state, raw_res_A, raw_res_B, nodes_A, nodes_B, version="0.31", progress_callback=None):
+    def __init__(self, buffer, meta_data, session_state, raw_res_A, raw_res_B, nodes_A, nodes_B, version=None, progress_callback=None):
         self.buffer = buffer
         self.meta = meta_data
         self.state = session_state
-        self.version = version
+        self.version = version or data_mod.APP_VERSION
         self.progress_callback = progress_callback
         
         # Validity Check
@@ -137,6 +137,57 @@ class BricosReportGenerator:
         except Exception:
             return "Custom"
 
+    @staticmethod
+    def _vehicle_has_loads(params, vehicle_key):
+        return bool(params.get(vehicle_key, {}).get('loads'))
+
+    def _has_any_vehicle(self):
+        systems = [self.params_A]
+        if self.valid_B:
+            systems.append(self.params_B)
+        return any(
+            self._vehicle_has_loads(p, 'vehicle') or self._vehicle_has_loads(p, 'vehicleB')
+            for p in systems
+        )
+
+    @staticmethod
+    def _surcharge_interaction_text(params):
+        if params.get('combine_surcharge_vehicle', False):
+            return "Simultaneous: vehicle traffic + surcharge"
+        return "Exclusive: envelope of vehicle traffic or surcharge"
+
+    @staticmethod
+    def _characteristic_formula_text():
+        return "1.0 · Permanent + 1.0 · Phi · Vehicle + 1.0 · Other variable actions"
+
+    @staticmethod
+    def _vehicle_step_keys_for_direction(params, base_key):
+        direction = params.get('vehicle_direction', 'Forward')
+        if direction == "Reverse":
+            return [(f"{base_key}_Rev", "Reverse")]
+        if direction == "Both":
+            return [(base_key, "Forward"), (f"{base_key}_Rev", "Reverse")]
+        return [(base_key, "Forward")]
+
+    def _iter_vehicle_step_sources(self):
+        combos = [
+            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps A', "Vehicle A", 'vehicle'),
+            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps B', "Vehicle B", 'vehicleB')
+        ]
+
+        if self.valid_B:
+            combos.extend([
+                (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps A', "Vehicle A", 'vehicle'),
+                (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps B', "Vehicle B", 'vehicleB')
+            ])
+
+        for params, raw, sys_label, nodes, base_key, veh_label, veh_param_key in combos:
+            if not self._vehicle_has_loads(params, veh_param_key):
+                continue
+            for step_key, direction_label in self._vehicle_step_keys_for_direction(params, base_key):
+                if raw and raw.get(step_key):
+                    yield params, raw, sys_label, nodes, step_key, veh_label, direction_label
+
     def generate(self):
         self._update_progress(0.05)
         
@@ -182,10 +233,11 @@ class BricosReportGenerator:
         self.chapter_count += 1
         
         # 6. Total Envelope (SLS)
-        self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results (SLS) - Total Envelope", self.styles['SwecoSubHeader']))
-        self.elements.append(Paragraph(r"<b>Formula:</b> 1.0 · Permanent + 1.0 · Variable (No KFI, No Gamma, No Phi)", self.styles['SwecoSmall']))
+        self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results, including dynamic factor Phi where applicable", self.styles['SwecoSubHeader']))
+        self.elements.append(Paragraph(f"<b>Formula:</b> {self._characteristic_formula_text()}", self.styles['SwecoSmall']))
+        self.elements.append(Paragraph('Characteristic static results excluding dynamic factor Phi are available in the interactive UI as "Characteristic (No Dynamic Factor)".', self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
-        self._add_results_section("Characteristic (No Dynamic Factor)", prog_range=(0.35, 0.50))
+        self._add_results_section("Characteristic (SLS)", prog_range=(0.35, 0.50))
         self.elements.append(PageBreak())
         self.chapter_count += 1
         
@@ -227,17 +279,21 @@ class BricosReportGenerator:
             prog_start += prog_step
         
         # 8. Critical Vehicle Steps
-        self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
-        
-        self.elements.append(Paragraph("<b>Table 8.1: Critical Vehicle Effects (Raw Envelope Values)</b>", self.styles['SwecoSmall']))
-        self.elements.append(Paragraph("Values represent the raw Min/Max envelope before application of Partial Factors (Gamma, KFI) and Dynamic Factor (Phi).", self.styles['SwecoCell']))
-        self._add_unfactored_vehicle_table()
-        self.elements.append(Spacer(1, 0.4*cm))
+        if self._has_any_vehicle():
+            self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
 
-        self.elements.append(Paragraph("<b>Vehicle Step Plots</b>", self.styles['SwecoBody']))
-        self.elements.append(Paragraph("Vehicle positions causing peak effects per span.", self.styles['SwecoSmall']))
-        self.elements.append(Spacer(1, 0.2*cm))
-        self._add_smart_vehicle_steps(prog_range=(0.75, 0.95))
+            self.elements.append(Paragraph("<b>Table 8.1: Critical Vehicle Effects (Raw Step Values)</b>", self.styles['SwecoSmall']))
+            self.elements.append(Paragraph("Values represent raw forward and/or reverse moving-load step effects before application of Partial Factors (Gamma, KFI) and Dynamic Factor (Phi). Vehicle A and Vehicle B are combined by independent moving-load envelope superposition.", self.styles['SwecoCell']))
+            self._add_unfactored_vehicle_table()
+            self.elements.append(Spacer(1, 0.4*cm))
+
+            self.elements.append(Paragraph("<b>Vehicle Step Plots</b>", self.styles['SwecoBody']))
+            self.elements.append(Paragraph("Vehicle positions causing peak effects per span.", self.styles['SwecoSmall']))
+            self.elements.append(Spacer(1, 0.2*cm))
+            self._add_smart_vehicle_steps(prog_range=(0.75, 0.95))
+            self.chapter_count += 1
+        else:
+            self._update_progress(0.95)
 
         self._update_progress(0.98)
 
@@ -290,7 +346,8 @@ class BricosReportGenerator:
         # Condensed 1.4
         add_sub("1.3 Moving Load Analysis",
             "Traffic actions are evaluated using a Quasi-Static algorithm, stepping the vehicle model across the structure to compute absolute maximum and minimum envelopes for forces and displacements. "
-            "The Dynamic Amplification Factor (<i>&Phi;</i>) is calculated automatically based on the influence length (compliant with <b>DS/EN 1991-2 DK NA</b>) or defined manually.")
+            "The Dynamic Amplification Factor (<i>&Phi;</i>) is calculated automatically based on the influence length (compliant with <b>DS/EN 1991-2 DK NA</b>) or defined manually. "
+            "Where both Vehicle A and Vehicle B are defined, BriCoS uses independent moving-load envelope superposition: maxima/minima from Vehicle A and Vehicle B may be combined even when they occur at different moving-load positions.")
 
         # Condensed 1.5
         add_sub("1.4 Load Combinations", 
@@ -399,11 +456,12 @@ class BricosReportGenerator:
 
         if use_shear:
             data.append(["Poisson's Ratio (ν)", f"{p.get('nu', 0.2)}", "Used for shear modulus G"])
-            
-        # --- NEW: Surcharge Interaction Mode ---
-        surch_mode = p.get('surch_mode', 'Exclusive')
-        surch_txt = "Exclusive from Traffic" if surch_mode == 'Exclusive' else "Simultaneous with Traffic"
+
+        surch_txt = self._surcharge_interaction_text(p)
         data.append(["Surcharge Interaction", surch_txt, "Vehicle load & surcharge combination"])
+
+        if not self._has_any_vehicle():
+            data.append(["Vehicle Results", "No vehicle load models were defined. Moving-load envelope sections are omitted.", "Report content"])
 
         t = self._make_std_table(data, [4*cm, 5.5*cm, 6.5*cm])
         self.elements.append(KeepTogether([t]))
@@ -821,71 +879,51 @@ class BricosReportGenerator:
 
     def _add_unfactored_vehicle_table(self):
         """Adds table showing raw vehicle effects (Unfactored) for validation."""
-        data = [["Elem", "M_max", "M_min", "V_max", "V_min", "System"]]
-        
-        def process_sys(raw_env, sys_name):
-            if not raw_env: return
-            all_ids = sorted(raw_env.keys(), key=lambda x: (x[0], int(x[1:])))
+        data = [["Elem", "Direction", "M_max", "M_min", "V_max", "V_min", "System"]]
+
+        def process_steps(steps, sys_name, direction_label):
+            if not steps:
+                return
+            all_ids = set()
+            for step in steps:
+                all_ids.update(step.get('res', {}).keys())
+            all_ids = sorted(all_ids, key=lambda x: (x[0], int(x[1:])))
+
             for eid in all_ids:
-                dat = raw_env[eid]
-                def get_v(k):
-                    arr = dat.get(k)
-                    if arr is None or len(arr) == 0: return 0.0
-                    return np.max(arr) if 'max' in k else np.min(arr)
-                
-                mmx = get_v('M_max'); mmn = get_v('M_min')
-                vmx = get_v('V_max'); vmn = get_v('V_min')
-                data.append([eid, f"{mmx:.1f}", f"{mmn:.1f}", f"{vmx:.1f}", f"{vmn:.1f}", sys_name])
+                max_M, min_M = -1e15, 1e15
+                max_V, min_V = -1e15, 1e15
+                found = False
+                for step in steps:
+                    elem_res = step.get('res', {}).get(eid)
+                    if not elem_res:
+                        continue
+                    found = True
+                    max_M = max(max_M, float(np.max(elem_res['M'])))
+                    min_M = min(min_M, float(np.min(elem_res['M'])))
+                    max_V = max(max_V, float(np.max(elem_res['V'])))
+                    min_V = min(min_V, float(np.min(elem_res['V'])))
+                if found:
+                    data.append([eid, direction_label, f"{max_M:.1f}", f"{min_M:.1f}", f"{max_V:.1f}", f"{min_V:.1f}", sys_name])
 
-        # Helper to safely check if a vehicle is defined (has loads) in the params
-        def has_veh(p, key):
-            # Safe access: params -> vehicle_key -> loads list
-            return bool(p.get(key, {}).get('loads'))
+        for _, raw, sys_label, _, step_key, veh_label, direction_label in self._iter_vehicle_step_sources():
+            process_steps(raw.get(step_key, []), f"{sys_label} ({veh_label})", direction_label)
 
-        # Only process systems if the vehicle is actually defined in the input parameters
-        if has_veh(self.params_A, 'vehicle'):
-            process_sys(self.raw_A.get('Vehicle Envelope A', {}), "A (Veh A)")
-        
-        if has_veh(self.params_A, 'vehicleB'):
-            process_sys(self.raw_A.get('Vehicle Envelope B', {}), "A (Veh B)")
-
-        if self.valid_B:
-            if has_veh(self.params_B, 'vehicle'):
-                process_sys(self.raw_B.get('Vehicle Envelope A', {}), "B (Veh A)")
-                
-            if has_veh(self.params_B, 'vehicleB'):
-                process_sys(self.raw_B.get('Vehicle Envelope B', {}), "B (Veh B)")
-        
         if len(data) > 1:
-            t = self._make_std_table(data, [2*cm, 3*cm, 3*cm, 3*cm, 3*cm, 2*cm])
+            t = self._make_std_table(data, [1.8*cm, 2.2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 3.0*cm])
             self.elements.append(KeepTogether([t]))
         else:
-            self.elements.append(Paragraph("No vehicle results found.", self.styles['SwecoSmall']))
+            self.elements.append(Paragraph("No vehicle step results found for the active vehicle load models.", self.styles['SwecoSmall']))
 
     def _add_smart_vehicle_steps(self, prog_range=(0.0, 0.0)):
-        # Define 4 specific combos: SysA-VehA, SysA-VehB, SysB-VehA, SysB-VehB
-        combos = [
-            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps A', "Vehicle A"),
-            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps B', "Vehicle B")
-        ]
-        
-        if self.valid_B:
-            combos.extend([
-                (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps A', "Vehicle A"),
-                (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps B', "Vehicle B")
-            ])
-        
         all_task_groups = []
         
-        for p, r, s_lbl, n, step_key, veh_lbl in combos:
-            # Only process if results exist for this vehicle
-            if r.get(step_key):
-                g = self._identify_critical_steps(p, r, s_lbl, n, step_key, veh_lbl)
-                if g:
-                    all_task_groups.append({
-                        'main_header': f"{s_lbl} - {veh_lbl}", 
-                        'groups': g
-                    })
+        for p, r, s_lbl, n, step_key, veh_lbl, direction_label in self._iter_vehicle_step_sources():
+            g = self._identify_critical_steps(p, r, s_lbl, n, step_key, veh_lbl, direction_label)
+            if g:
+                all_task_groups.append({
+                    'main_header': f"{s_lbl} - {veh_lbl} ({direction_label})",
+                    'groups': g
+                })
 
         all_render_configs = []
         
@@ -920,7 +958,7 @@ class BricosReportGenerator:
             
             self.elements.append(Spacer(1, 0.5*cm))
 
-    def _identify_critical_steps(self, params, raw_data, sys_label, sys_nodes, step_key, veh_label):
+    def _identify_critical_steps(self, params, raw_data, sys_label, sys_nodes, step_key, veh_label, direction_label="Forward"):
         steps = raw_data.get(step_key, [])
         if not steps: return []
 
@@ -951,7 +989,7 @@ class BricosReportGenerator:
             
             if not found_data: continue
             
-            group = {'header': f"Element {eid} (Critical Steps)", 'plots': []}
+            group = {'header': f"Element {eid} ({direction_label} critical steps)", 'plots': []}
             
             critical_cases = [
                 (idx_min_M, "Min M", 'M'),
@@ -973,7 +1011,7 @@ class BricosReportGenerator:
                 # UPDATED: Construct unified plot title with System and Vehicle Info
                 s_short = "Sys A" if "A" in sys_label else "Sys B"
                 v_short = "Veh A" if "A" in veh_label else "Veh B"
-                title = f"{s_short} - {v_short} - Step {idx}: {label} @ X={x_loc:.2f}m"
+                title = f"{s_short} - {v_short} - {direction_label} - Step {idx}: {label} @ X={x_loc:.2f}m"
                 
                 is_A = (sys_label == "System A")
                 

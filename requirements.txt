@@ -1,7 +1,7 @@
-streamlit
-pandas
-numpy
-plotly
-numba
-kaleido
-reportlab
+streamlit>=1.28,<2
+pandas>=2.0,<3
+numpy>=1.24,<2.4
+plotly>=5.18,<7
+numba>=0.58,<0.63
+kaleido>=0.2.1,<2
+reportlab>=4.0,<5
