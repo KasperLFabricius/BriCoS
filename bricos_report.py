@@ -371,6 +371,7 @@ class BricosReportGenerator:
             "<b>Euler-Bernoulli</b> (slender members, neglecting shear deformation) or <b>Timoshenko</b> "
             "(deep members, accounting for shear deformation via the parameter <i>&Phi;<sub>s</sub></i> = 12<i>EI</i> / (<i>GA<sub>s</sub>L</i><sup>2</sup>)). "
             "Non-prismatic (tapered) elements are handled via numerical integration of the flexibility matrix. "
+            "For non-prismatic members, moving point-load fixed-end forces use the numerical formulation consistent with the non-prismatic stiffness formulation. "
             "Material behavior is assumed Linear Elastic.")
 
         # Condensed 1.3

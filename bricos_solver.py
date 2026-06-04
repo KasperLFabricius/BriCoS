@@ -867,16 +867,30 @@ def run_raw_analysis(params, phi_val_override=None):
 
         total_structure_len = c_x 
         n_elems = len(elem_objects)
-        el_L = np.zeros(n_elems)
-        el_T = np.zeros((n_elems, 6, 6))
-        el_k_local = np.zeros((n_elems, 6, 6))
+        el_L = np.zeros(n_elems, dtype=np.float64)
+        el_T = np.zeros((n_elems, 6, 6), dtype=np.float64)
+        el_k_local = np.zeros((n_elems, 6, 6), dtype=np.float64)
         el_dof_indices = np.zeros((n_elems, 6), dtype=np.int32)
+        el_E = np.zeros(n_elems, dtype=np.float64)
+        el_G = np.zeros(n_elems, dtype=np.float64)
+        el_eff_shape = np.zeros(n_elems, dtype=np.int32)
+        el_v_type = np.zeros(n_elems, dtype=np.int32)
+        el_eff_vals = np.zeros((n_elems, 3), dtype=np.float64)
+        el_b_eff = np.zeros(n_elems, dtype=np.float64)
+        el_As_avg = np.zeros(n_elems, dtype=np.float64)
         
         for k in range(n_elems):
             el_obj = elem_objects[k]
             el_L[k] = el_obj.L
             el_T[k] = el_obj.T
             el_k_local[k] = el_obj.k_local
+            el_E[k] = el_obj.E
+            el_G[k] = el_obj.G_val
+            el_eff_shape[k] = el_obj.eff_shape
+            el_v_type[k] = el_obj.v_type
+            el_eff_vals[k, :] = el_obj.eff_vals
+            el_b_eff[k] = el_obj.b_eff
+            el_As_avg[k] = el_obj.As_avg
             ni, nj = elems_base[k]['nodes']
             idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
             el_dof_indices[k] = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
@@ -911,7 +925,12 @@ def run_raw_analysis(params, phi_val_override=None):
                 n_chunk = len(x_chunk)
                 is_init_chunk = (is_first_run and start_idx == 0)
                 
-                F_chunk = kernels.jit_build_batch_F(NDOF, n_chunk, x_chunk, v_loads_raw, v_dists_run, sp_start_x, sp_lens, sp_el_indices, el_L, el_T, el_dof_indices)
+                F_chunk = kernels.jit_build_batch_F(
+                    NDOF, n_chunk, x_chunk, v_loads_raw, v_dists_run,
+                    sp_start_x, sp_lens, sp_el_indices,
+                    el_L, el_T, el_dof_indices,
+                    el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+                )
                 
                 # OPTIMIZATION: Use direct solver batch processing
                 try:
@@ -924,6 +943,7 @@ def run_raw_analysis(params, phi_val_override=None):
                     x_chunk, v_loads_raw, v_dists_run,
                     sp_start_x, sp_lens, sp_el_indices,
                     D_chunk, el_dof_indices, el_T, el_L,
+                    el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
                     S_matrices,
                     env_results_accum, 
                     is_init_chunk
