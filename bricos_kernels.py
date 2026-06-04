@@ -448,48 +448,84 @@ def jit_fef_trapezoid(q_s, q_e, h_s, h_e, L):
     f[5] = F_equiv[3]
     return f
 
+
+@jit(nopython=True, cache=True)
+def jit_fef_axial_point(Px, a, L):
+    f = np.zeros(6)
+    if 0 <= a <= L:
+        if L <= 1e-12:
+            return f
+        f[0] = Px * (1.0 - a / L)
+        f[3] = Px * a / L
+    return f
+
+@jit(nopython=True, cache=True)
+def jit_fef_axial_trapezoid(qx_s, qx_e, h_s, h_e, L):
+    f = np.zeros(6)
+    if h_e > L: h_e = L
+    if h_s < 0: h_s = 0
+    if h_s >= h_e or L <= 1e-12: return f
+
+    num_int = 20
+    step = (h_e - h_s) / (num_int - 1)
+
+    for i in range(num_int):
+        x = h_s + i * step
+        weight = 1.0 if (i == 0 or i == num_int - 1) else 2.0
+        qx = qx_s + (qx_e - qx_s) * (x - h_s) / (h_e - h_s)
+        val = weight * qx * step / 2.0
+        f[0] += val * (1.0 - x / L)
+        f[3] += val * (x / L)
+    return f
+
 @jit(nopython=True, cache=True)
 def jit_internal_forces(L, f_start, num_pts, load_data):
     x_vals = np.linspace(0, L, num_pts)
     M_vals = np.zeros(num_pts)
     V_vals = np.zeros(num_pts)
     N_vals = np.zeros(num_pts)
-    
+
     N0, V0, M0 = f_start[0], f_start[1], f_start[2]
-    
+
     for i in range(num_pts):
         x = x_vals[i]
         Mx = M0 - V0 * x
         Vx = V0
-        Nx = -N0 
-        
+        Nx = -N0
+
         for j in range(len(load_data)):
             l_type = int(load_data[j, 0])
-            
-            if l_type == 2:
+
+            if l_type == 2 or l_type == 4:
                 q_s, q_e, h_s, h_e = load_data[j, 1], load_data[j, 2], load_data[j, 3], load_data[j, 4]
                 if x > h_s:
                     lim = x if x < h_e else h_e
                     len_eff = lim - h_s
-                    
-                    if abs(h_e - h_s) > 1e-9:
+
+                    if len_eff > 0.0 and abs(h_e - h_s) > 1e-9:
                         q_at_lim = q_s + (q_e - q_s) * (len_eff) / (h_e - h_s)
                         F_part = (q_s + q_at_lim) / 2.0 * len_eff
-                        Vx -= F_part
-                        
-                        denom = q_s + q_at_lim
-                        if abs(denom) > 1e-9:
-                            d_c = (len_eff / 3.0) * (2.0 * q_s + q_at_lim) / denom
-                        else:
-                            d_c = 0.0
-                        dist_arm = (x - h_s) - d_c
-                        Mx += F_part * dist_arm
+                        if l_type == 2:
+                            Vx -= F_part
 
-            elif l_type == 1:
+                            denom = q_s + q_at_lim
+                            if abs(denom) > 1e-9:
+                                d_c = (len_eff / 3.0) * (2.0 * q_s + q_at_lim) / denom
+                            else:
+                                d_c = 0.0
+                            dist_arm = (x - h_s) - d_c
+                            Mx += F_part * dist_arm
+                        else:
+                            Nx += F_part
+
+            elif l_type == 1 or l_type == 3:
                 P, a = load_data[j, 1], load_data[j, 2]
                 if x > a:
-                    Vx -= P
-                    Mx += P * (x - a)
+                    if l_type == 1:
+                        Vx -= P
+                        Mx += P * (x - a)
+                    else:
+                        Nx += P
                     
         M_vals[i] = Mx
         V_vals[i] = Vx
@@ -579,8 +615,11 @@ def jit_build_batch_F(NDOF, n_steps, x_steps, v_loads, v_dists, sp_start_x, sp_l
                     # However, batch stepping performance is critical. 
                     # For now, we retain analytical for speed, accepting minor inconsistency in moving loads
                     # unless specified otherwise.
-                    f_local = jit_fef_point(v_loads[j], local_x, el_L[el_idx])
                     T = el_T[el_idx]
+                    cx = T[0, 0]
+                    cy = T[0, 1]
+                    f_local = jit_fef_point(v_loads[j] * cx, local_x, el_L[el_idx])
+                    f_local += jit_fef_axial_point(v_loads[j] * cy, local_x, el_L[el_idx])
                     f_global_vec = T.T @ f_local
                     dofs = el_dof_indices[el_idx]
                     for d in range(6):
@@ -686,7 +725,8 @@ def jit_envelope_batch_parallel(
                             local_x = 0.0
                         elif local_x > L_el:
                             local_x = L_el
-                        fef_total += jit_fef_point(v_loads[ax], local_x, L_el)
+                        fef_total += jit_fef_point(v_loads[ax] * cx, local_x, L_el)
+                        fef_total += jit_fef_axial_point(v_loads[ax] * cy, local_x, L_el)
             
             FEF_N, FEF_V, FEF_M = fef_total[0], fef_total[1], fef_total[2]
             
@@ -718,9 +758,11 @@ def jit_envelope_batch_parallel(
                             elif a > L_el:
                                 a = L_el
                             if x > a:
-                                P = v_loads[ax]
-                                Vx -= P
-                                Mx += P * (x - a)
+                                P_trans = v_loads[ax] * cx
+                                P_axial = v_loads[ax] * cy
+                                Vx -= P_trans
+                                Mx += P_trans * (x - a)
+                                Nx += P_axial
                 
                 def_x_glob = cx * ux_loc - cy * uy_loc
                 def_y_glob = cy * ux_loc + cx * uy_loc

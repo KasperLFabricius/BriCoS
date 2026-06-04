@@ -351,6 +351,7 @@ class BricosReportGenerator:
         • <b>Material Stiffness:</b> Shear Modulus <i>G = E / (2·(1+&nu;))</i>. <br/>
         • <b>Elastic Modulus:</b> The Modulus of Elasticity <i>E</i> (or <i>E<sub>cm</sub></i>) is calculated in accordance with DS/EN 1992-1-1 Table 3.1: <i>E = 22 · ((f<sub>ck</sub> + 8) / 10)<sup>0.3</sup></i> (where <i>f<sub>ck</sub></i> is in MPa and <i>E</i> is in GPa).<br/>
         • <b>Loads:</b> Gravity <i>g = 9.81 m/s²</i>. Vehicle loads (tonnes) are converted to kN using this factor.
+        Gravity actions, including selfweight and vertical vehicle axle loads, are applied in the global vertical direction and transformed into local member axial and transverse components according to element orientation.
         Soil and surcharge loads are applied as line loads (kN/m) acting on the analysis strip.<br/>
         """
         self.elements.append(Paragraph(conventions_text, self.styles['SwecoSmall']))
