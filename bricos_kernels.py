@@ -132,9 +132,9 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_
         I_x = get_I_at_x(x, L, geom_vals, shape_mode, val_mode, b_eff)
         EI = E * I_x
         
-        # Unit Moment Diagrams: m1 = (1 - x/L), m2 = (x/L)
+        # Unit end-moment diagrams with compatible frame-element signs.
         m1 = 1.0 - x/L
-        m2 = x/L
+        m2 = -x/L
         
         # Simpson's Integration Factor
         fac = (weight * d_step / 3.0) / EI
@@ -146,7 +146,7 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_
     # Add Shear Flexibility
     f11 += shear_flex_term
     f22 += shear_flex_term
-    f12 -= shear_flex_term 
+    f12 += shear_flex_term
     
     # Invert F to get K_rot
     det = f11 * f22 - f12 * f12
@@ -562,8 +562,14 @@ def jit_build_batch_F(NDOF, n_steps, x_steps, v_loads, v_dists, sp_start_x, sp_l
             for k in range(num_spans):
                 s_x = sp_start_x[k]
                 e_x = s_x + sp_lens[k]
-                if s_x <= load_x <= e_x:
+                tol = 1e-9
+                is_last = k == num_spans - 1
+                if (s_x - tol <= load_x < e_x - tol) or (is_last and abs(load_x - e_x) <= tol):
                     local_x = load_x - s_x
+                    if local_x < 0.0:
+                        local_x = 0.0
+                    elif local_x > sp_lens[k]:
+                        local_x = sp_lens[k]
                     el_idx = sp_el_indices[k]
                     # NOTE: Moving load stepping typically uses Point Load kernel.
                     # For consistency in tapered elements, this should also ideally use the numerical kernel.
@@ -669,8 +675,14 @@ def jit_envelope_batch_parallel(
             if has_span:
                 for ax in range(num_axles):
                     load_x_glob = x_front - v_dists[ax]
-                    if s_start <= load_x_glob <= s_end:
+                    tol = 1e-9
+                    is_last = span_idx == num_spans - 1
+                    if (s_start - tol <= load_x_glob < s_end - tol) or (is_last and abs(load_x_glob - s_end) <= tol):
                         local_x = load_x_glob - s_start
+                        if local_x < 0.0:
+                            local_x = 0.0
+                        elif local_x > L_el:
+                            local_x = L_el
                         fef_total += jit_fef_point(v_loads[ax], local_x, L_el)
             
             FEF_N, FEF_V, FEF_M = fef_total[0], fef_total[1], fef_total[2]
@@ -694,8 +706,14 @@ def jit_envelope_batch_parallel(
                 if has_span:
                     for ax in range(num_axles):
                         load_x_glob = x_front - v_dists[ax]
-                        if s_start <= load_x_glob <= s_end:
+                        tol = 1e-9
+                        is_last = span_idx == num_spans - 1
+                        if (s_start - tol <= load_x_glob < s_end - tol) or (is_last and abs(load_x_glob - s_end) <= tol):
                             a = load_x_glob - s_start
+                            if a < 0.0:
+                                a = 0.0
+                            elif a > L_el:
+                                a = L_el
                             if x > a:
                                 P = v_loads[ax]
                                 Vx -= P

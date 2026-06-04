@@ -144,13 +144,16 @@ def create_plotly_fig(
     geom_A=None, geom_B=None,
     params_A=None, params_B=None,
     show_supports=False, support_size=0.5,
-    font_scale=1.0 
+    font_scale=1.0,
+    nodes_A=None, nodes_B=None
 ):
     fig = go.Figure()
     
     # Safety Defaults
     if params_A is None: params_A = {}
     if params_B is None: params_B = {}
+    if nodes_A is None: nodes_A = nodes
+    if nodes_B is None: nodes_B = nodes
     
     # --- 1. DETERMINE SCALING FACTOR (DIAGRAMS) ---
     max_val = 0.0
@@ -257,10 +260,10 @@ def create_plotly_fig(
         # If the solver returns an error state, these will be empty.
         
         if show_A and params_A and geom_A: 
-             render_system_supports(params_A, nodes, 'blue')
+             render_system_supports(params_A, nodes_A, 'blue')
              
         if show_B and params_B and geom_B: 
-             render_system_supports(params_B, nodes, 'red')
+             render_system_supports(params_B, nodes_B, 'red')
 
     def add_traces(sys_data, sys_name, color, line_style, offset_dir):
         if not sys_data: return
@@ -469,13 +472,13 @@ def create_plotly_fig(
                         )
 
                     elif load_case_name == "Soil" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
-                        q_bot, q_top, x_s, L_load = load['params']
+                        q_bot, q_top, x_s, x_e = load['params']
                         target_width = 1.5 
                         w_bot = target_width * (abs(q_bot) / max_q_soil)
                         w_top = target_width * (abs(q_top) / max_q_soil)
                         
                         b_x_bot = ni[0] + c * x_s; b_y_bot = ni[1] + s * x_s
-                        b_x_top = ni[0] + c * (x_s + L_load); b_y_top = ni[1] + s * (x_s + L_load)
+                        b_x_top = ni[0] + c * x_e; b_y_top = ni[1] + s * x_e
                         
                         dir_sign = 1.0 if q_bot >= 0 else -1.0
                         draw_dir_x = dir_sign * (-s); draw_dir_y = dir_sign * c
@@ -493,12 +496,12 @@ def create_plotly_fig(
                         fig.add_annotation(x=t_x_top, y=t_y_top, text=f"{abs(q_top):.1f}", showarrow=False, font=dict(color='orange', size=marker_size*0.9, weight="bold"))
 
                     elif load_case_name == "Surcharge" and l_type == 'distributed_trapezoid' and not load.get('is_gravity', False):
-                        q_bot, q_top, x_s, L_load = load['params']
+                        q_bot, q_top, x_s, x_e = load['params']
                         target_width = 1.0 
                         w_vis = target_width * (abs(q_bot) / max_q_surch)
                         if w_vis < 0.1: w_vis = 0.1
                         b_x_bot = ni[0] + c * x_s; b_y_bot = ni[1] + s * x_s
-                        b_x_top = ni[0] + c * (x_s + L_load); b_y_top = ni[1] + s * (x_s + L_load)
+                        b_x_top = ni[0] + c * x_e; b_y_top = ni[1] + s * x_e
                         dir_sign = 1.0 if q_bot >= 0 else -1.0
                         draw_dir_x = dir_sign * (-s); draw_dir_y = dir_sign * c
                         t_x_bot = b_x_bot + draw_dir_x * w_vis; t_y_bot = b_y_bot + draw_dir_y * w_vis
