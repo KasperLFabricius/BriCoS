@@ -367,11 +367,13 @@ class BricosReportGenerator:
         # Condensed 1.1 & 1.2
         add_sub("1.1 Calculation Method & Element Formulation",
             f"The analysis is performed using <b>BriCoS v{self.version}</b>, a 2D Matrix Stiffness FEM tool. "
-            "The structure is discretized using beam elements with two available formulations: "
-            "<b>Euler-Bernoulli</b> (slender members, neglecting shear deformation) or <b>Timoshenko</b> "
-            "(deep members, accounting for shear deformation via the parameter <i>&Phi;<sub>s</sub></i> = 12<i>EI</i> / (<i>GA<sub>s</sub>L</i><sup>2</sup>)). "
-            "Non-prismatic (tapered) elements are handled via numerical integration of the flexibility matrix. "
-            "For non-prismatic members, moving point-load fixed-end forces use the numerical formulation consistent with the non-prismatic stiffness formulation. "
+            "For prismatic members, BriCoS uses the selected <b>Euler-Bernoulli</b> or "
+            "<b>Timoshenko</b> formulation (with shear deformation via the parameter "
+            "<i>&Phi;<sub>s</sub></i> = 12<i>EI</i> / (<i>GA<sub>s</sub>L</i><sup>2</sup>)). "
+            "Non-prismatic members are handled using displacement-based Euler-Bernoulli "
+            "integration of <i>EI(x)</i>; full non-prismatic Timoshenko shear deformation is "
+            "not included in the current implementation. This is intentional in v0.44.1 to "
+            "restore physically consistent monotonic <i>EI</i> behaviour. "
             "Material behavior is assumed Linear Elastic.")
 
         # Condensed 1.3
@@ -483,8 +485,9 @@ class BricosReportGenerator:
         ]
         
         use_shear = p.get('use_shear_def', False)
-        shear_status = "Enabled (Timoshenko)" if use_shear else "Disabled (Euler-Bernoulli)"
-        data.append(["Shear Deformation", shear_status, "Stiffness matrix formulation"])
+        shear_status = "Enabled for prismatic members (Timoshenko)" if use_shear else "Disabled (Euler-Bernoulli)"
+        shear_desc = "Non-prismatic members use Euler-Bernoulli EI(x) integration" if use_shear else "Stiffness matrix formulation"
+        data.append(["Shear Deformation", shear_status, shear_desc])
         
         # Use Paragraph to render HTML tags (subscript)
         lbl_beff = Paragraph("Effective Width (<i>b<sub>eff</sub></i>)", self.styles['SwecoBody'])

@@ -291,7 +291,11 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     st.markdown("---")
     st.markdown("**Shear Deformations (Timoshenko)**")
     
-    help_shear = "Enables shear deformation consideration in the stiffness matrix. Recommended for deep beams and piers."
+    help_shear = (
+        "Enables shear deformation consideration in the stiffness matrix for prismatic members. "
+        "Recommended for deep beams and piers. For non-prismatic members, shear deformation "
+        "is currently not included in the stiffness formulation."
+    )
     use_shear = st.checkbox("Enable Shear Deformations", value=st.session_state['sysA'].get('use_shear_def', False), key="shear_toggle_sidebar", help=help_shear, disabled=ui_locked)
     st.session_state['sysA']['use_shear_def'] = use_shear
     st.session_state['sysB']['use_shear_def'] = use_shear

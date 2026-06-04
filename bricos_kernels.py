@@ -62,31 +62,50 @@ def jit_beam_matrices(xi, yi, xj, yj, E, I, A, phi_s):
 # --- NON-PRISMATIC LOGIC ---
 
 @jit(nopython=True, cache=True)
-def get_I_at_x(x, L, vals, shape_mode, val_mode, b_eff):
+def get_section_value_at_x(x, L, vals, shape_mode):
+    """Interpolate a section input value at local coordinate x.
+
+    Kernel convention is always vals = [start, mid, end]. For linear
+    profiles (shape_mode == 1), the middle value is intentionally unused
+    and interpolation is start -> end (vals[0] -> vals[2]). This matches the
+    UI/parent-member convention and avoids the historical [start, end, unused]
+    ambiguity in sub-element kernels.
     """
-    Interpolates Moment of Inertia I at position x.
-    vals: array of [v_start, v_mid, v_end] (mid used only if shape_mode=2)
-    shape_mode: 0=Constant, 1=Linear(2pt), 2=PiecewiseLinear(3pt)
-    val_mode: 0=Values are I, 1=Values are h (I = b_eff/12 * h^3)
-    b_eff: Effective width of the section
-    """
-    v = vals[0]
     xi = x / L
-    
+    if xi < 0.0:
+        xi = 0.0
+    elif xi > 1.0:
+        xi = 1.0
+
     if shape_mode == 0: # Constant
-        v = vals[0]
-    elif shape_mode == 1: # Linear (Start -> End)
-        v = vals[0] * (1 - xi) + vals[1] * xi
+        return vals[0]
+    elif shape_mode == 1: # Linear (Start -> End), vals[1] unused
+        return vals[0] * (1.0 - xi) + vals[2] * xi
     elif shape_mode == 2: # Piecewise Linear (Start -> Mid -> End)
         if xi <= 0.5:
             # Scale 0..0.5 to 0..1
             s = xi * 2.0
-            v = vals[0] * (1 - s) + vals[1] * s
+            return vals[0] * (1.0 - s) + vals[1] * s
         else:
             # Scale 0.5..1.0 to 0..1
             s = (xi - 0.5) * 2.0
-            v = vals[1] * (1 - s) + vals[2] * s
-            
+            return vals[1] * (1.0 - s) + vals[2] * s
+
+    return vals[0]
+
+
+@jit(nopython=True, cache=True)
+def get_I_at_x(x, L, vals, shape_mode, val_mode, b_eff):
+    """
+    Interpolates Moment of Inertia I at position x.
+    vals: array of [v_start, v_mid, v_end]. For shape_mode=1, vals[2] is
+    the end value and vals[1] is unused.
+    shape_mode: 0=Constant, 1=Linear(2pt), 2=PiecewiseLinear(3pt)
+    val_mode: 0=Values are I, 1=Values are h (I = b_eff/12 * h^3)
+    b_eff: Effective width of the section
+    """
+    v = get_section_value_at_x(x, L, vals, shape_mode)
+
     if val_mode == 1:
         # v is height, width=b_eff
         return (b_eff * v**3) / 12.0
@@ -97,85 +116,70 @@ def get_I_at_x(x, L, vals, shape_mode, val_mode, b_eff):
 @jit(nopython=True, cache=True)
 def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_vals, A_avg, As_avg, b_eff):
     """
-    Calculates Stiffness Matrix for non-prismatic beam using Flexibility Method Integration.
-    Uses Simpson's Rule (1/3) for exact integration of quadratic flexibility functions.
+    Calculates non-prismatic frame-element stiffness by direct
+    displacement-based Euler-Bernoulli integration.
+
+    The transverse field uses the standard cubic Hermite interpolation with
+    local DOF order [v_i, theta_i, v_j, theta_j], mapped into the BriCoS local
+    frame DOF order [u_i, v_i, theta_i, u_j, v_j, theta_j]. This avoids the
+    previous flexibility reconstruction, which reduced correctly for constant
+    EI but could lose monotonic stiffness for variable EI.
+
+    For this v0.44.1 hotfix, non-prismatic elements intentionally use the
+    corrected Euler-Bernoulli bending stiffness even when G/As are supplied;
+    prismatic elements still use jit_beam_matrices for validated Timoshenko
+    behaviour.
     """
     dx = xj - xi
     dy = yj - yi
     L = np.sqrt(dx**2 + dy**2)
     if L < 1e-6: L = 1e-6
     cx = dx / L; cy = dy / L
-    
-    # Numerical Integration Setup (Simpson's Rule - 10 steps / 11 points)
-    n_int = 11
-    d_step = L / (n_int - 1)
-    
-    # Flexibility Terms: f11 (rot_i due to M_i), f22 (rot_j due to M_j), f12
-    f11 = 0.0; f22 = 0.0; f12 = 0.0
-    
-    # Shear Flexibility Term (constant approx using As_avg)
-    shear_flex_term = 0.0
-    if G > 1e-3 and As_avg > 1e-6:
-        shear_flex_term = 1.0 / (L * G * As_avg)
-    
-    for i in range(n_int):
-        x = i * d_step
-        
-        # Simpson's Rule Weights
-        if i == 0 or i == n_int - 1:
-            weight = 1.0
-        elif i % 2 == 1: # Odd
-            weight = 4.0
-        else: # Even
-            weight = 2.0
-            
-        I_x = get_I_at_x(x, L, geom_vals, shape_mode, val_mode, b_eff)
-        EI = E * I_x
-        
-        # Unit end-moment diagrams with compatible frame-element signs.
-        m1 = 1.0 - x/L
-        m2 = -x/L
-        
-        # Simpson's Integration Factor
-        fac = (weight * d_step / 3.0) / EI
-        
-        f11 += m1 * m1 * fac
-        f22 += m2 * m2 * fac
-        f12 += m1 * m2 * fac
-        
-    # Add Shear Flexibility
-    f11 += shear_flex_term
-    f22 += shear_flex_term
-    f12 += shear_flex_term
-    
-    # Invert F to get K_rot
-    det = f11 * f22 - f12 * f12
-    if abs(det) < 1e-12: det = 1e-12
-    
-    k11 = f22 / det
-    k22 = f11 / det
-    k12 = -f12 / det
-    
-    # Build 6x6 Local Stiffness
-    w_A = E * A_avg / L
-    
-    # Shear forces from moment equilibrium: V = (Mi + Mj)/L
-    q1 = (k11 + k12) / L
-    q2 = (k12 + k22) / L
-    q3 = (q1 + q2) / L
-    
+
     k_loc = np.zeros((6,6))
-    
-    # Axial
+
+    # Axial stiffness remains based on the current average-area convention.
+    w_A = E * A_avg / L
     k_loc[0,0] = w_A;  k_loc[0,3] = -w_A
     k_loc[3,0] = -w_A; k_loc[3,3] = w_A
-    
-    # Bending / Shear
-    k_loc[1,1] = q3;   k_loc[1,2] = q1;   k_loc[1,4] = -q3;  k_loc[1,5] = q2
-    k_loc[2,1] = q1;   k_loc[2,2] = k11;  k_loc[2,4] = -q1;  k_loc[2,5] = k12
-    k_loc[4,1] = -q3;  k_loc[4,2] = -q1;  k_loc[4,4] = q3;   k_loc[4,5] = -q2
-    k_loc[5,1] = q2;   k_loc[5,2] = k12;  k_loc[5,4] = -q2;  k_loc[5,5] = k22
-    
+
+    # Simpson integration with an odd number of points. Constant EI integrates
+    # exactly because B^T*EI*B is quadratic in x for Hermite bending.
+    n_int = 101
+    d_step = L / (n_int - 1)
+    kb = np.zeros((4, 4))
+
+    for i in range(n_int):
+        x = i * d_step
+        if i == 0 or i == n_int - 1:
+            weight = 1.0
+        elif i % 2 == 1:
+            weight = 4.0
+        else:
+            weight = 2.0
+
+        eta = x / L
+        B = np.empty(4)
+        B[0] = (-6.0 + 12.0 * eta) / (L * L)
+        B[1] = (-4.0 + 6.0 * eta) / L
+        B[2] = (6.0 - 12.0 * eta) / (L * L)
+        B[3] = (-2.0 + 6.0 * eta) / L
+
+        I_x = get_I_at_x(x, L, geom_vals, shape_mode, val_mode, b_eff)
+        EI = E * I_x
+        fac = weight * d_step / 3.0 * EI
+
+        for a in range(4):
+            for c in range(4):
+                kb[a, c] += B[a] * B[c] * fac
+
+    bend_idx = np.array([1, 2, 4, 5])
+    for a in range(4):
+        ia = bend_idx[a]
+        for c in range(4):
+            ib = bend_idx[c]
+            k_loc[ia, ib] = kb[a, c]
+
     # Transform
     T = np.zeros((6, 6))
     T[0,0] = cx;  T[0,1] = cy
@@ -184,9 +188,9 @@ def jit_non_prismatic_matrices(xi, yi, xj, yj, E, G, shape_mode, val_mode, geom_
     T[3,3] = cx;  T[3,4] = cy
     T[4,3] = -cy; T[4,4] = cx
     T[5,5] = 1.0
-    
+
     k_glob = T.T @ k_loc @ T
-    
+
     return k_loc, k_glob, T, L, cx, cy
 
 # --- NEW: NUMERICAL LOAD INTEGRATION (CONSISTENT NODAL LOADS) ---
@@ -262,8 +266,9 @@ def get_static_M0_V0_trapezoid(x, L, q_s, q_e, h_s, h_e):
 @jit(nopython=True, cache=True)
 def jit_numerical_fef(load_type, params, L, E, G, shape_mode, val_mode, geom_vals, b_eff, As_avg):
     """
-    Calculates Fixed End Forces (FEF) using Numerical Integration (Simpson's Rule).
-    Must match jit_non_prismatic_matrices integration exactly.
+    Calculates flexibility-derived Fixed End Forces (FEF) using numerical integration.
+    Retained for legacy regression coverage; the displacement-based element path
+    uses Hermite-consistent analytical FEF kernels for transverse loads.
     load_type: 1=Point, 2=Trapezoid
     params: [P, a] or [q_s, q_e, h_s, h_e]
     """
@@ -463,30 +468,10 @@ def jit_fef_axial_point(Px, a, L):
 def jit_vehicle_transverse_point_fef(P, a, L, E, G, eff_shape, v_type, eff_vals, b_eff, As_avg):
     """Return local transverse point-load FEF for vehicle envelope kernels.
 
-    Prismatic members use the analytical point-load FEF for speed.
-    Non-prismatic members use the numerical FEF path to remain consistent
-    with the non-prismatic stiffness formulation.
+    Point loads are Hermite-consistent and independent of EI(x), so the
+    analytical kernel is valid for both prismatic and non-prismatic members.
     """
-    if eff_shape == 0:
-        return jit_fef_point(P, a, L)
-
-    params = np.zeros(4)
-    params[0] = P
-    params[1] = a
-    params[2] = 0.0
-    params[3] = 0.0
-    return jit_numerical_fef(
-        1,
-        params,
-        L,
-        E,
-        G,
-        eff_shape,
-        v_type,
-        eff_vals,
-        b_eff,
-        As_avg,
-    )
+    return jit_fef_point(P, a, L)
 
 
 @jit(nopython=True, cache=True)
