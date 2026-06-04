@@ -157,8 +157,21 @@ class BricosReportGenerator:
         return "Exclusive: envelope of vehicle traffic or surcharge"
 
     @staticmethod
-    def _characteristic_formula_text():
-        return "1.0 · Permanent + 1.0 · Phi · Vehicle + 1.0 · Other variable actions"
+    def _characteristic_formula_text(params):
+        if params.get('combine_surcharge_vehicle', False):
+            variable = "1.0 · Phi · Vehicle traffic + 1.0 · Surcharge"
+        else:
+            variable = "Envelope(1.0 · Phi · Vehicle traffic, 1.0 · Surcharge)"
+        return f"1.0 · Permanent + {variable} + 1.0 · Other variable actions"
+
+    def _build_characteristic_formula_text(self):
+        eqA = self._characteristic_formula_text(self.params_A)
+        if not self.valid_B:
+            return eqA
+        eqB = self._characteristic_formula_text(self.params_B)
+        if eqA == eqB:
+            return eqA
+        return f"SysA: {eqA} <br/> SysB: {eqB}"
 
     @staticmethod
     def _vehicle_step_keys_for_direction(params, base_key):
@@ -234,7 +247,7 @@ class BricosReportGenerator:
         
         # 6. Total Envelope (SLS)
         self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results, including dynamic factor Phi where applicable", self.styles['SwecoSubHeader']))
-        self.elements.append(Paragraph(f"<b>Formula:</b> {self._characteristic_formula_text()}", self.styles['SwecoSmall']))
+        self.elements.append(Paragraph(f"<b>Formula:</b> {self._build_characteristic_formula_text()}", self.styles['SwecoSmall']))
         self.elements.append(Paragraph('Characteristic static results excluding dynamic factor Phi are available in the interactive UI as "Characteristic (No Dynamic Factor)".', self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
         self._add_results_section("Characteristic (SLS)", prog_range=(0.35, 0.50))
