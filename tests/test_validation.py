@@ -79,6 +79,19 @@ def test_vehicle_spacing_must_start_with_zero():
     assert any("Vehicle A spacing must start" in e for e in errors)
 
 
+def test_vehicle_incremental_spacing_that_is_not_nondecreasing_is_accepted():
+    params = data.get_def()
+    params["vehicle"] = {
+        "loads": [7.0, 7.0, 9.5, 9.5, 17.8, 17.8],
+        "spacing": [0.0, 1.4, 3.2, 1.4, 6.0, 1.4],
+    }
+
+    errors = data.validate_analysis_inputs(params, "System A")
+
+    assert not any("nondecreasing" in e for e in errors)
+    assert not any("Vehicle A" in e for e in errors)
+
+
 def test_empty_vehicle_is_accepted():
     params = data.get_def()
     params["vehicle"] = {"loads": [], "spacing": []}

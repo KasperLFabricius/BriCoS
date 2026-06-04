@@ -155,12 +155,19 @@ class FrameElement:
         l_int = 0
         if load_type == 'point': l_int = 1
         elif load_type == 'distributed_trapezoid': l_int = 2
-        
+        elif load_type == 'axial_point': l_int = 3
+        elif load_type == 'axial_distributed_trapezoid': l_int = 4
+
         # 2. Pad Params to 4 for numba kernel consistency
         p_arr = np.zeros(4)
         n_p = len(params)
         for i in range(min(4, n_p)): p_arr[i] = params[i]
-        
+
+        if load_type == 'axial_point':
+            return kernels.jit_fef_axial_point(params[0], params[1], self.L)
+        elif load_type == 'axial_distributed_trapezoid':
+            return kernels.jit_fef_axial_trapezoid(params[0], params[1], params[2], params[3], self.L)
+
         # 3. Choose Kernel based on Element Shape
         if self.eff_shape == 0:
             # Use Exact Analytical Formulas for Prismatic
@@ -176,6 +183,28 @@ class FrameElement:
             )
             
         return np.zeros(6)
+
+def decompose_gravity_params(load_type, params, cx, cy):
+    """Return local transverse and axial load records for a global vertical gravity load."""
+    if load_type == 'point':
+        return (
+            ('point', [params[0] * cx, params[1]]),
+            ('axial_point', [params[0] * cy, params[1]]),
+        )
+    if load_type == 'distributed_trapezoid':
+        return (
+            ('distributed_trapezoid', [params[0] * cx, params[1] * cx, params[2], params[3]]),
+            ('axial_distributed_trapezoid', [params[0] * cy, params[1] * cy, params[2], params[3]]),
+        )
+    return ((load_type, list(params)),)
+
+def get_local_fixed_end_forces_for_load(el, load):
+    if load.get('is_gravity', False):
+        f_loc = np.zeros(6)
+        for local_type, local_params in decompose_gravity_params(load['type'], load['params'], el.cx, el.cy):
+            f_loc += el.get_fixed_end_forces(local_type, local_params)
+        return f_loc
+    return el.get_fixed_end_forces(load['type'], load['params'])
 
 def build_stiffness_matrix(nodes, elements, restraints_stiffness, shear_config):
     node_keys = sorted(nodes.keys())
@@ -219,27 +248,34 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
         active_loads = loads_map.get(i, [])
         
         for load in active_loads:
-            p_raw = load['params']
-            p_final = list(p_raw)
+            f_start += get_local_fixed_end_forces_for_load(el, load)
+
+        load_records = []
+        for load in active_loads:
             if load.get('is_gravity', False):
-                p_final[0] *= el.cx
-                if load['type'] == 'distributed_trapezoid':
-                    p_final[1] *= el.cx
-            f_start += el.get_fixed_end_forces(load['type'], p_final)
-            
-        load_arr = np.zeros((len(active_loads), 5))
-        for k, load in enumerate(active_loads):
-            p_raw = load['params']
-            val_1 = p_raw[0]
-            val_2 = p_raw[1] if len(p_raw) > 1 else 0.0
-            if load.get('is_gravity', False):
-                val_1 *= el.cx
-                val_2 *= el.cx
-            p = load['params']
-            if load['type'] == 'point':
-                load_arr[k, :] = [1, val_1, p[1], 0.0, 0.0]
-            elif load['type'] == 'distributed_trapezoid':
-                load_arr[k, :] = [2, val_1, val_2, p[2], p[3]]
+                for local_type, local_params in decompose_gravity_params(load['type'], load['params'], el.cx, el.cy):
+                    if local_type == 'point':
+                        load_records.append([1, local_params[0], local_params[1], 0.0, 0.0])
+                    elif local_type == 'distributed_trapezoid':
+                        load_records.append([2, local_params[0], local_params[1], local_params[2], local_params[3]])
+                    elif local_type == 'axial_point':
+                        load_records.append([3, local_params[0], local_params[1], 0.0, 0.0])
+                    elif local_type == 'axial_distributed_trapezoid':
+                        load_records.append([4, local_params[0], local_params[1], local_params[2], local_params[3]])
+            else:
+                p = load['params']
+                if load['type'] == 'point':
+                    load_records.append([1, p[0], p[1], 0.0, 0.0])
+                elif load['type'] == 'distributed_trapezoid':
+                    load_records.append([2, p[0], p[1], p[2], p[3]])
+                elif load['type'] == 'axial_point':
+                    load_records.append([3, p[0], p[1], 0.0, 0.0])
+                elif load['type'] == 'axial_distributed_trapezoid':
+                    load_records.append([4, p[0], p[1], p[2], p[3]])
+
+        load_arr = np.zeros((len(load_records), 5))
+        for k, rec in enumerate(load_records):
+            load_arr[k, :] = rec
 
         num_pts = max(3, int(el.L / mesh_size) + 1)
         x_vals, M_vals, V_vals, N_vals = kernels.jit_internal_forces(
@@ -666,13 +702,7 @@ def run_raw_analysis(params, phi_val_override=None):
         for idx, load_list in loads_dict.items():
             el = elem_objects[idx]
             for load in load_list:
-                p_raw = load['params']
-                p_final = list(p_raw)
-                if load.get('is_gravity', False):
-                    p_final[0] *= el.cx
-                    if load['type'] == 'distributed_trapezoid':
-                        p_final[1] *= el.cx
-                f_loc = el.get_fixed_end_forces(load['type'], p_final)
+                f_loc = get_local_fixed_end_forces_for_load(el, load)
                 f_glob = el.T.T @ f_loc
                 ni, nj = elems_base[idx]['nodes']
                 idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
