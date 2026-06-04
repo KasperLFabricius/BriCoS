@@ -57,6 +57,6 @@ def test_constant_section_numerical_fef_matches_trapezoid_kernel():
         L, E, 0.0,
         0, 1, geom_vals, b_eff, area,
     )
-    analytical = kernels.jit_fef_trapezoid(10.0, 10.0, 0.0, L)
+    analytical = kernels.jit_fef_trapezoid(10.0, 10.0, 0.0, L, L)
 
     np.testing.assert_allclose(numerical, analytical, rtol=3e-3, atol=1e-5)
