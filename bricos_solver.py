@@ -4,6 +4,7 @@ import json
 import streamlit as st
 import numpy as np
 import bricos_kernels as kernels
+import bricos_data as data_mod
 
 # ==========================================
 # 1. CORE FEM CLASSES & FUNCTIONS
@@ -436,6 +437,7 @@ def get_safe_error_result():
         'Vehicle Steps A': [], 'Vehicle Steps B': [],
         'phi_calc': 1.0, 'phi_log': ["System Unstable or Empty"],
         'Phi Members': {},
+        'Traffic UDL': {}, 'udl_line_load': 0.0,
         'Equilibrium': {},
         'Restrained Nodes': []
     }
@@ -481,6 +483,9 @@ NON_SOLVER_PARAM_KEYS = frozenset({
     'combine_surcharge_vehicle',
     # SLS phi treatment is applied in combine_results, not in the raw analysis.
     'phi_sls_mode', 'phi_sls',
+    # Traffic UDL partial factors are combination-stage only; the UDL
+    # definition (udl_q, udl_gap, udl_mode) stays in the key.
+    'gamma_udl', 'udl_sls_factor',
 })
 
 
@@ -1114,18 +1119,38 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     runs_B = build_vehicle_runs('vehicleB')
     all_runs = runs_A + runs_B
 
+    # --- TRAFFIC UDL (fladelast) SEGMENT INFLUENCE CASES ---
+    # Adverse-only application (EN 1991-2:2003, 4.3.2(1)(b)) requires the
+    # effect of each loaded deck segment separately: one RHS column per deck
+    # sub-element, fully loaded with the UDL line load. The adverse envelope
+    # is then the sum of only-positive (resp. only-negative) contributions
+    # per result point, exact at sub-element resolution.
+    udl_q_line = data_mod.udl_line_load(params)
+    udl_seg_maps = []
+    if udl_q_line > 0.0:
+        for (seg_start, seg_L, el_idx) in sp_elems_info:
+            udl_seg_maps.append({el_idx: [{
+                'type': 'distributed_trapezoid', 'is_gravity': True,
+                'params': [udl_q_line, udl_q_line, 0.0, seg_L],
+            }]})
+    n_udl = len(udl_seg_maps)
+    F_udl = (np.column_stack([assemble_F(m) for m in udl_seg_maps])
+             if n_udl else np.zeros((NDOF, 0)))
+
     # --- SINGLE FACTORIZATION FOR ALL LOAD CASES ---
-    # The static cases and every vehicle step share one np.linalg.solve call
-    # (one O(n^3) factorization, all RHS at O(n^2) each). For very large
-    # models/step counts the combined RHS block is built and solved per run
-    # in chunks instead, trading the extra factorizations for memory.
-    total_rhs = F_static.shape[1] + sum(len(r['x_steps']) for r in all_runs)
+    # The static cases, the UDL segment cases and every vehicle step share
+    # one np.linalg.solve call (one O(n^3) factorization, all RHS at O(n^2)
+    # each). For very large models/step counts the vehicle RHS blocks are
+    # built and solved per run in chunks instead, trading the extra
+    # factorizations for memory.
+    n_static = F_static.shape[1]
+    total_rhs = n_static + n_udl + sum(len(r['x_steps']) for r in all_runs)
     single_solve = (total_rhs <= MAX_SINGLE_SOLVE_RHS
                     and NDOF * total_rhs <= MAX_SINGLE_SOLVE_ELEMENTS)
 
     try:
         if single_solve and all_runs:
-            F_blocks = [F_static]
+            F_blocks = [F_static, F_udl]
             for r in all_runs:
                 F_blocks.append(kernels.jit_build_batch_F(
                     NDOF, len(r['x_steps']), r['x_steps'],
@@ -1135,16 +1160,20 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
                 ))
             D_all = np.linalg.solve(K_glob, np.concatenate(F_blocks, axis=1))
-            D_static = D_all[:, :F_static.shape[1]]
-            col = F_static.shape[1]
+            D_static = D_all[:, :n_static]
+            D_udl = D_all[:, n_static:n_static + n_udl]
+            col = n_static + n_udl
             for r in all_runs:
                 w = len(r['x_steps'])
                 r['D'] = D_all[:, col:col+w]
                 col += w
         else:
-            # Fallback: static solve now; vehicle runs solved per chunk in
-            # process_vehicle_runs (no precomputed 'D' on the run dicts).
-            D_static = np.linalg.solve(K_glob, F_static)
+            # Fallback: static + UDL solves now; vehicle runs solved per
+            # chunk in process_vehicle_runs (no precomputed 'D' on the runs).
+            D_combined = np.linalg.solve(
+                K_glob, np.concatenate([F_static, F_udl], axis=1))
+            D_static = D_combined[:, :n_static]
+            D_udl = D_combined[:, n_static:]
     except np.linalg.LinAlgError:
         raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
 
@@ -1208,6 +1237,33 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
             'reactions_x': r_x, 'reactions_y': r_y,
             'residual_x': a_x + r_x, 'residual_y': a_y + r_y,
         }
+
+    # --- TRAFFIC UDL ADVERSE ENVELOPE ---
+    # Static (full deck) application: per result point and force component,
+    # sum only the adverse segment contributions (positive ones for the max
+    # envelope, negative ones for the min envelope), per EN 1991-2:2003,
+    # 4.3.2(1)(b). The point-wise patterned nature means the UDL has no
+    # single applied total, so it is excluded from the equilibrium table.
+    udl_env = {}
+    if n_udl:
+        udl_env = get_empty_env()
+        comp_keys = (('M', 'M_max', 'M_min'), ('V', 'V_max', 'V_min'),
+                     ('N', 'N_max', 'N_min'),
+                     ('def_x', 'def_x_max', 'def_x_min'),
+                     ('def_y', 'def_y_max', 'def_y_min'))
+        for i, seg_map in enumerate(udl_seg_maps):
+            detailed = get_detailed_results_optimized(
+                elem_objects, elems_base, nodes, D_udl[:, i], seg_map,
+                params.get('mesh_size', 0.5), node_map)
+            agg = aggregate_member_results(detailed)
+            for pid, dat in agg.items():
+                target = udl_env.get(pid)
+                if target is None:
+                    continue
+                for base_key, max_key, min_key in comp_keys:
+                    arr = dat[base_key]
+                    target[max_key] = target[max_key] + np.maximum(arr, 0.0)
+                    target[min_key] = target[min_key] + np.minimum(arr, 0.0)
 
     def process_vehicle_runs(runs, env_to_fill):
         steps_out = {'Forward': [], 'Reverse': []}
@@ -1408,6 +1464,10 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         'phi_log': phi_log,
         # Per-member phi (eid -> value). Empty dict means calc_phi is uniform.
         'Phi Members': phi_members,
+        # Traffic UDL adverse envelope (empty dict when inactive) and the
+        # line load it was computed with [kN/m].
+        'Traffic UDL': udl_env,
+        'udl_line_load': udl_q_line,
         # Global equilibrium check per static case (applied vs reactions).
         'Equilibrium': equilibrium,
         # Nodes carrying boundary springs. Reaction summaries must use this
@@ -1461,10 +1521,17 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         f_vehA_base = KFI * gamma_vA
         f_vehB_base = KFI * gamma_vB
         f_surch = KFI * gamma_vA
+        # Traffic UDL: KFI * gamma (Vejledning Fig. B3.1; 0.56 in LC1).
+        # The 2.5 kN/m2 fladelast includes the stoedtillaeg (DK NA A.2.3.2),
+        # so phi is never applied to it.
+        f_udl = KFI * params.get('gamma_udl', 0.56)
     elif result_mode == "Characteristic (SLS)":
         f_sw = 1.0; f_soil = 1.0; f_vehA_base = 1.0; f_vehB_base = 1.0; f_surch = 1.0
+        # SLS characteristic factor for the fladelast (Fig. B3.2; 0.40).
+        f_udl = params.get('udl_sls_factor', 0.40)
     else:
         f_sw = 1.0; f_soil = 1.0; f_vehA_base = 1.0; f_vehB_base = 1.0; f_surch = 1.0
+        f_udl = 1.0
 
     # Representative (governing) factors, plus per-member maps used by the
     # step viewer when phi varies per member.
@@ -1537,8 +1604,21 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
                 'def_y_min': dA['def_y_min']*fA_e + dB['def_y_min']*fB_e
             }
 
+    # Traffic UDL: factored adverse envelope. Per Vejledning Fig. B3.1 the
+    # fladelast acts in the same combination as the vehicles (additive with
+    # the vehicle term), independent of the surcharge interaction setting.
+    out_udl = {}
+    raw_udl = raw_res.get('Traffic UDL') or {}
+    env_keys_10 = ('M_max', 'M_min', 'V_max', 'V_min', 'N_max', 'N_min',
+                   'def_x_max', 'def_x_min', 'def_y_max', 'def_y_min')
+    for eid, dat in raw_udl.items():
+        out_udl[eid] = {
+            **dat['base'],
+            **{k: dat[k] * f_udl for k in env_keys_10},
+        }
+
     out_total = {}
-    all_ids = set(out_sw.keys()) | set(out_veh_env.keys()) | set(out_soil.keys()) | set(out_surch.keys())
+    all_ids = set(out_sw.keys()) | set(out_veh_env.keys()) | set(out_soil.keys()) | set(out_surch.keys()) | set(out_udl.keys())
     combine_surcharge_vehicle = params.get('combine_surcharge_vehicle', False)
 
     for eid in all_ids:
@@ -1550,6 +1630,7 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         sl = out_soil.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
         ve = out_veh_env.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
         su = out_surch.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
+        ud = out_udl.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
 
         M_perm_max = sw['M_max'] + sl['M_max']
         M_perm_min = sw['M_min'] + sl['M_min']
@@ -1562,28 +1643,31 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         def_y_perm_max = sw['def_y_max'] + sl['def_y_max']
         def_y_perm_min = sw['def_y_min'] + sl['def_y_min']
 
+        # The traffic term is vehicle + UDL (same load combination per
+        # Vejledning Fig. B3.1); the surcharge interaction setting governs
+        # only the surcharge.
         if combine_surcharge_vehicle:
-            M_tot_max = M_perm_max + su['M_max'] + ve['M_max']
-            M_tot_min = M_perm_min + su['M_min'] + ve['M_min']
-            V_tot_max = V_perm_max + su['V_max'] + ve['V_max']
-            V_tot_min = V_perm_min + su['V_min'] + ve['V_min']
-            N_tot_max = N_perm_max + su['N_max'] + ve['N_max']
-            N_tot_min = N_perm_min + su['N_min'] + ve['N_min']
-            def_x_tot_max = def_x_perm_max + su['def_x_max'] + ve['def_x_max']
-            def_x_tot_min = def_x_perm_min + su['def_x_min'] + ve['def_x_min']
-            def_y_tot_max = def_y_perm_max + su['def_y_max'] + ve['def_y_max']
-            def_y_tot_min = def_y_perm_min + su['def_y_min'] + ve['def_y_min']
+            M_tot_max = M_perm_max + su['M_max'] + ve['M_max'] + ud['M_max']
+            M_tot_min = M_perm_min + su['M_min'] + ve['M_min'] + ud['M_min']
+            V_tot_max = V_perm_max + su['V_max'] + ve['V_max'] + ud['V_max']
+            V_tot_min = V_perm_min + su['V_min'] + ve['V_min'] + ud['V_min']
+            N_tot_max = N_perm_max + su['N_max'] + ve['N_max'] + ud['N_max']
+            N_tot_min = N_perm_min + su['N_min'] + ve['N_min'] + ud['N_min']
+            def_x_tot_max = def_x_perm_max + su['def_x_max'] + ve['def_x_max'] + ud['def_x_max']
+            def_x_tot_min = def_x_perm_min + su['def_x_min'] + ve['def_x_min'] + ud['def_x_min']
+            def_y_tot_max = def_y_perm_max + su['def_y_max'] + ve['def_y_max'] + ud['def_y_max']
+            def_y_tot_min = def_y_perm_min + su['def_y_min'] + ve['def_y_min'] + ud['def_y_min']
         else:
-            M_tot_max = np.maximum(M_perm_max + ve['M_max'], M_perm_max + su['M_max'])
-            M_tot_min = np.minimum(M_perm_min + ve['M_min'], M_perm_min + su['M_min'])
-            V_tot_max = np.maximum(V_perm_max + ve['V_max'], V_perm_max + su['V_max'])
-            V_tot_min = np.minimum(V_perm_min + ve['V_min'], V_perm_min + su['V_min'])
-            N_tot_max = np.maximum(N_perm_max + ve['N_max'], N_perm_max + su['N_max'])
-            N_tot_min = np.minimum(N_perm_min + ve['N_min'], N_perm_min + su['N_min'])
-            def_x_tot_max = np.maximum(def_x_perm_max + ve['def_x_max'], def_x_perm_max + su['def_x_max'])
-            def_x_tot_min = np.minimum(def_x_perm_min + ve['def_x_min'], def_x_perm_min + su['def_x_min'])
-            def_y_tot_max = np.maximum(def_y_perm_max + ve['def_y_max'], def_y_perm_max + su['def_y_max'])
-            def_y_tot_min = np.minimum(def_y_perm_min + ve['def_y_min'], def_y_perm_min + su['def_y_min'])
+            M_tot_max = np.maximum(M_perm_max + ve['M_max'] + ud['M_max'], M_perm_max + su['M_max'])
+            M_tot_min = np.minimum(M_perm_min + ve['M_min'] + ud['M_min'], M_perm_min + su['M_min'])
+            V_tot_max = np.maximum(V_perm_max + ve['V_max'] + ud['V_max'], V_perm_max + su['V_max'])
+            V_tot_min = np.minimum(V_perm_min + ve['V_min'] + ud['V_min'], V_perm_min + su['V_min'])
+            N_tot_max = np.maximum(N_perm_max + ve['N_max'] + ud['N_max'], N_perm_max + su['N_max'])
+            N_tot_min = np.minimum(N_perm_min + ve['N_min'] + ud['N_min'], N_perm_min + su['N_min'])
+            def_x_tot_max = np.maximum(def_x_perm_max + ve['def_x_max'] + ud['def_x_max'], def_x_perm_max + su['def_x_max'])
+            def_x_tot_min = np.minimum(def_x_perm_min + ve['def_x_min'] + ud['def_x_min'], def_x_perm_min + su['def_x_min'])
+            def_y_tot_max = np.maximum(def_y_perm_max + ve['def_y_max'] + ud['def_y_max'], def_y_perm_max + su['def_y_max'])
+            def_y_tot_min = np.minimum(def_y_perm_min + ve['def_y_min'] + ud['def_y_min'], def_y_perm_min + su['def_y_min'])
 
         out_total[eid] = {
             **sw, 
@@ -1596,7 +1680,9 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
     
     return {
         'Selfweight': out_sw, 'Soil': out_soil, 'Surcharge': out_surch,
-        'Vehicle Envelope': out_veh_env, 'Total Envelope': out_total,
+        'Vehicle Envelope': out_veh_env, 'Traffic UDL': out_udl,
+        'Total Envelope': out_total,
+        'f_udl': f_udl,
         'Vehicle Steps A': raw_res.get('Vehicle Steps A', []),
         'Vehicle Steps A_Rev': raw_res.get('Vehicle Steps A_Rev', []),
         'Vehicle Steps B': raw_res.get('Vehicle Steps B', []),

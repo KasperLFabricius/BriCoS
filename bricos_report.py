@@ -163,6 +163,10 @@ class BricosReportGenerator:
         else:
             variable = ""
 
+        if data_mod.udl_line_load(params) > 0.0:
+            udl_term = f"{params.get('udl_sls_factor', 0.40)} · Traffic UDL (no Phi)"
+            variable = f"{variable} + {udl_term}" if variable else udl_term
+
         if not variable:
             return "1.0 · Permanent"
         eq = f"1.0 · Permanent + {variable}"
@@ -285,13 +289,15 @@ class BricosReportGenerator:
         has_sw = any(v > 0 for v in self.params_A['sw_list'])
         has_soil = len(self.params_A.get('soil', [])) > 0
         has_surch = len(self.params_A.get('surcharge', [])) > 0
-        
+        has_udl = data_mod.udl_line_load(self.params_A) > 0.0
+
         if self.valid_B:
             if any(v > 0 for v in self.params_B['sw_list']): has_sw = True
             if len(self.params_B.get('soil', [])) > 0: has_soil = True
             if len(self.params_B.get('surcharge', [])) > 0: has_surch = True
-        
-        active_comps = sum([has_sw, has_soil, has_surch])
+            if data_mod.udl_line_load(self.params_B) > 0.0: has_udl = True
+
+        active_comps = sum([has_sw, has_soil, has_surch, has_udl])
         prog_start = 0.50
         prog_total_span = 0.25
         prog_step = prog_total_span / max(1, active_comps)
@@ -316,7 +322,21 @@ class BricosReportGenerator:
             self.elements.append(PageBreak())
             self.chapter_count += 1
             prog_start += prog_step
-        
+
+        if has_udl:
+            self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Traffic UDL (Unfactored)", self.styles['SwecoSubHeader']))
+            self.elements.append(Paragraph(
+                "Adverse-only envelope of the uniformly distributed traffic load (fladelast), applied "
+                "only in the unfavourable parts of the influence surface per EN 1991-2:2003, 4.3.2(1)(b). "
+                "The load intensity includes the stoedtillaeg (DS/EN 1991-2 DK NA:2017, A.2.3.2), so the "
+                "dynamic factor Phi is not applied. Being point-wise patterned, this case has no single "
+                "applied load total and is therefore not part of the global equilibrium check.",
+                self.styles['SwecoSmall']))
+            self._add_component_section("Traffic UDL", prog_range=(prog_start, prog_start + prog_step))
+            self.elements.append(PageBreak())
+            self.chapter_count += 1
+            prog_start += prog_step
+
         # 8. Critical Vehicle Steps
         if self._has_any_vehicle():
             self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
@@ -441,6 +461,8 @@ class BricosReportGenerator:
             var = ""
             if has_A: var += f" + {kfi}·{g_veh}·{phi_txt}·VehA"
             if has_B: var += f" + {kfi}·{g_vehB}·{phi_txt}·VehB"
+            if data_mod.udl_line_load(p) > 0.0:
+                var += f" + {kfi}·{p.get('gamma_udl', 0.56)}·UDL (no Phi)"
             if p.get('surcharge'): var += f" + {kfi}·{g_veh}·Surch"
             if (has_A or has_B) and "[" in phi_txt:
                 var += " (Phi per member, see Dynamic Factor table)"
@@ -624,6 +646,17 @@ class BricosReportGenerator:
         
         txt_settings = (f"<b>KFI:</b> {p.get('KFI', 1.0)} | <b>Gammas:</b> {gamma_str} | <b>Phi:</b> {phi_txt}")
         self.elements.append(Paragraph(txt_settings, self.styles['SwecoBody']))
+
+        udl_line = data_mod.udl_line_load(p)
+        if udl_line > 0.0:
+            self.elements.append(Paragraph(
+                f"<b>Traffic UDL (fladelast):</b> q = {udl_line:.2f} kN/m "
+                "(line load on the analysis strip; effective width considered in the input) | "
+                f"&gamma;<sub>UDL</sub> = {p.get('gamma_udl', 0.56)} (ULS), "
+                f"{p.get('udl_sls_factor', 0.40)} (SLS char.) | "
+                "intensity incl. stoedtillaeg - <i>&Phi;</i> not applied | "
+                "application: static full deck, adverse-only (EN 1991-2, 4.3.2(1)(b))",
+                self.styles['SwecoBody']))
         self.elements.append(Spacer(1, 0.2*cm))
         
         # Widened Material Column
