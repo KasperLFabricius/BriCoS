@@ -352,7 +352,14 @@ class BricosReportGenerator:
             "Non-prismatic members are handled using displacement-based Euler-Bernoulli "
             "integration of <i>EI(x)</i>; full non-prismatic Timoshenko shear deformation is "
             "not included in the current implementation. "
-            "Material behavior is assumed Linear Elastic.")
+            "Material behavior is assumed Linear Elastic. "
+            "Internal forces (M, V, N) include the exact contributions of member loads "
+            "(fixed-end corrections and load discontinuities) and are independent of the mesh size. "
+            "Deflections are interpolated between nodes from the nodal displacements using Hermite "
+            "shape functions; the local deflection of loads acting between nodes is not added. The "
+            "resulting underestimate is bounded by approximately <i>P&middot;L<sub>mesh</sub></i><sup>3</sup>/(192<i>EI</i>) "
+            "per point load, vanishes with mesh refinement, and is negligible at the default mesh "
+            "size of 0.5 m.")
 
         # Condensed 1.3
         add_sub("1.2 Boundary Conditions", 
@@ -461,8 +468,8 @@ class BricosReportGenerator:
 
         data = [
             ["Parameter", "Value", "Description"],
-            ["Mesh Size", f"{p.get('mesh_size', 0.5)} m", "Finite Element discretization length"],
-            ["Step Size", f"{p.get('step_size', 0.2)} m", "Vehicle moving load increment"],
+            ["Mesh Size", f"{p.get('mesh_size', 0.5)} m", "FE discretization length; governs deflection interpolation accuracy (see 1.1)"],
+            ["Step Size", f"{p.get('step_size', 0.5)} m", "Vehicle moving load increment"],
             ["Vehicle Direction", f"{v_dir}", "Traffic flow direction"]
         ]
         

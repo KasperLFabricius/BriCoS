@@ -979,7 +979,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         for current_dir in directions_to_run:
             if len(v_loads_raw) == 0: continue
             max_d = max(v_dists_raw) if len(v_dists_raw) > 0 else 0
-            step_val = params.get('step_size', 0.2)
+            step_val = params.get('step_size', 0.5)
             
             if current_dir == 'Forward':
                 x_steps = np.arange(-max_d-1.0, total_structure_len + max_d + 1.0, step_val)
