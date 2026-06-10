@@ -435,7 +435,7 @@ class BricosReportGenerator:
 
     def _add_header_section(self):
         try:
-            logo = Image("logo.png", width=4*cm, height=1.5*cm)
+            logo = Image(data_mod.resource_path("logo.png"), width=4*cm, height=1.5*cm)
             logo.hAlign = 'RIGHT'
             self.elements.append(logo)
         except:
