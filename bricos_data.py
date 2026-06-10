@@ -194,7 +194,16 @@ def sanitize_input_data(data):
     while len(data['E_span_list']) < 10: data['E_span_list'].append(30e6)
     while len(data['fck_wall_list']) < 11: data['fck_wall_list'].append(30.0)
     while len(data['E_wall_list']) < 11: data['E_wall_list'].append(30e6)
-    
+
+    # 4. Migration: v0.49 stored the SLS stoedfaktor reduction as a boolean
+    # (phi_sls_reduction). Loaded sessions are seeded with current defaults
+    # before file values are applied, so phi_sls_mode always exists here;
+    # migrate on the legacy value instead of key absence. v0.50+ sessions
+    # never carry the legacy key, so an explicit 'Same' cannot be overridden.
+    if data.get('phi_sls_reduction') is True and data.get('phi_sls_mode', 'Same') == 'Same':
+        data['phi_sls_mode'] = 'Reduced'
+    data.pop('phi_sls_reduction', None)
+
     return data
 
 # ==========================================
