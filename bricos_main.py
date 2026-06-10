@@ -226,7 +226,7 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
                 else:
                     st.session_state['load_status'] = ('success', "Configuration loaded.")
                 st.rerun()
-            else: st.error("Invalid CSV format: missing System/Parameter columns.")
+            else: st.error("Invalid CSV format: missing System/Parameter/Value columns.")
         except Exception as e: st.error(f"Error loading file: {e}")
     
     st.markdown("---")

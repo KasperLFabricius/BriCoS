@@ -824,12 +824,12 @@ def generate_csv_data():
 def load_data_from_df(df_load):
     """Loads session state from a DataFrame.
 
-    Returns (loaded, skipped): loaded is False when the frame lacks the
-    expected System/Parameter columns; skipped lists 'System/Parameter'
-    labels of rows that could not be parsed, so callers can warn instead
-    of silently dropping configuration entries.
+    Returns (loaded, skipped): loaded is False when the frame lacks any of
+    the expected System/Parameter/Value columns; skipped lists
+    'System/Parameter' labels of rows that could not be parsed, so callers
+    can warn instead of silently dropping configuration entries.
     """
-    if 'System' not in df_load.columns or 'Parameter' not in df_load.columns:
+    if not {'System', 'Parameter', 'Value'}.issubset(df_load.columns):
         return False, []
 
     clean_transient_keys()

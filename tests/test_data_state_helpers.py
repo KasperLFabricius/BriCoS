@@ -36,6 +36,19 @@ def test_load_data_from_df_rejects_missing_columns():
     assert skipped == []
 
 
+def test_load_data_from_df_rejects_missing_value_column():
+    # System/Parameter alone must not count as a successful load: without
+    # Value every row would fail row parsing while the file was still
+    # reported as loaded, bypassing default initialization on autosave
+    # restore.
+    df = pd.DataFrame([{"System": "sysA", "Parameter": "num_spans"}])
+
+    loaded, skipped = data.load_data_from_df(df)
+
+    assert loaded is False
+    assert skipped == []
+
+
 def test_get_writable_path_frozen_uses_appdata(monkeypatch, tmp_path):
     monkeypatch.setattr(data.sys, "frozen", True, raising=False)
     monkeypatch.setattr(data.sys, "executable", str(tmp_path / "app" / "BriCoS.exe"))
