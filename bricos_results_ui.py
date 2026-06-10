@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import copy
 import bricos_solver as solver
 import bricos_viz as viz
 
@@ -297,7 +296,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                         scaled_loads = []
                         if 'loads' in v:
                             for l in v['loads']:
-                                new_l = copy.deepcopy(l)
+                                new_l = {**l, 'params': list(l['params'])}
                                 if new_l['params']:
                                     new_l['params'][0] *= f_factor
                                 scaled_loads.append(new_l)
@@ -368,63 +367,59 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
     # --- TAB 2: DETAILED DATA ---
     with t2:
         st.markdown(f"### Detailed Data ({view_case})")
-        detailed_rows = []
-        
+        detailed_frames = []
+
         def process_detailed(r_dict, sys_name):
+            # Build one DataFrame block per element from whole arrays instead
+            # of appending Python dicts per point; on fine meshes this is
+            # orders of magnitude faster.
             if not r_dict: return
             for eid, data in r_dict.items():
-                x_vals = data.get('x', [])
+                x_vals = np.asarray(data.get('x', []))
                 n_pts = len(x_vals)
-                
+                if n_pts == 0: continue
+
                 def get_arr(key):
                     arr = data.get(key)
                     if arr is None: return np.zeros(n_pts)
-                    return arr
-                
-                if view_case == "Vehicle Steps":
-                    m = get_arr('M'); v = get_arr('V'); n = get_arr('N')
-                    dx = get_arr('def_x'); dy = get_arr('def_y')
-                    for i in range(n_pts):
-                        detailed_rows.append({
-                            "System": sys_name, "Element": eid, "Location [m]": x_vals[i],
-                            "M [kNm]": m[i], "V [kN]": v[i], "N [kN]": n[i],
-                            "Def_X [mm]": dx[i]*1000, "Def_Y [mm]": dy[i]*1000
-                        })
-                else:
-                    m_max = get_arr('M_max'); m_min = get_arr('M_min')
-                    v_max = get_arr('V_max'); v_min = get_arr('V_min')
-                    n_max = get_arr('N_max'); n_min = get_arr('N_min')
-                    dx_max = get_arr('def_x_max'); dx_min = get_arr('def_x_min')
-                    dy_max = get_arr('def_y_max'); dy_min = get_arr('def_y_min')
-                    
-                    if 'M_max' not in data and 'M' in data:
-                         m_max = data['M']; m_min = data['M']
-                         v_max = data['V']; v_min = data['V']
-                         n_max = data['N']; n_min = data['N']
-                         dx_max = data['def_x']; dx_min = data['def_x']
-                         dy_max = data['def_y']; dy_min = data['def_y']
+                    return np.asarray(arr)
 
-                    for i in range(n_pts):
-                        detailed_rows.append({
-                            "System": sys_name, "Element": eid, "Location [m]": x_vals[i],
-                            "M_max [kNm]": m_max[i], "M_min [kNm]": m_min[i],
-                            "V_max [kN]": v_max[i], "V_min [kN]": v_min[i],
-                            "N_max [kN]": n_max[i], "N_min [kN]": n_min[i],
-                            "Def_X_max [mm]": dx_max[i]*1000, "Def_X_min [mm]": dx_min[i]*1000,
-                            "Def_Y_max [mm]": dy_max[i]*1000, "Def_Y_min [mm]": dy_min[i]*1000
-                        })
+                block = {
+                    "System": np.repeat(sys_name, n_pts),
+                    "Element": np.repeat(eid, n_pts),
+                    "Location [m]": x_vals,
+                }
+                if view_case == "Vehicle Steps":
+                    block.update({
+                        "M [kNm]": get_arr('M'), "V [kN]": get_arr('V'), "N [kN]": get_arr('N'),
+                        "Def_X [mm]": get_arr('def_x') * 1000, "Def_Y [mm]": get_arr('def_y') * 1000,
+                    })
+                else:
+                    is_static_only = 'M_max' not in data and 'M' in data
+                    def env_arr(key):
+                        if is_static_only:
+                            return get_arr(key.replace('_max', '').replace('_min', ''))
+                        return get_arr(key)
+                    block.update({
+                        "M_max [kNm]": env_arr('M_max'), "M_min [kNm]": env_arr('M_min'),
+                        "V_max [kN]": env_arr('V_max'), "V_min [kN]": env_arr('V_min'),
+                        "N_max [kN]": env_arr('N_max'), "N_min [kN]": env_arr('N_min'),
+                        "Def_X_max [mm]": env_arr('def_x_max') * 1000, "Def_X_min [mm]": env_arr('def_x_min') * 1000,
+                        "Def_Y_max [mm]": env_arr('def_y_max') * 1000, "Def_Y_min [mm]": env_arr('def_y_min') * 1000,
+                    })
+                detailed_frames.append(pd.DataFrame(block))
 
         process_detailed(rA, name_A)
         if valid_B:
             process_detailed(rB, name_B)
-        
-        if detailed_rows:
-            df_detailed = pd.DataFrame(detailed_rows)
+
+        if detailed_frames:
+            df_detailed = pd.concat(detailed_frames, ignore_index=True)
             st.dataframe(df_detailed, width='stretch')
             st.download_button(
-                "Download Detailed Data (.csv)", 
-                df_detailed.to_csv(index=False).encode('utf-8'), 
-                f"bricos_detailed_{view_case.replace(' ', '_')}.csv", 
+                "Download Detailed Data (.csv)",
+                lambda: df_detailed.to_csv(index=False).encode('utf-8'),
+                f"bricos_detailed_{view_case.replace(' ', '_')}.csv",
                 "text/csv",
                 disabled=ui_locked
             )

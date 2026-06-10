@@ -1,5 +1,6 @@
 import io
 import datetime
+import threading
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -95,6 +96,9 @@ class BricosReportGenerator:
         
         # Initialize ThreadPool for Parallel Rendering
         self.executor = ThreadPoolExecutor(max_workers=4)
+        # Serializes fig.write_image across worker threads; see
+        # _render_plot_task for why the export step must not run in parallel.
+        self._image_export_lock = threading.Lock()
 
     def _update_progress(self, val):
         if self.progress_callback:
@@ -102,38 +106,13 @@ class BricosReportGenerator:
 
     def _match_vehicle_class(self, current_loads, current_spacing):
         """
-        Checks if the current load/spacing configuration matches a standard vehicle 
+        Checks if the current load/spacing configuration matches a standard vehicle
         defined in vehicles.csv. Returns the name if found, else 'Custom'.
+        Delegates to the cached vehicle library instead of re-reading the CSV
+        for every vehicle in the report.
         """
         try:
-            csv_path = data_mod.resource_path("vehicles.csv")
-            # Fail silently if CSV is missing
-            try:
-                df = pd.read_csv(csv_path)
-            except FileNotFoundError:
-                return "Custom"
-            
-            # Convert current config to arrays for comparison
-            curr_L = np.array(current_loads, dtype=float)
-            curr_S = np.array(current_spacing, dtype=float)
-            
-            for index, row in df.iterrows():
-                try:
-                    # Parse CSV strings "1.0, 2.0" -> numpy array
-                    std_L = np.fromstring(row['Loads'], sep=',')
-                    std_S = np.fromstring(row['Spacing'], sep=',')
-                    
-                    # 1. Compare Lengths
-                    if len(std_L) != len(curr_L) or len(std_S) != len(curr_S):
-                        continue
-                        
-                    # 2. Compare Values with tolerance
-                    if np.allclose(std_L, curr_L, atol=1e-3) and np.allclose(std_S, curr_S, atol=1e-3):
-                        return row['Name']
-                except Exception:
-                    continue
-                    
-            return "Custom"
+            return data_mod.identify_vehicle_class(current_loads, current_spacing)
         except Exception:
             return "Custom"
 
@@ -753,7 +732,13 @@ class BricosReportGenerator:
         try:
             fig = viz.create_plotly_fig(**fig_kwargs)
             b = io.BytesIO()
-            fig.write_image(b, format='png', scale=1.5)
+            # Figure construction runs in parallel across the pool, but the
+            # PNG export is serialized: kaleido 0.2.x shares a single global
+            # scope that is not thread-safe (the source of intermittently
+            # corrupted images), and kaleido 1.x spawns one Chrome process
+            # per concurrent export.
+            with self._image_export_lock:
+                fig.write_image(b, format='png', scale=1.5)
             b.seek(0)
             if not b.getvalue().startswith(b'\x89PNG'):
                 return None

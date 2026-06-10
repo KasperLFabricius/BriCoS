@@ -207,7 +207,9 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
     for rk in rep_keys:
         if rk not in st.session_state: st.session_state[rk] = ""
 
-    st.download_button("Download Configuration (.csv)", data_mod.generate_csv_data(), "brico_config.csv", "text/csv", disabled=ui_locked)
+    # Deferred data callable: the session is serialized only when the user
+    # actually clicks, not on every rerun.
+    st.download_button("Download Configuration (.csv)", data_mod.generate_csv_data, "brico_config.csv", "text/csv", disabled=ui_locked)
 
     uploaded_file = st.file_uploader("Upload Configuration (.csv)", type="csv", key=f"uploader_{st.session_state.uploader_key}", disabled=ui_locked)
     if uploaded_file is not None:
