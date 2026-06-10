@@ -1,12 +1,71 @@
 import ast
 import inspect
+import json
+import os
 import textwrap
 
 import numpy as np
+import pandas as pd
 
 import bricos_data as data
 import bricos_report
 import bricos_solver as solver
+
+
+def test_load_data_from_df_reports_skipped_rows():
+    st = data.st
+    st.session_state.clear()
+    df = pd.DataFrame([
+        {"System": "sysA", "Parameter": "num_spans", "Value": "2"},
+        {"System": "sysA", "Parameter": "L_list", "Value": "{not valid json"},
+        {"System": "Global", "Parameter": "result_mode", "Value": json.dumps("Design (ULS)")},
+    ])
+
+    loaded, skipped = data.load_data_from_df(df)
+
+    assert loaded is True
+    assert skipped == ["sysA/L_list"]
+    assert st.session_state["sysA"]["num_spans"] == 2
+    assert st.session_state["result_mode"] == "Design (ULS)"
+
+
+def test_load_data_from_df_rejects_missing_columns():
+    loaded, skipped = data.load_data_from_df(pd.DataFrame([{"Foo": 1}]))
+
+    assert loaded is False
+    assert skipped == []
+
+
+def test_get_writable_path_frozen_uses_appdata(monkeypatch, tmp_path):
+    monkeypatch.setattr(data.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(data.sys, "executable", str(tmp_path / "app" / "BriCoS.exe"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+
+    path = data.get_writable_path("latest_session.csv")
+
+    expected_dir = os.path.join(str(tmp_path), "Roaming", "BriCoS")
+    assert path == os.path.join(expected_dir, "latest_session.csv")
+    assert os.path.isdir(expected_dir)
+
+    legacy = data.get_legacy_writable_path("latest_session.csv")
+    assert legacy == os.path.join(str(tmp_path), "app", "latest_session.csv")
+
+
+def test_get_writable_path_dev_uses_module_directory():
+    module_dir = os.path.dirname(os.path.abspath(data.__file__))
+
+    assert data.get_writable_path("x.csv") == os.path.join(module_dir, "x.csv")
+    assert data.get_legacy_writable_path("x.csv") is None
+
+
+def test_ai_manifest_is_utf8_json():
+    manifest_path = os.path.join(
+        os.path.dirname(os.path.abspath(data.__file__)), ".bricos_ai_manifest.json"
+    )
+    with open(manifest_path, "rb") as f:
+        obj = json.loads(f.read().decode("utf-8"))
+
+    assert obj.get("project") == "BriCoS"
 
 
 def test_app_version_is_centralized_from_data_module():

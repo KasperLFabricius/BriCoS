@@ -387,11 +387,15 @@ class BricosReportGenerator:
             "Where both Vehicle A and Vehicle B are defined, BriCoS uses independent moving-load envelope superposition: maxima/minima from Vehicle A and Vehicle B may be combined even when they occur at different moving-load positions.")
 
         # Condensed 1.5
-        add_sub("1.4 Load Combinations", 
+        add_sub("1.4 Load Combinations",
             "Design values (<i>E<sub>d</sub></i>) are computed by superposition of factored envelopes: "
             "<i>E<sub>d</sub></i> = <i>K<sub>FI</sub></i> &middot; (<i>&gamma;<sub>G</sub>E<sub>SW</sub></i> + <i>&gamma;<sub>Soil</sub>E<sub>Soil</sub></i> + <i>&gamma;<sub>Q</sub>&Phi;E<sub>Veh</sub></i> + <i>&gamma;<sub>Q</sub>E<sub>Surch</sub></i>). "
             "Partial factors (<i>&gamma;</i>) and Consequence Class factor (<i>K<sub>FI</sub></i>) are applied as defined in settings. "
-            "Traffic surcharge interaction is applied according to user selection (Exclusive or Simultaneous with vehicle load).")
+            "Traffic surcharge interaction is applied according to user selection (Exclusive or Simultaneous with vehicle load). "
+            "Note that a single partial factor per permanent action is applied to both the maximum and minimum "
+            "envelope values; favorable/unfavorable permanent-load combinations "
+            "(e.g. <i>&gamma;<sub>G,inf</sub></i> / <i>&gamma;<sub>G,sup</sub></i>) are not evaluated automatically "
+            "and should be verified with a separate analysis using the favorable factor.")
 
         # Condensed 1.6
         add_sub("1.5 Member Connectivity & Local Axes",
