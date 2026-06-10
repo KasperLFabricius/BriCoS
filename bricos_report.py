@@ -148,13 +148,15 @@ class BricosReportGenerator:
         has_vehicle = BricosReportGenerator._has_vehicle_loads(params)
         has_surcharge = BricosReportGenerator._has_surcharge_loads(params)
 
+        phi_sym = "Phi_SLS" if params.get('phi_sls_reduction', False) else "Phi"
+
         if has_vehicle and has_surcharge:
             if params.get('combine_surcharge_vehicle', False):
-                variable = "1.0 · Phi · Vehicle traffic + 1.0 · Surcharge"
+                variable = f"1.0 · {phi_sym} · Vehicle traffic + 1.0 · Surcharge"
             else:
-                variable = "Envelope(1.0 · Phi · Vehicle traffic, 1.0 · Surcharge)"
+                variable = f"Envelope(1.0 · {phi_sym} · Vehicle traffic, 1.0 · Surcharge)"
         elif has_vehicle:
-            variable = "1.0 · Phi · Vehicle traffic"
+            variable = f"1.0 · {phi_sym} · Vehicle traffic"
         elif has_surcharge:
             variable = "1.0 · Surcharge"
         else:
@@ -162,7 +164,26 @@ class BricosReportGenerator:
 
         if not variable:
             return "1.0 · Permanent"
-        return f"1.0 · Permanent + {variable}"
+        eq = f"1.0 · Permanent + {variable}"
+        if has_vehicle and params.get('phi_sls_reduction', False):
+            eq += (" , where Phi_SLS = 1 + (Phi_ULS - 1)/2 per Vejledning til "
+                   "belastnings- og beregningsgrundlag for broer, 5.4.2")
+        return eq
+
+    @staticmethod
+    def _phi_display_text(p, raw):
+        """Formatted phi value(s) for equations and summaries.
+
+        Returns a single number, or a min-max range when the span-based
+        L_inf methodology produces per-member values.
+        """
+        if p.get('phi_mode') != 'Calculate' or not raw:
+            return f"{p.get('phi', 1.0):.2f}"
+        members = (raw.get('Phi Members') or {})
+        vals = sorted(set(round(v, 4) for v in members.values()))
+        if len(vals) > 1:
+            return f"Phi[{vals[0]:.2f}-{vals[-1]:.2f}]"
+        return f"{raw.get('phi_calc', 1.0):.2f}"
 
     def _build_characteristic_formula_text(self):
         eqA = self._characteristic_formula_text(self.params_A)
@@ -399,20 +420,21 @@ class BricosReportGenerator:
             kfi = p.get('KFI', 1.0)
             gg = p.get('gamma_g', 1.0)
             gj = p.get('gamma_j', 1.0)
-            phi_val = p.get('phi', 1.0)
-            if p.get('phi_mode') == 'Calculate' and raw: phi_val = raw.get('phi_calc', 1.0)
+            phi_txt = self._phi_display_text(p, raw)
             g_veh = p.get('gamma_veh', 1.0)
             g_vehB = p.get('gamma_vehB', 1.0)
             has_A = bool(p.get('vehicle', {}).get('loads'))
             has_B = bool(p.get('vehicleB', {}).get('loads'))
-            
+
             perm = f"{kfi}·{gg}·SW"
             if p.get('soil'): perm += f" + {kfi}·{gj}·Soil"
-            
+
             var = ""
-            if has_A: var += f" + {kfi}·{g_veh}·{phi_val:.2f}·VehA"
-            if has_B: var += f" + {kfi}·{g_vehB}·{phi_val:.2f}·VehB"
+            if has_A: var += f" + {kfi}·{g_veh}·{phi_txt}·VehA"
+            if has_B: var += f" + {kfi}·{g_vehB}·{phi_txt}·VehB"
             if p.get('surcharge'): var += f" + {kfi}·{g_veh}·Surch"
+            if (has_A or has_B) and "[" in phi_txt:
+                var += " (Phi per member, see Dynamic Factor table)"
             return perm + var
             
         eqA = get_eq(self.params_A, self.raw_A)
@@ -574,8 +596,10 @@ class BricosReportGenerator:
         phi_val = p.get('phi', 1.0)
         phi_txt = f"{phi_val:.3f} (Manual)"
         if p.get('phi_mode') == 'Calculate' and raw_res:
-            calc_val = raw_res.get('phi_calc', 1.0)
-            phi_txt = f"{calc_val:.3f} (Calc)"
+            method = "per span" if p.get('phi_linf_mode') == 'Span' else "combined system"
+            phi_txt = f"{self._phi_display_text(p, raw_res)} (Calc, {method})"
+        if p.get('phi_sls_reduction', False):
+            phi_txt += " | SLS reduced per Vejl. 5.4.2"
 
         gamma_str = f"G={p.get('gamma_g', 1.0)} | Soil={p.get('gamma_j', 1.0)}"
         has_A = bool(p.get('vehicle', {}).get('loads'))
@@ -713,20 +737,71 @@ class BricosReportGenerator:
         add_veh_table('vehicle', "A", "vehA")
         add_veh_table('vehicleB', "B", "vehB")
 
-        # 6. PHI CALCULATION LOG
-        if p.get('phi_mode', 'Calculate') == 'Calculate' and raw_res and raw_res.get('phi_log'):
-            self.elements.append(Spacer(1, 0.2*cm))
-            self.elements.append(Paragraph("Dynamic Factor Calculation (<i>Φ</i>):", self.styles['SwecoSmall']))
-            
-            log_lines = raw_res['phi_log']
+        # 6. DYNAMIC FACTOR (PHI)
+        if raw_res:
+            self._add_dynamic_factor_section(p, raw_res)
+
+    def _add_dynamic_factor_section(self, p, raw_res):
+        """Methodology statement, per-member phi table (ULS and SLS values),
+        and the calculation log for the dynamic factor."""
+        self.elements.append(Spacer(1, 0.2*cm))
+        self.elements.append(Paragraph("Dynamic Factor (<i>Φ</i>):", self.styles['SwecoSmall']))
+
+        # Methodology statement with clause references.
+        if p.get('phi_mode') != 'Calculate':
+            method_txt = "Manual input by the user."
+        elif p.get('phi_linf_mode') == 'Span':
+            app = ("applied per member; walls use the max of the adjacent spans"
+                   if p.get('phi_application') != 'Governing'
+                   else "governing (max) value applied to all members")
+            method_txt = (
+                "<i>L<sub>inf</sub></i> = actual span per DS/EN 1991-2 DK NA:2017, "
+                f"Anneks A, A.2.3.5(2); {app}."
+            )
+        else:
+            method_txt = (
+                "<i>L<sub>inf</sub></i> = determinant length of the combined system per "
+                "DS/EN 1991-2:2003, Table 6.2, Case 5.1/5.2/5.3 (renumbered Table 8.2 in the "
+                "2023 edition); <i>Φ</i> per DS/EN 1991-2 DK NA:2017, Anneks A, A.2.3.5(2)."
+            )
+        self.elements.append(Paragraph(method_txt, self.styles['SwecoSmall']))
+
+        sls_reduced = bool(p.get('phi_sls_reduction', False))
+        if sls_reduced:
+            self.elements.append(Paragraph(
+                "SLS reduction enabled: <i>Φ<sub>SLS</sub></i> = 1 + (<i>Φ<sub>ULS</sub></i> - 1)/2 "
+                "per Vejledning til belastnings- og beregningsgrundlag for broer, 5.4.2.",
+                self.styles['SwecoSmall']))
+
+        # Phi value table: per member when available, otherwise one row.
+        phi_uniform = raw_res.get('phi_calc', 1.0) if p.get('phi_mode') == 'Calculate' else p.get('phi', 1.0)
+        members = (raw_res.get('Phi Members') or {}) if p.get('phi_mode') == 'Calculate' else {}
+
+        def fmt_row(label, val):
+            sls_val = 1.0 + (val - 1.0) / 2.0 if sls_reduced else val
+            sls_note = f"{sls_val:.3f}" if sls_reduced else f"{val:.3f} (no reduction)"
+            return [label, f"{val:.3f}", sls_note]
+
+        phi_table = [["Member", "Phi (ULS)", "Phi (SLS)"]]
+        if members:
+            for eid in sorted(members.keys(), key=lambda x: (x[0], int(x[1:]))):
+                phi_table.append(fmt_row(eid, members[eid]))
+        else:
+            phi_table.append(fmt_row("All members", phi_uniform))
+        t = self._make_std_table(phi_table, [4*cm, 3.5*cm, 4.5*cm], font_size=8)
+        self.elements.append(KeepTogether([t]))
+
+        # Calculation log.
+        if raw_res.get('phi_log'):
             formatted_lines = []
-            for line in log_lines:
+            for line in raw_res['phi_log']:
                 # Use Unicode directly instead of entities to avoid & display issues
                 txt = line.replace("L_phi", "<i>L<sub>Φ</sub></i>")\
                           .replace("L_mean", "<i>L<sub>mean</sub></i>")\
+                          .replace("L_inf", "<i>L<sub>inf</sub></i>")\
                           .replace("Phi", "<i>Φ</i>")
                 formatted_lines.append(txt)
-            
+
             for line in formatted_lines:
                 # Use SwecoLog (leading=14) to prevent overlap
                 self.elements.append(Paragraph(f"• {line}", self.styles['SwecoLog']))

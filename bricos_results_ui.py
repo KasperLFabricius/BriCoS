@@ -286,12 +286,16 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             step_idx = c_step_slide.slider("Step Index", 0, max_steps-1, 0, key="veh_step_slider_persistent", disabled=ui_locked)
             
             st.markdown("---")
-            def get_step(res, idx, k_res, f_factor):
+            def get_step(res, idx, k_res, f_default, f_map):
+                # f_map holds per-member factors (eid -> factor incl. phi) so
+                # step results scale consistently with the envelopes when phi
+                # varies per member; f_default covers any missing eid.
                 s_list = res.get(k_res, [])
                 if idx < len(s_list):
                     step_data = s_list[idx]['res']
                     out = {}
                     for k, v in step_data.items():
+                        f_factor = f_map.get(k, f_default)
                         # Scale loads for visualization
                         scaled_loads = []
                         if 'loads' in v:
@@ -301,9 +305,9 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                                     new_l['params'][0] *= f_factor
                                 scaled_loads.append(new_l)
 
-                        out[k] = {**v, 
+                        out[k] = {**v,
                             'loads': scaled_loads,
-                            'M':v['M']*f_factor, 'V':v['V']*f_factor, 'N':v['N']*f_factor, 
+                            'M':v['M']*f_factor, 'V':v['V']*f_factor, 'N':v['N']*f_factor,
                             'M_max':v['M']*f_factor, 'M_min':v['M']*f_factor,
                             'V_max':v['V']*f_factor, 'V_min':v['V']*f_factor,
                             'N_max':v['N']*f_factor, 'N_min':v['N']*f_factor,
@@ -314,14 +318,19 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                     return out
                 return {}
 
-            f_A = res_A['f_vehA'] if active_veh_step == "Vehicle A" and has_res_A else 1.0
-            f_B = res_B['f_vehA'] if active_veh_step == "Vehicle A" and valid_B and has_res_B else 1.0
-            if active_veh_step == "Vehicle B":
-                 f_A = res_A['f_vehB'] if has_res_A else 1.0
-                 f_B = res_B['f_vehB'] if valid_B and has_res_B else 1.0
-                 
-            rA = get_step(res_A, step_idx, veh_key_res, f_A)
-            rB = get_step(res_B, step_idx, veh_key_res, f_B) if valid_B else {}
+            if active_veh_step == "Vehicle A":
+                f_A = res_A['f_vehA'] if has_res_A else 1.0
+                f_B = res_B['f_vehA'] if valid_B and has_res_B else 1.0
+                f_map_A = res_A.get('f_vehA_map', {}) if has_res_A else {}
+                f_map_B = res_B.get('f_vehA_map', {}) if valid_B and has_res_B else {}
+            else:
+                f_A = res_A['f_vehB'] if has_res_A else 1.0
+                f_B = res_B['f_vehB'] if valid_B and has_res_B else 1.0
+                f_map_A = res_A.get('f_vehB_map', {}) if has_res_A else {}
+                f_map_B = res_B.get('f_vehB_map', {}) if valid_B and has_res_B else {}
+
+            rA = get_step(res_A, step_idx, veh_key_res, f_A, f_map_A)
+            rB = get_step(res_B, step_idx, veh_key_res, f_B, f_map_B) if valid_B else {}
     else:
         key_map = {"Total Envelope": "Total Envelope", "Selfweight": "Selfweight", "Soil": "Soil", "Surcharge": "Surcharge", "Vehicle Envelope": "Vehicle Envelope"}
         target_key = key_map.get(view_case, "Total Envelope")

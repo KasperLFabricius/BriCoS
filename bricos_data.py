@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.48"
+APP_VERSION = "0.49"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -612,7 +612,15 @@ def get_def():
         'gamma_veh': 1.4, 'gamma_vehB': 1.05, 
         'phi': 1.0, 'scale_manual': 2.0,
         'phi_mode': 'Calculate',
-        
+        # L_inf methodology: 'Determinant' (EN 1991-2:2003 Tab. 6.2, combined
+        # system) or 'Span' (DK NA A.2.3.5(2), L_inf = actual span).
+        'phi_linf_mode': 'Determinant',
+        # In 'Span' mode: 'Per member' or 'Governing' (max applied to all).
+        'phi_application': 'Per member',
+        # Optional SLS reduction phi_SLS = 1+(phi-1)/2 (Vejledning 5.4.2).
+        'phi_sls_reduction': False,
+
+
         # 0.5 m mesh keeps the (undocumented before v0.48) deflection
         # interpolation error negligible; affordable since the v0.47
         # batched recovery kernel.
@@ -654,9 +662,12 @@ def get_clear(name_suffix, current_mode):
         'gamma_g': 1.0, 'gamma_j': 1.0, 
         'gamma_veh': 1.0, 'gamma_vehB': 1.0, 
         
-        'phi': 1.0, 
+        'phi': 1.0,
         'phi_mode': 'Manual',
-        
+        'phi_linf_mode': 'Determinant',
+        'phi_application': 'Per member',
+        'phi_sls_reduction': False,
+
         'scale_manual': 2.0, 
         'mesh_size': 0.5, 'step_size': 0.5,
         'name': f"System {name_suffix}",
@@ -686,6 +697,15 @@ def force_ui_update(sys_key, data):
     st.session_state[f"{sys_key}_kfi"] = data.get('KFI', 1.0)
     st.session_state[f"{sys_key}_phim"] = data.get('phi_mode', 'Calculate')
     st.session_state[f"{sys_key}_phiv"] = data.get('phi', 1.0)
+    st.session_state[f"{sys_key}_philinf"] = (
+        "Per span (DK NA A.2.3.5(2))" if data.get('phi_linf_mode') == 'Span'
+        else "Combined system (EN 1991-2 Tab. 6.2)"
+    )
+    st.session_state[f"{sys_key}_phiapp"] = (
+        "Governing value for all members" if data.get('phi_application') == 'Governing'
+        else "Per member"
+    )
+    st.session_state[f"{sys_key}_phisls"] = bool(data.get('phi_sls_reduction', False))
     st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
     
     # 2. Shear Deformation Keys & Analysis Settings
