@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.47"
+APP_VERSION = "0.48"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -613,8 +613,11 @@ def get_def():
         'phi': 1.0, 'scale_manual': 2.0,
         'phi_mode': 'Calculate',
         
-        'mesh_size': 2.0,
-        'step_size': 0.2,
+        # 0.5 m mesh keeps the (undocumented before v0.48) deflection
+        # interpolation error negligible; affordable since the v0.47
+        # batched recovery kernel.
+        'mesh_size': 0.5,
+        'step_size': 0.5,
         'vehicle_direction': 'Both',
         'use_shear_def': True,
         'b_eff': 3.0,
@@ -655,7 +658,7 @@ def get_clear(name_suffix, current_mode):
         'phi_mode': 'Manual',
         
         'scale_manual': 2.0, 
-        'mesh_size': 0.5, 'step_size': 0.2,
+        'mesh_size': 0.5, 'step_size': 0.5,
         'name': f"System {name_suffix}",
         'last_mode': current_mode,
         'combine_surcharge_vehicle': False,
@@ -691,7 +694,7 @@ def force_ui_update(sys_key, data):
         st.session_state["beff_input_sidebar"] = data.get('b_eff', 1.0)
         st.session_state["nu_input_sidebar"] = data.get('nu', 0.2)
         st.session_state["common_mesh_slider"] = data.get('mesh_size', 0.5)
-        st.session_state["common_step_slider"] = data.get('step_size', 0.2)
+        st.session_state["common_step_slider"] = data.get('step_size', 0.5)
     
     # 3. Factors
     st.session_state[f"{sys_key}_gg_cust"] = data.get('gamma_g', 1.0)

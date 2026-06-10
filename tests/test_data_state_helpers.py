@@ -100,6 +100,15 @@ def test_get_clear_initializes_empty_vehicle_and_surcharge_state():
     assert params["use_shear_def"] is False
 
 
+def test_default_states_use_half_meter_mesh_and_step():
+    # 0.5 m mesh keeps the documented deflection interpolation error
+    # negligible (see report section 1.1); defaults must stay aligned
+    # between the demo state and the cleared state.
+    for params in (data.get_def(), data.get_clear("A", "Frame")):
+        assert params["mesh_size"] == 0.5
+        assert params["step_size"] == 0.5
+
+
 def test_sanitize_input_data_preserves_geometry_defaults_and_material_lengths():
     params = data.get_clear("A", "Beam")
     params["span_geom_0"] = {"type": 1, "shape": 0, "vals": []}

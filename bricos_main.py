@@ -337,9 +337,15 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     st.markdown("**Calculation Precision**")
     c_mesh, c_step = st.columns(2)
     def_mesh = st.session_state['sysA'].get('mesh_size', 0.5)
-    def_step = st.session_state['sysA'].get('step_size', 0.2)
-    m_val = c_mesh.slider("Mesh Size [m]", 0.1, 5.0, def_mesh, 0.1, key="common_mesh_slider", disabled=ui_locked)
-    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider", disabled=ui_locked)
+    def_step = st.session_state['sysA'].get('step_size', 0.5)
+    help_mesh = (
+        "Finite Element discretization length. Forces (M, V, N) are exact regardless of mesh size; "
+        "deflections are interpolated between nodes, so deflection accuracy under loads improves "
+        "with finer mesh. The 0.5 m default keeps the interpolation error negligible."
+    )
+    help_step = "Vehicle moving-load increment. Smaller steps sample the envelopes more densely."
+    m_val = c_mesh.slider("Mesh Size [m]", 0.1, 5.0, def_mesh, 0.1, key="common_mesh_slider", disabled=ui_locked, help=help_mesh)
+    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider", disabled=ui_locked, help=help_step)
 
 if "common_mesh_slider" in st.session_state:
     st.session_state['sysA']['mesh_size'] = m_val
