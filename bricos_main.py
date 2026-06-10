@@ -508,7 +508,31 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", disabled=ui_locked)
     p['phi_mode'] = phi_mode
     if phi_mode == "Manual":
-        p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv", disabled=ui_locked)
+        help_scope = (
+            "Global: one manual Phi for all members. Per span: a manual Phi per span; "
+            "walls take the max of the adjacent spans' Phi (same convention as the "
+            "calculated per-span methodology)."
+        )
+        scope_opts = ["Global", "Per span"]
+        idx_scope = 1 if p.get('phi_manual_scope') == 'Per span' else 0
+        scope_sel = st.radio("Manual Phi scope:", scope_opts, index=idx_scope, horizontal=True, key=f"{curr}_phiscope", disabled=ui_locked, help=help_scope)
+        p['phi_manual_scope'] = 'Per span' if scope_sel == "Per span" else 'Global'
+
+        if p['phi_manual_scope'] == 'Per span':
+            if 'phi_span_list' not in p or not isinstance(p.get('phi_span_list'), list):
+                p['phi_span_list'] = [1.0] * 10
+            while len(p['phi_span_list']) < 10:
+                p['phi_span_list'].append(1.0)
+            phi_cols = st.columns(min(3, max(1, p.get('num_spans', 1))))
+            for i in range(p.get('num_spans', 1)):
+                col = phi_cols[i % len(phi_cols)]
+                p['phi_span_list'][i] = col.number_input(
+                    f"Phi S{i+1}", value=float(p['phi_span_list'][i]),
+                    min_value=1.0, max_value=2.0, step=0.005, format="%.3f",
+                    key=f"{curr}_phiv_s{i}", disabled=ui_locked
+                )
+        else:
+            p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv", disabled=ui_locked)
     else:
         help_linf = (
             "How the influence length L_inf for the stoedfaktor (DK NA A.2.3.5(2)) is determined.\n"
@@ -534,16 +558,24 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
             p['phi_application'] = 'Governing' if "Governing" in app_sel else 'Per member'
 
     help_sls = (
-        "Optional reduction of the stoedfaktor in the Characteristic (SLS) result mode per "
-        "'Vejledning til belastnings- og beregningsgrundlag for broer' 5.4.2: "
-        "phi_SLS = 1 + (phi_ULS - 1)/2. Applies to calculated and manual Phi. "
-        "ULS results are unaffected."
+        "Phi applied in the Characteristic (SLS) result mode. ULS results are unaffected.\n"
+        "- Same as ULS: no reduction (default, conservative).\n"
+        "- Reduced: phi_SLS = 1 + (phi_ULS - 1)/2 per 'Vejledning til belastnings- og "
+        "beregningsgrundlag for broer' 5.4.2; applies per member to calculated and manual Phi.\n"
+        "- Manual SLS value: a user-defined uniform phi_SLS replaces all member values in SLS."
     )
-    p['phi_sls_reduction'] = st.checkbox(
-        r"Reduced $\varphi$ in SLS (Vejledning 5.4.2)",
-        value=bool(p.get('phi_sls_reduction', False)),
-        key=f"{curr}_phisls", disabled=ui_locked, help=help_sls
-    )
+    sls_opts = ["Same as ULS", "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)", "Manual SLS value"]
+    sls_mode_map = {"Same as ULS": 'Same', sls_opts[1]: 'Reduced', "Manual SLS value": 'Manual'}
+    curr_sls = p.get('phi_sls_mode', 'Same')
+    idx_sls = {'Same': 0, 'Reduced': 1, 'Manual': 2}.get(curr_sls, 0)
+    sls_sel = st.selectbox(r"$\varphi$ in SLS:", sls_opts, index=idx_sls, key=f"{curr}_phisls", disabled=ui_locked, help=help_sls)
+    p['phi_sls_mode'] = sls_mode_map.get(sls_sel, 'Same')
+    if p['phi_sls_mode'] == 'Manual':
+        p['phi_sls'] = st.number_input(
+            r"Manual $\varphi_{SLS}$", value=float(p.get('phi_sls', 1.0)),
+            min_value=1.0, max_value=2.0, step=0.005, format="%.3f",
+            key=f"{curr}_phislsv", disabled=ui_locked
+        )
 
     phi_log_placeholder = st.empty()
 
@@ -940,20 +972,29 @@ if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
 # Show the phi log whenever the ACTIVE system solved; previously it
 # disappeared for system A whenever system B had a validation error.
 active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
-if p.get('phi_mode') == 'Calculate' and active_raw_res:
+if active_raw_res:
     phi_val = active_raw_res.get('phi_calc', 1.0)
     phi_members_ui = active_raw_res.get('Phi Members') or {}
+    is_calc = p.get('phi_mode') == 'Calculate'
+    phi_label = "Calculated Phi" if is_calc else "Manual Phi"
     with phi_log_placeholder.container():
         if phi_members_ui:
             vals = sorted(set(round(v, 3) for v in phi_members_ui.values()))
             if len(vals) > 1:
-                st.markdown(f"**Calculated Phi (per member):** {vals[0]:.3f} - {vals[-1]:.3f}")
+                st.markdown(f"**{phi_label} (per member):** {vals[0]:.3f} - {vals[-1]:.3f}")
             else:
-                st.markdown(f"**Calculated Phi:** {vals[0]:.3f}")
+                st.markdown(f"**{phi_label}:** {vals[0]:.3f}")
         else:
-            st.markdown(f"**Calculated Phi:** {phi_val:.3f}")
+            phi_shown = phi_val if is_calc else p.get('phi', 1.0)
+            st.markdown(f"**{phi_label}:** {phi_shown:.3f}")
         with st.expander("Phi Calculation Log", expanded=False):
-            if p.get('phi_linf_mode') == 'Span':
+            if not is_calc:
+                st.markdown(
+                    "The dynamic factor is a manual input"
+                    + (" per span; walls take the max of the adjacent spans."
+                       if p.get('phi_manual_scope') == 'Per span' else ".")
+                )
+            elif p.get('phi_linf_mode') == 'Span':
                 st.markdown(
                     "The influence length is taken as the actual span per member, per "
                     "DS/EN 1991-2 DK NA Bridges:2017, Anneks A, A.2.3.5(2). The dynamic factor "
@@ -967,11 +1008,17 @@ if p.get('phi_mode') == 'Calculate' and active_raw_res:
                     "factor is then calculated in accordance with DS/EN 1991-2 DK NA Bridges:2017, "
                     "Anneks A, A.2.3.5(2)."
                 )
-            if p.get('phi_sls_reduction', False):
+            sls_mode_ui = p.get('phi_sls_mode', 'Same')
+            if sls_mode_ui == 'Reduced':
                 st.markdown(
                     "In the Characteristic (SLS) result mode the stoedfaktor is reduced to "
                     "phi_SLS = 1 + (phi_ULS - 1)/2 per Vejledning til belastnings- og "
                     "beregningsgrundlag for broer, 5.4.2."
+                )
+            elif sls_mode_ui == 'Manual':
+                st.markdown(
+                    f"In the Characteristic (SLS) result mode a user-defined uniform "
+                    f"phi_SLS = {p.get('phi_sls', 1.0):.3f} is applied."
                 )
             for log_line in active_raw_res.get('phi_log', []): st.caption(log_line)
 

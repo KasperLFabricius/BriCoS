@@ -148,7 +148,8 @@ class BricosReportGenerator:
         has_vehicle = BricosReportGenerator._has_vehicle_loads(params)
         has_surcharge = BricosReportGenerator._has_surcharge_loads(params)
 
-        phi_sym = "Phi_SLS" if params.get('phi_sls_reduction', False) else "Phi"
+        sls_mode = params.get('phi_sls_mode', 'Same')
+        phi_sym = "Phi_SLS" if sls_mode in ('Reduced', 'Manual') else "Phi"
 
         if has_vehicle and has_surcharge:
             if params.get('combine_surcharge_vehicle', False):
@@ -165,25 +166,29 @@ class BricosReportGenerator:
         if not variable:
             return "1.0 · Permanent"
         eq = f"1.0 · Permanent + {variable}"
-        if has_vehicle and params.get('phi_sls_reduction', False):
+        if has_vehicle and sls_mode == 'Reduced':
             eq += (" , where Phi_SLS = 1 + (Phi_ULS - 1)/2 per Vejledning til "
                    "belastnings- og beregningsgrundlag for broer, 5.4.2")
+        elif has_vehicle and sls_mode == 'Manual':
+            eq += f" , where Phi_SLS = {params.get('phi_sls', 1.0):.3f} (user-defined)"
         return eq
 
     @staticmethod
     def _phi_display_text(p, raw):
         """Formatted phi value(s) for equations and summaries.
 
-        Returns a single number, or a min-max range when the span-based
-        L_inf methodology produces per-member values.
+        Returns a single number, or a min-max range when per-member values
+        exist (calculated span-based or manual per-span).
         """
-        if p.get('phi_mode') != 'Calculate' or not raw:
-            return f"{p.get('phi', 1.0):.2f}"
-        members = (raw.get('Phi Members') or {})
+        members = (raw.get('Phi Members') or {}) if raw else {}
         vals = sorted(set(round(v, 4) for v in members.values()))
         if len(vals) > 1:
             return f"Phi[{vals[0]:.2f}-{vals[-1]:.2f}]"
-        return f"{raw.get('phi_calc', 1.0):.2f}"
+        if vals:
+            return f"{vals[0]:.2f}"
+        if p.get('phi_mode') == 'Calculate' and raw:
+            return f"{raw.get('phi_calc', 1.0):.2f}"
+        return f"{p.get('phi', 1.0):.2f}"
 
     def _build_characteristic_formula_text(self):
         eqA = self._characteristic_formula_text(self.params_A)
@@ -593,13 +598,17 @@ class BricosReportGenerator:
     def _add_system_input_summary(self, sys_label, p, raw_res, props, sys_key_id):
         self.elements.append(Paragraph(f"<b>{sys_label} ({p.get('name', '')})</b> - {p['mode']}", self.styles['Heading3']))
         
-        phi_val = p.get('phi', 1.0)
-        phi_txt = f"{phi_val:.3f} (Manual)"
         if p.get('phi_mode') == 'Calculate' and raw_res:
             method = "per span" if p.get('phi_linf_mode') == 'Span' else "combined system"
             phi_txt = f"{self._phi_display_text(p, raw_res)} (Calc, {method})"
-        if p.get('phi_sls_reduction', False):
+        else:
+            scope = "per span" if p.get('phi_manual_scope') == 'Per span' else "global"
+            phi_txt = f"{self._phi_display_text(p, raw_res)} (Manual, {scope})"
+        sls_mode = p.get('phi_sls_mode', 'Same')
+        if sls_mode == 'Reduced':
             phi_txt += " | SLS reduced per Vejl. 5.4.2"
+        elif sls_mode == 'Manual':
+            phi_txt += f" | SLS manual = {p.get('phi_sls', 1.0):.3f}"
 
         gamma_str = f"G={p.get('gamma_g', 1.0)} | Soil={p.get('gamma_j', 1.0)}"
         has_A = bool(p.get('vehicle', {}).get('loads'))
@@ -749,7 +758,11 @@ class BricosReportGenerator:
 
         # Methodology statement with clause references.
         if p.get('phi_mode') != 'Calculate':
-            method_txt = "Manual input by the user."
+            if p.get('phi_manual_scope') == 'Per span':
+                method_txt = ("Manual input by the user, per span; walls take the max of "
+                              "the adjacent spans' <i>Φ</i>.")
+            else:
+                method_txt = "Manual input by the user (single value for all members)."
         elif p.get('phi_linf_mode') == 'Span':
             app = ("applied per member; walls use the max of the adjacent spans"
                    if p.get('phi_application') != 'Governing'
@@ -766,20 +779,31 @@ class BricosReportGenerator:
             )
         self.elements.append(Paragraph(method_txt, self.styles['SwecoSmall']))
 
-        sls_reduced = bool(p.get('phi_sls_reduction', False))
-        if sls_reduced:
+        sls_mode = p.get('phi_sls_mode', 'Same')
+        if sls_mode == 'Reduced':
             self.elements.append(Paragraph(
                 "SLS reduction enabled: <i>Φ<sub>SLS</sub></i> = 1 + (<i>Φ<sub>ULS</sub></i> - 1)/2 "
                 "per Vejledning til belastnings- og beregningsgrundlag for broer, 5.4.2.",
                 self.styles['SwecoSmall']))
+        elif sls_mode == 'Manual':
+            self.elements.append(Paragraph(
+                f"SLS: user-defined uniform <i>Φ<sub>SLS</sub></i> = {p.get('phi_sls', 1.0):.3f} "
+                "replaces all member values in the Characteristic (SLS) result mode.",
+                self.styles['SwecoSmall']))
 
         # Phi value table: per member when available, otherwise one row.
+        # Per-member values exist for the calculated span-based methodology
+        # and for manual per-span input alike.
         phi_uniform = raw_res.get('phi_calc', 1.0) if p.get('phi_mode') == 'Calculate' else p.get('phi', 1.0)
-        members = (raw_res.get('Phi Members') or {}) if p.get('phi_mode') == 'Calculate' else {}
+        members = raw_res.get('Phi Members') or {}
 
         def fmt_row(label, val):
-            sls_val = 1.0 + (val - 1.0) / 2.0 if sls_reduced else val
-            sls_note = f"{sls_val:.3f}" if sls_reduced else f"{val:.3f} (no reduction)"
+            if sls_mode == 'Reduced':
+                sls_note = f"{1.0 + (val - 1.0) / 2.0:.3f}"
+            elif sls_mode == 'Manual':
+                sls_note = f"{p.get('phi_sls', 1.0):.3f} (manual)"
+            else:
+                sls_note = f"{val:.3f} (no reduction)"
             return [label, f"{val:.3f}", sls_note]
 
         phi_table = [["Member", "Phi (ULS)", "Phi (SLS)"]]

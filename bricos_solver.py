@@ -475,8 +475,8 @@ NON_SOLVER_PARAM_KEYS = frozenset({
     'vehicle_loads', 'vehicle_space', 'vehicleB_loads', 'vehicleB_space',
     'KFI', 'gamma_g', 'gamma_j', 'gamma_veh', 'gamma_vehB',
     'combine_surcharge_vehicle',
-    # SLS phi reduction is applied in combine_results, not in the raw analysis.
-    'phi_sls_reduction',
+    # SLS phi treatment is applied in combine_results, not in the raw analysis.
+    'phi_sls_mode', 'phi_sls',
 })
 
 
@@ -524,8 +524,30 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     phi_members = {}
 
     if phi_mode == "Manual":
-        calc_phi = params.get('phi', 1.0)
-        phi_log.append(f"Manual input: {calc_phi}")
+        if params.get('phi_manual_scope') == 'Per span':
+            phi_log.append("Methodology: manual input per span; walls take the "
+                           "max of the adjacent spans' Phi")
+            phi_spans = params.get('phi_span_list', [])
+            span_phis = []
+            for i in range(params['num_spans']):
+                p_i = float(phi_spans[i]) if i < len(phi_spans) else params.get('phi', 1.0)
+                phi_members[f"S{i+1}"] = p_i
+                span_phis.append(p_i)
+                phi_log.append(f"Span{i+1}: manual Phi = {p_i:.3f}")
+            if params['mode'] == 'Frame' and span_phis:
+                for i in range(params['num_spans'] + 1):
+                    if i == 0:
+                        p_w = span_phis[0]
+                    elif i == params['num_spans']:
+                        p_w = span_phis[-1]
+                    else:
+                        p_w = max(span_phis[i-1], span_phis[i])
+                    phi_members[f"W{i+1}"] = p_w
+            calc_phi = max(span_phis) if span_phis else params.get('phi', 1.0)
+            phi_log.append(f"Governing (max) Phi = {calc_phi:.3f}")
+        else:
+            calc_phi = params.get('phi', 1.0)
+            phi_log.append(f"Manual input: {calc_phi}")
     elif linf_mode == 'Span':
         phi_log.append("Methodology: L_inf = actual span, per member "
                        "(DS/EN 1991-2 DK NA:2017, Anneks A, A.2.3.5(2))")
@@ -1239,24 +1261,33 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
     gamma_j = params.get('gamma_j', 1.0)
     gamma_vA = params.get('gamma_veh', 1.0)
     gamma_vB = params.get('gamma_vehB', 1.0)
-    phi = raw_res['phi_calc'] if params.get('phi_mode') == 'Calculate' else params.get('phi', 1.0)
-
-    # Per-member phi from the span-based L_inf methodology. Empty (or manual
-    # phi mode) means the single phi value applies uniformly.
+    # Per-member phi (calculated span-based or manual per-span values are
+    # embedded by the solver). Empty means the single phi applies uniformly.
     phi_members = raw_res.get('Phi Members') or {}
-    if params.get('phi_mode') != 'Calculate':
-        phi_members = {}
+    if params.get('phi_mode') == 'Calculate':
+        phi = raw_res['phi_calc']
+    else:
+        # Manual: per-span values arrive via Phi Members; the global manual
+        # value is the uniform fallback.
+        phi = params.get('phi', 1.0)
+        if phi_members:
+            phi = max(phi_members.values())
 
-    # Optional SLS stoedfaktor reduction per "Vejledning til belastnings- og
-    # beregningsgrundlag for broer" 5.4.2: phi_SLS = 1 + (phi_ULS - 1)/2.
-    reduce_sls = bool(params.get('phi_sls_reduction', False)) and result_mode == "Characteristic (SLS)"
+    # Phi treatment in the Characteristic (SLS) result mode:
+    # 'Same' (= ULS), 'Reduced' (1+(phi-1)/2, Vejledning 5.4.2) or
+    # 'Manual' (user-defined uniform value).
+    sls_mode = params.get('phi_sls_mode', 'Same')
+    sls_active = result_mode == "Characteristic (SLS)" and sls_mode in ('Reduced', 'Manual')
+    phi_sls_manual = params.get('phi_sls', 1.0)
 
     def phi_for(eid):
         if result_mode == "Characteristic (No Dynamic Factor)":
             return 1.0
+        if sls_active and sls_mode == 'Manual':
+            return phi_sls_manual
         p = phi_members.get(eid, phi)
-        if reduce_sls:
-            p = 1.0 + (p - 1.0) / 2.0
+        if sls_active:
+            return 1.0 + (p - 1.0) / 2.0
         return p
 
     phi_repr = phi_for('__representative__')
@@ -1414,7 +1445,7 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         'f_vehA_map': f_vehA_map, 'f_vehB_map': f_vehB_map,
         'phi_calc': phi, 'phi_log': raw_res['phi_log'],
         'Phi Members': phi_members,
-        'phi_sls_reduced': reduce_sls,
+        'phi_sls_mode_applied': sls_mode if sls_active else 'Same',
         'Restrained Nodes': raw_res.get('Restrained Nodes', []),
         'Reactions': raw_res.get('Reactions', {})
     }
