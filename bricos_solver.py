@@ -456,8 +456,31 @@ def point_load_belongs_to_sub_element(x_pos_glob, loc_start, loc_end, is_last, t
 # 2. MAIN SOLVER CONTROLLER
 # ==========================================
 
-@st.cache_data(show_spinner=False)
+# Keys that never influence the raw analysis results. Cosmetic/UI state
+# (name, plot scale, text projections) and combination-stage factors
+# (gammas, KFI) are stripped from the cache key so that editing them does
+# not trigger a full re-analysis. Combination factors are applied later in
+# combine_results, which is not cached.
+NON_SOLVER_PARAM_KEYS = frozenset({
+    'name', 'scale_manual', 'last_mode', 'backup',
+    '_vehicle_text_errors',
+    'vehicle_loads', 'vehicle_space', 'vehicleB_loads', 'vehicleB_space',
+    'KFI', 'gamma_g', 'gamma_j', 'gamma_veh', 'gamma_vehB',
+    'combine_surcharge_vehicle',
+})
+
+
+def solver_cache_params(params):
+    """Return only the parameters that influence run_raw_analysis output."""
+    return {k: v for k, v in params.items() if k not in NON_SOLVER_PARAM_KEYS}
+
+
 def run_raw_analysis(params, phi_val_override=None):
+    return _run_raw_analysis_cached(solver_cache_params(params), phi_val_override)
+
+
+@st.cache_data(show_spinner=False)
+def _run_raw_analysis_cached(params, phi_val_override=None):
     phi_mode = params.get('phi_mode', 'Calculate')
     
     # --- PHI CALCULATION ---

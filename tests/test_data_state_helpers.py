@@ -102,6 +102,26 @@ def test_combine_results_scales_all_deformation_keys_for_static_components():
     np.testing.assert_allclose(span["def_y_min"], base["S1"]["def_y"] * 6.0)
 
 
+def test_solver_cache_params_strips_cosmetic_and_combination_keys():
+    params = data.get_def()
+    params["name"] = "Renamed System"
+    params["scale_manual"] = 4.2
+    params["_vehicle_text_errors"] = {"vehicle": ["bad input"]}
+
+    filtered = solver.solver_cache_params(params)
+
+    for key in solver.NON_SOLVER_PARAM_KEYS:
+        assert key not in filtered
+
+    # Solver-relevant keys must survive untouched.
+    assert filtered["mesh_size"] == params["mesh_size"]
+    assert filtered["step_size"] == params["step_size"]
+    assert filtered["L_list"] == params["L_list"]
+    assert filtered["vehicle"] == params["vehicle"]
+    assert filtered["phi_mode"] == params["phi_mode"]
+    assert filtered["mode"] == params["mode"]
+
+
 def test_combine_results_has_no_duplicate_literal_dict_keys():
     tree = ast.parse(textwrap.dedent(inspect.getsource(solver.combine_results)))
     duplicates = []

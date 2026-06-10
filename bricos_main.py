@@ -343,10 +343,21 @@ with st.sidebar.expander("Report Generation", expanded=False):
     st.text_area("Comments", height=100, key="rep_comm", disabled=ui_locked)
     
     prog_bar = st.empty()
-    
+
     if st.button("Generate PDF Report", type="primary", disabled=ui_locked):
         st.session_state.is_generating_report = True
         st.rerun()
+
+    # Show the outcome of the last generation attempt. The status is stored in
+    # session state because the generation block ends in st.rerun(), which
+    # would otherwise wipe any message rendered there.
+    report_status = st.session_state.pop('report_status', None)
+    if report_status:
+        status_kind, status_msg = report_status
+        if status_kind == 'error':
+            st.error(status_msg)
+        else:
+            st.success(status_msg)
 
     if 'report_buffer' in st.session_state:
         st.download_button("Download Report PDF", st.session_state['report_buffer'], f"BriCoS_Report_{st.session_state.rep_pno}.pdf", "application/pdf")
@@ -865,7 +876,7 @@ if p.get('phi_mode') == 'Calculate' and raw_res_A and raw_res_B:
 
 if st.session_state.is_generating_report:
     if err_A or err_B:
-        st.error("Report generation blocked: correct the model validation/analysis errors before generating a report.")
+        st.session_state['report_status'] = ('error', "Report generation blocked: correct the model validation/analysis errors before generating a report.")
         st.session_state.is_generating_report = False
         st.rerun()
 
@@ -895,16 +906,20 @@ if st.session_state.is_generating_report:
         rep_gen.generate()
         buffer.seek(0)
         st.session_state['report_buffer'] = buffer
-        st.success("Report Generated!")
-        
+        st.session_state['report_status'] = ('success', "Report generated. Use the download button below.")
+
     except Exception as e:
-        # --- NEW: Write error to file so we can read it ---
         import traceback
-        with open("crash_log.txt", "w") as f:
-            traceback.print_exc(file=f)
-        # -------------------------------------------------
-        st.error(f"Report Generation Failed: {e}")
-    
+        log_path = data_mod.get_writable_path("crash_log.txt")
+        log_note = ""
+        try:
+            with open(log_path, "w") as f:
+                traceback.print_exc(file=f)
+            log_note = f" Details written to {log_path}."
+        except OSError:
+            pass
+        st.session_state['report_status'] = ('error', f"Report Generation Failed: {e}.{log_note}")
+
     finally:
         st.session_state.is_generating_report = False
         prog_bar.empty()
