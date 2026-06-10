@@ -754,8 +754,10 @@ def force_ui_update(sys_key, data):
     sync_vehicle_widgets_from_params(sys_key, data)
 
     # 7. Supports
-    prefix = f"{sys_key}_"
-    supp_keys = [k for k in st.session_state.keys() if k.startswith(prefix) and "_k" in k]
+    # Only clear the custom-spring widget keys. A broad "_k" substring match
+    # would also delete unrelated keys such as f"{sys_key}_kfi".
+    spring_prefixes = (f"{sys_key}_kx_", f"{sys_key}_ky_", f"{sys_key}_km_")
+    supp_keys = [k for k in st.session_state.keys() if k.startswith(spring_prefixes)]
     for k in supp_keys: del st.session_state[k]
     
     for i, supp in enumerate(data.get('supports', [])):
