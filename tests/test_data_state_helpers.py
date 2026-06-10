@@ -100,6 +100,28 @@ def test_get_clear_initializes_empty_vehicle_and_surcharge_state():
     assert params["use_shear_def"] is False
 
 
+def test_sanitize_migrates_legacy_sls_reduction_flag():
+    # v0.49 saved the SLS reduction as a boolean (phi_sls_reduction). Loaded
+    # sessions are seeded with current defaults, so phi_sls_mode exists as
+    # 'Same' before the legacy file value lands on top.
+    params = data.get_def()
+    params["phi_sls_reduction"] = True
+    sanitized = data.sanitize_input_data(params)
+    assert sanitized["phi_sls_mode"] == "Reduced"
+    assert "phi_sls_reduction" not in sanitized
+
+    # A stale legacy flag must not downgrade an explicit v0.50 setting.
+    params2 = data.get_def()
+    params2["phi_sls_mode"] = "Manual"
+    params2["phi_sls_reduction"] = True
+    assert data.sanitize_input_data(params2)["phi_sls_mode"] == "Manual"
+
+    # Legacy flag False maps to 'Same'.
+    params3 = data.get_def()
+    params3["phi_sls_reduction"] = False
+    assert data.sanitize_input_data(params3)["phi_sls_mode"] == "Same"
+
+
 def test_default_states_use_half_meter_mesh_and_step():
     # 0.5 m mesh keeps the documented deflection interpolation error
     # negligible (see report section 1.1); defaults must stay aligned

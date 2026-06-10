@@ -6,9 +6,7 @@ import bricos_solver as solver
 
 
 def _clear_solver_cache():
-    fn = getattr(solver, "_run_raw_analysis_cached", None)
-    if fn is not None and hasattr(fn, "clear"):
-        fn.clear()
+    solver.clear_solver_cache()
 
 
 def _run_both_paths(params, monkeypatch):

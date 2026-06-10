@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.49"
+APP_VERSION = "0.50"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -194,7 +194,16 @@ def sanitize_input_data(data):
     while len(data['E_span_list']) < 10: data['E_span_list'].append(30e6)
     while len(data['fck_wall_list']) < 11: data['fck_wall_list'].append(30.0)
     while len(data['E_wall_list']) < 11: data['E_wall_list'].append(30e6)
-    
+
+    # 4. Migration: v0.49 stored the SLS stoedfaktor reduction as a boolean
+    # (phi_sls_reduction). Loaded sessions are seeded with current defaults
+    # before file values are applied, so phi_sls_mode always exists here;
+    # migrate on the legacy value instead of key absence. v0.50+ sessions
+    # never carry the legacy key, so an explicit 'Same' cannot be overridden.
+    if data.get('phi_sls_reduction') is True and data.get('phi_sls_mode', 'Same') == 'Same':
+        data['phi_sls_mode'] = 'Reduced'
+    data.pop('phi_sls_reduction', None)
+
     return data
 
 # ==========================================
@@ -617,8 +626,15 @@ def get_def():
         'phi_linf_mode': 'Determinant',
         # In 'Span' mode: 'Per member' or 'Governing' (max applied to all).
         'phi_application': 'Per member',
-        # Optional SLS reduction phi_SLS = 1+(phi-1)/2 (Vejledning 5.4.2).
-        'phi_sls_reduction': False,
+        # Manual phi scope: 'Global' (single value) or 'Per span'
+        # (phi_span_list; walls take the max of adjacent spans).
+        'phi_manual_scope': 'Global',
+        'phi_span_list': [1.0]*10,
+        # Phi in the Characteristic (SLS) result mode:
+        # 'Same' (= ULS), 'Reduced' (1+(phi-1)/2, Vejledning 5.4.2) or
+        # 'Manual' (user-defined uniform value phi_sls).
+        'phi_sls_mode': 'Same',
+        'phi_sls': 1.0,
 
 
         # 0.5 m mesh keeps the (undocumented before v0.48) deflection
@@ -666,7 +682,10 @@ def get_clear(name_suffix, current_mode):
         'phi_mode': 'Manual',
         'phi_linf_mode': 'Determinant',
         'phi_application': 'Per member',
-        'phi_sls_reduction': False,
+        'phi_manual_scope': 'Global',
+        'phi_span_list': [1.0]*10,
+        'phi_sls_mode': 'Same',
+        'phi_sls': 1.0,
 
         'scale_manual': 2.0, 
         'mesh_size': 0.5, 'step_size': 0.5,
@@ -705,7 +724,19 @@ def force_ui_update(sys_key, data):
         "Governing value for all members" if data.get('phi_application') == 'Governing'
         else "Per member"
     )
-    st.session_state[f"{sys_key}_phisls"] = bool(data.get('phi_sls_reduction', False))
+    st.session_state[f"{sys_key}_phiscope"] = (
+        "Per span" if data.get('phi_manual_scope') == 'Per span' else "Global"
+    )
+    phi_spans = data.get('phi_span_list', [1.0]*10)
+    for i in range(10):
+        if i < len(phi_spans):
+            st.session_state[f"{sys_key}_phiv_s{i}"] = phi_spans[i]
+    sls_mode = data.get('phi_sls_mode', 'Same')
+    sls_map = {'Same': "Same as ULS",
+               'Reduced': "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)",
+               'Manual': "Manual SLS value"}
+    st.session_state[f"{sys_key}_phisls"] = sls_map.get(sls_mode, "Same as ULS")
+    st.session_state[f"{sys_key}_phislsv"] = data.get('phi_sls', 1.0)
     st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
     
     # 2. Shear Deformation Keys & Analysis Settings
