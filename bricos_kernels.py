@@ -836,3 +836,130 @@ def jit_envelope_batch_parallel(
                 if def_x_glob < res_accum[e, p, 7]: res_accum[e, p, 7] = def_x_glob
                 if def_y_glob > res_accum[e, p, 8]: res_accum[e, p, 8] = def_y_glob
                 if def_y_glob < res_accum[e, p, 9]: res_accum[e, p, 9] = def_y_glob
+
+@jit(nopython=True, parallel=True, cache=True)
+def jit_step_recovery_batch(
+    n_steps, n_elems, n_pts,
+    x_steps, v_loads, v_dists,
+    sp_start_x, sp_lens, sp_el_indices,
+    D_all, el_dof_indices, el_T, el_L,
+    el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+    S_matrices,
+    res_out,
+):
+    """Per-step internal force/deflection recovery for all elements.
+
+    Identical math to jit_envelope_batch_parallel, but stores the values for
+    every step instead of accumulating min/max envelopes:
+    res_out[s, e, p, :] = [M, V, N, def_x_glob, def_y_glob].
+    This replaces the Python-level per-step recovery loop, which dominated
+    moving-load analysis time (one full element loop and tens of thousands
+    of small kernel dispatches per analysis).
+    """
+    num_axles = len(v_loads)
+    num_spans = len(sp_start_x)
+
+    for e in prange(n_elems):
+        L_el = el_L[e]
+        T = el_T[e]
+        cx, cy = T[0, 0], T[0, 1]
+        dofs = el_dof_indices[e]
+
+        span_idx = -1
+        span_offset = 0.0
+        for sp in range(num_spans):
+            if sp_el_indices[sp] == e:
+                span_idx = sp
+                span_offset = sp_start_x[sp]
+                break
+
+        s_start = 0.0
+        s_end = 0.0
+        has_span = False
+        if span_idx >= 0:
+            has_span = True
+            s_start = span_offset
+            s_end = s_start + sp_lens[span_idx]
+
+        dx_step = L_el / (n_pts - 1)
+
+        d_glob = np.zeros(6)
+        d_loc = np.zeros(6)
+        fef_total = np.zeros(6)
+
+        for s in range(n_steps):
+            x_front = x_steps[s]
+            for k in range(6): d_glob[k] = D_all[dofs[k], s]
+
+            for r in range(6):
+                val = 0.0
+                for c in range(6): val += T[r, c] * d_glob[c]
+                d_loc[r] = val
+
+            fef_total[:] = 0.0
+            if has_span:
+                for ax in range(num_axles):
+                    load_x_glob = x_front - v_dists[ax]
+                    tol = 1e-9
+                    is_last = span_idx == num_spans - 1
+                    if (s_start - tol <= load_x_glob < s_end - tol) or (is_last and abs(load_x_glob - s_end) <= tol):
+                        local_x = load_x_glob - s_start
+                        if local_x < 0.0:
+                            local_x = 0.0
+                        elif local_x > L_el:
+                            local_x = L_el
+                        fef_total += jit_vehicle_transverse_point_fef(
+                            v_loads[ax] * cx,
+                            local_x,
+                            L_el,
+                            el_E[e],
+                            el_G[e],
+                            el_eff_shape[e],
+                            el_v_type[e],
+                            el_eff_vals[e],
+                            el_b_eff[e],
+                            el_As_avg[e],
+                        )
+                        fef_total += jit_fef_axial_point(v_loads[ax] * cy, local_x, L_el)
+
+            FEF_N, FEF_V, FEF_M = fef_total[0], fef_total[1], fef_total[2]
+
+            for p in range(n_pts):
+                x = p * dx_step
+                M_hom = 0.0; V_hom = 0.0; N_hom = 0.0; ux_loc = 0.0; uy_loc = 0.0
+
+                for j in range(6):
+                    dj = d_loc[j]
+                    M_hom += S_matrices[e, p, 0, j] * dj
+                    V_hom += S_matrices[e, p, 1, j] * dj
+                    N_hom += S_matrices[e, p, 2, j] * dj
+                    ux_loc += S_matrices[e, p, 3, j] * dj
+                    uy_loc += S_matrices[e, p, 4, j] * dj
+
+                Mx = M_hom + (FEF_M - FEF_V * x)
+                Vx = V_hom + FEF_V
+                Nx = N_hom - FEF_N
+
+                if has_span:
+                    for ax in range(num_axles):
+                        load_x_glob = x_front - v_dists[ax]
+                        tol = 1e-9
+                        is_last = span_idx == num_spans - 1
+                        if (s_start - tol <= load_x_glob < s_end - tol) or (is_last and abs(load_x_glob - s_end) <= tol):
+                            a = load_x_glob - s_start
+                            if a < 0.0:
+                                a = 0.0
+                            elif a > L_el:
+                                a = L_el
+                            if x > a:
+                                P_trans = v_loads[ax] * cx
+                                P_axial = v_loads[ax] * cy
+                                Vx -= P_trans
+                                Mx += P_trans * (x - a)
+                                Nx += P_axial
+
+                res_out[s, e, p, 0] = Mx
+                res_out[s, e, p, 1] = Vx
+                res_out[s, e, p, 2] = Nx
+                res_out[s, e, p, 3] = cx * ux_loc - cy * uy_loc
+                res_out[s, e, p, 4] = cy * ux_loc + cx * uy_loc

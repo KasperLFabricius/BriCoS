@@ -896,8 +896,10 @@ st.session_state['model_props_B'] = props_B
 if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
 if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
 
-if p.get('phi_mode') == 'Calculate' and raw_res_A and raw_res_B:
-    active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
+# Show the phi log whenever the ACTIVE system solved; previously it
+# disappeared for system A whenever system B had a validation error.
+active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
+if p.get('phi_mode') == 'Calculate' and active_raw_res:
     phi_val = active_raw_res.get('phi_calc', 1.0)
     with phi_log_placeholder.container():
         st.markdown(f"**Calculated Phi:** {phi_val:.3f}")
