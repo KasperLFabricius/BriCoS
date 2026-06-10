@@ -1062,7 +1062,7 @@ class BricosReportGenerator:
             
         return output_groups
 
-    def _calculate_reaction_envelope(self, res_dict, nodes_dict):
+    def _calculate_reaction_envelope(self, res_dict):
         reacts = {}
         target_data = res_dict.get('Total Envelope', {})
         if not target_data: return reacts
@@ -1178,10 +1178,10 @@ class BricosReportGenerator:
         else:
             self.elements.append(Paragraph("Support Reactions (System A)", self.styles['SwecoTableHead']))
             
-        reactA = self._calculate_reaction_envelope(resA_full, self.nodes_A)
+        reactA = self._calculate_reaction_envelope(resA_full)
         reactB = {}
         if self.valid_B:
-            reactB = self._calculate_reaction_envelope(resB_full, self.nodes_B)
+            reactB = self._calculate_reaction_envelope(resB_full)
         
         valid_A = self._valid_support_nodes(paramsA, self.raw_A)
         valid_B = set()

@@ -482,6 +482,13 @@ def solver_cache_params(params):
     return {k: v for k, v in params.items() if k not in NON_SOLVER_PARAM_KEYS}
 
 
+# Feature flag for the batched per-step recovery kernel. Kept switchable so
+# the legacy Python recovery path stays available for equivalence testing,
+# and as an automatic fallback if per-element point counts ever differ from
+# the uniform kernel grid.
+USE_BATCH_STEP_RECOVERY = True
+
+
 def run_raw_analysis(params, phi_val_override=None):
     return _run_raw_analysis_cached(solver_cache_params(params), phi_val_override)
 
@@ -932,6 +939,43 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         env_results_accum = np.zeros((n_elems, n_pts_kernel, 10))
         is_first_run = True
 
+        # --- BATCHED STEP RECOVERY (fast path) ---
+        # The batched kernel evaluates every element on the uniform
+        # n_pts_kernel grid. That matches the legacy per-element grid only
+        # when max(3, int(L/mesh)+1) is the same for all elements (always
+        # true for mesh sub-elements, which are at most mesh_size long);
+        # otherwise fall back to the legacy per-step Python recovery.
+        legacy_pts_match = all(
+            max(3, int(el_L[k] / mesh_sz) + 1) == n_pts_kernel for k in range(n_elems)
+        )
+        use_batch_recovery = USE_BATCH_STEP_RECOVERY and legacy_pts_match and n_elems > 0
+
+        parent_assembly = []
+        if use_batch_recovery:
+            parent_groups = {}
+            for k, el_data in enumerate(elems_base):
+                parent_groups.setdefault(el_data['parent'], []).append(k)
+            for pid, indices in parent_groups.items():
+                indices.sort(key=lambda k: elems_base[k]['local_offset'])
+                offsets = [elems_base[k]['local_offset'] for k in indices]
+                x_agg = np.concatenate([
+                    np.linspace(0.0, el_L[k], n_pts_kernel) + off
+                    for k, off in zip(indices, offsets)
+                ])
+                first, last = indices[0], indices[-1]
+                ni_id = elems_base[first]['nodes'][0]
+                nj_id = elems_base[last]['nodes'][1]
+                parent_assembly.append({
+                    'pid': pid,
+                    'indices': np.array(indices, dtype=np.int64),
+                    'x': x_agg,
+                    'L': float(sum(el_L[k] for k in indices)),
+                    'cx': elem_objects[first].cx,
+                    'cy': elem_objects[first].cy,
+                    'ni': nodes[ni_id], 'nj': nodes[nj_id],
+                    'ni_id': ni_id, 'nj_id': nj_id,
+                })
+
         for current_dir in directions_to_run:
             if len(v_loads_raw) == 0: continue
             max_d = max(v_dists_raw) if len(v_dists_raw) > 0 else 0
@@ -978,13 +1022,26 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     is_init_chunk
                 )
                 
+                step_out = None
+                if use_batch_recovery:
+                    step_out = np.zeros((n_chunk, n_elems, n_pts_kernel, 5))
+                    kernels.jit_step_recovery_batch(
+                        n_chunk, n_elems, n_pts_kernel,
+                        x_chunk, v_loads_raw, v_dists_run,
+                        sp_start_x, sp_lens, sp_el_indices,
+                        D_chunk, el_dof_indices, el_T, el_L,
+                        el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+                        S_matrices,
+                        step_out,
+                    )
+
                 # Sorted sub-element start positions for O(log n) span lookup
                 # per axle; the original linear scan dominated step mapping.
                 n_sp = len(sp_elems_info)
                 for i_local in range(n_chunk):
                     x_front = x_chunk[i_local]
-                    D_step = D_chunk[:, i_local]
                     step_loads_map = {}
+                    parent_loads = {}
                     has_loads = False
                     for ax_i, d in enumerate(v_dists_run):
                         ax_x = x_front - d
@@ -1002,12 +1059,52 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                             if point_load_belongs_to_sub_element(ax_x, start_x, start_x + L_span, is_last, 1e-9):
                                 local_x = min(max(ax_x - start_x, 0.0), L_span)
                                 P_val = v_loads_raw[ax_i]
-                                if el_idx not in step_loads_map: step_loads_map[el_idx] = []
-                                load_p = {'type': 'point', 'is_gravity': True, 'params': [P_val, local_x]}
-                                step_loads_map[el_idx].append(load_p)
+                                if use_batch_recovery:
+                                    pid = elems_base[el_idx]['parent']
+                                    parent_x = elems_base[el_idx]['local_offset'] + local_x
+                                    parent_loads.setdefault(pid, []).append(
+                                        {'type': 'point', 'is_gravity': True, 'params': [P_val, parent_x]})
+                                else:
+                                    step_loads_map.setdefault(el_idx, []).append(
+                                        {'type': 'point', 'is_gravity': True, 'params': [P_val, local_x]})
                                 has_loads = True
                                 break
-                    if has_loads:
+                    if not has_loads:
+                        continue
+
+                    if use_batch_recovery:
+                        # Slice the batched kernel output into the same
+                        # per-parent dict structure aggregate_member_results
+                        # produces. The static metadata (x grid, geometry) is
+                        # shared across steps; only the value arrays are new.
+                        out_s = step_out[i_local]
+                        step_res = {}
+                        for pa in parent_assembly:
+                            block = out_s[pa['indices']]
+                            M_agg = block[:, :, 0].reshape(-1)
+                            V_agg = block[:, :, 1].reshape(-1)
+                            N_agg = block[:, :, 2].reshape(-1)
+                            loads_p = parent_loads.get(pa['pid'], [])
+                            if len(loads_p) > 1:
+                                loads_p.sort(key=lambda l: l['params'][1])
+                            step_res[pa['pid']] = {
+                                'x': pa['x'],
+                                'M': M_agg, 'V': V_agg, 'N': N_agg,
+                                'def_x': block[:, :, 3].reshape(-1),
+                                'def_y': block[:, :, 4].reshape(-1),
+                                'L': pa['L'], 'cx': pa['cx'], 'cy': pa['cy'],
+                                'ni': pa['ni'], 'nj': pa['nj'],
+                                'ni_id': pa['ni_id'], 'nj_id': pa['nj_id'],
+                                'loads': loads_p,
+                                # Synthesized end forces (unused by step
+                                # consumers): f_start = [N0, V0, M0] with
+                                # N(0) = -N0; f_end from element equilibrium.
+                                'f_start_local': np.array([-N_agg[0], V_agg[0], M_agg[0]]),
+                                'f_end_local': np.array([N_agg[-1], -V_agg[-1], -M_agg[-1]]),
+                            }
+                        v_steps_res_list.append({'x': x_front, 'res': step_res})
+                    else:
+                        D_step = D_chunk[:, i_local]
                         raw_step = get_detailed_results_optimized(elem_objects, elems_base, nodes, D_step, step_loads_map, params.get('mesh_size', 0.5), node_map)
                         agg_step = aggregate_member_results(raw_step)
                         v_steps_res_list.append({'x': x_front, 'res': agg_step})

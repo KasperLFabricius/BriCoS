@@ -265,7 +265,7 @@ def create_plotly_fig(
         if show_B and params_B and geom_B: 
              render_system_supports(params_B, nodes_B, 'red')
 
-    def add_traces(sys_data, sys_name, color, line_style, offset_dir):
+    def add_traces(sys_data, sys_name, color, line_style):
         if not sys_data: return
         is_sys_A = (sys_name == name_A)
         sys_key = 'A' if is_sys_A else 'B'
@@ -569,8 +569,8 @@ def create_plotly_fig(
                     customdata=C_pos_all, hovertemplate=htemp_step
                 ))
 
-    if show_A: add_traces(sysA_data, name_A, "blue", "solid", 1)
-    if show_B: add_traces(sysB_data, name_B, "red", "dash", -1)
+    if show_A: add_traces(sysA_data, name_A, "blue", "solid")
+    if show_B: add_traces(sysB_data, name_B, "red", "dash")
     
     solved = solve_annotations(ann_candidates)
     for ann in solved:
