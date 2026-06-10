@@ -509,7 +509,42 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     p['phi_mode'] = phi_mode
     if phi_mode == "Manual":
         p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv", disabled=ui_locked)
-    
+    else:
+        help_linf = (
+            "How the influence length L_inf for the stoedfaktor (DK NA A.2.3.5(2)) is determined.\n"
+            "- Combined system: one determinant length for the whole structure per DS/EN 1991-2:2003, "
+            "Table 6.2 Case 5.1/5.2/5.3 (frame treated as equivalent continuous beam; renumbered "
+            "Table 8.2 in the 2023 edition). Generally gives a lower Phi for short spans.\n"
+            "- Per span: the DK NA simplification L_inf = actual span, evaluated per span. "
+            "Walls take the max of the adjacent spans' Phi (the NA gives no rule for substructure)."
+        )
+        linf_opts = ["Combined system (EN 1991-2 Tab. 6.2)", "Per span (DK NA A.2.3.5(2))"]
+        idx_linf = 1 if p.get('phi_linf_mode') == 'Span' else 0
+        linf_sel = st.radio("Influence length $L_{inf}$:", linf_opts, index=idx_linf, key=f"{curr}_philinf", disabled=ui_locked, help=help_linf)
+        p['phi_linf_mode'] = 'Span' if "Per span" in linf_sel else 'Determinant'
+
+        if p['phi_linf_mode'] == 'Span':
+            help_app = (
+                "Per member: each span uses its own Phi; walls use the max of adjacent spans. "
+                "Governing: the largest Phi of all spans is applied to every member (conservative)."
+            )
+            app_opts = ["Per member", "Governing value for all members"]
+            idx_app = 1 if p.get('phi_application') == 'Governing' else 0
+            app_sel = st.radio("Phi application:", app_opts, index=idx_app, key=f"{curr}_phiapp", disabled=ui_locked, help=help_app)
+            p['phi_application'] = 'Governing' if "Governing" in app_sel else 'Per member'
+
+    help_sls = (
+        "Optional reduction of the stoedfaktor in the Characteristic (SLS) result mode per "
+        "'Vejledning til belastnings- og beregningsgrundlag for broer' 5.4.2: "
+        "phi_SLS = 1 + (phi_ULS - 1)/2. Applies to calculated and manual Phi. "
+        "ULS results are unaffected."
+    )
+    p['phi_sls_reduction'] = st.checkbox(
+        r"Reduced $\varphi$ in SLS (Vejledning 5.4.2)",
+        value=bool(p.get('phi_sls_reduction', False)),
+        key=f"{curr}_phisls", disabled=ui_locked, help=help_sls
+    )
+
     phi_log_placeholder = st.empty()
 
 with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
@@ -907,10 +942,37 @@ if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
 active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
 if p.get('phi_mode') == 'Calculate' and active_raw_res:
     phi_val = active_raw_res.get('phi_calc', 1.0)
+    phi_members_ui = active_raw_res.get('Phi Members') or {}
     with phi_log_placeholder.container():
-        st.markdown(f"**Calculated Phi:** {phi_val:.3f}")
+        if phi_members_ui:
+            vals = sorted(set(round(v, 3) for v in phi_members_ui.values()))
+            if len(vals) > 1:
+                st.markdown(f"**Calculated Phi (per member):** {vals[0]:.3f} - {vals[-1]:.3f}")
+            else:
+                st.markdown(f"**Calculated Phi:** {vals[0]:.3f}")
+        else:
+            st.markdown(f"**Calculated Phi:** {phi_val:.3f}")
         with st.expander("Phi Calculation Log", expanded=False):
-            st.markdown("The determinant length of the static system is calculated in accordance with DS/EN 1991-2:2023, Table 8.2 (NDP). The dynamic factor is then calculated in accordance with DS/EN 1991-2 DK/NA Bridges:2017, A.2.3.5 based on the determinant length.")
+            if p.get('phi_linf_mode') == 'Span':
+                st.markdown(
+                    "The influence length is taken as the actual span per member, per "
+                    "DS/EN 1991-2 DK NA Bridges:2017, Anneks A, A.2.3.5(2). The dynamic factor "
+                    "is calculated per member from this influence length."
+                )
+            else:
+                st.markdown(
+                    "The determinant length of the combined static system is calculated in "
+                    "accordance with DS/EN 1991-2:2003, Table 6.2, Case 5.1/5.2/5.3 (renumbered "
+                    "Table 8.2 in the 2023 edition), used as the influence length. The dynamic "
+                    "factor is then calculated in accordance with DS/EN 1991-2 DK NA Bridges:2017, "
+                    "Anneks A, A.2.3.5(2)."
+                )
+            if p.get('phi_sls_reduction', False):
+                st.markdown(
+                    "In the Characteristic (SLS) result mode the stoedfaktor is reduced to "
+                    "phi_SLS = 1 + (phi_ULS - 1)/2 per Vejledning til belastnings- og "
+                    "beregningsgrundlag for broer, 5.4.2."
+                )
             for log_line in active_raw_res.get('phi_log', []): st.caption(log_line)
 
 # ==========================================

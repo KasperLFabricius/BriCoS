@@ -432,6 +432,7 @@ def get_safe_error_result():
         'Vehicle Envelope A': empty_dict, 'Vehicle Envelope B': empty_dict,
         'Vehicle Steps A': [], 'Vehicle Steps B': [],
         'phi_calc': 1.0, 'phi_log': ["System Unstable or Empty"],
+        'Phi Members': {},
         'Restrained Nodes': []
     }
 
@@ -474,6 +475,8 @@ NON_SOLVER_PARAM_KEYS = frozenset({
     'vehicle_loads', 'vehicle_space', 'vehicleB_loads', 'vehicleB_space',
     'KFI', 'gamma_g', 'gamma_j', 'gamma_veh', 'gamma_vehB',
     'combine_surcharge_vehicle',
+    # SLS phi reduction is applied in combine_results, not in the raw analysis.
+    'phi_sls_reduction',
 })
 
 
@@ -489,6 +492,15 @@ def solver_cache_params(params):
 USE_BATCH_STEP_RECOVERY = True
 
 
+def phi_from_length(L_inf):
+    """Stoedfaktor curve per DS/EN 1991-2 DK NA:2017, Anneks A, A.2.3.5(2)."""
+    if L_inf <= 5.0:
+        return 1.25
+    if L_inf >= 50.0:
+        return 1.05
+    return 1.25 - (L_inf - 5.0) / 225.0
+
+
 def run_raw_analysis(params, phi_val_override=None):
     return _run_raw_analysis_cached(solver_cache_params(params), phi_val_override)
 
@@ -496,18 +508,62 @@ def run_raw_analysis(params, phi_val_override=None):
 @st.cache_data(show_spinner=False)
 def _run_raw_analysis_cached(params, phi_val_override=None):
     phi_mode = params.get('phi_mode', 'Calculate')
-    
+    # L_inf methodology for the calculated stoedfaktor:
+    # 'Determinant': one structure-wide influence length per EN 1991-2:2003
+    #   Table 6.2 Case 5.1/5.2/5.3 (frame treated as equivalent continuous
+    #   beam). Historical BriCoS behaviour.
+    # 'Span': the DK NA A.2.3.5(2) simplification L_inf = actual span,
+    #   applied per member; walls take the max of the adjacent spans' phi
+    #   (the NA is silent for substructure - conservative assumption).
+    linf_mode = params.get('phi_linf_mode', 'Determinant')
+
     # --- PHI CALCULATION ---
     phi_log = []
     calc_phi = 1.0
-    
+    # eid -> phi. Empty means uniform calc_phi applies to all members.
+    phi_members = {}
+
     if phi_mode == "Manual":
         calc_phi = params.get('phi', 1.0)
         phi_log.append(f"Manual input: {calc_phi}")
+    elif linf_mode == 'Span':
+        phi_log.append("Methodology: L_inf = actual span, per member "
+                       "(DS/EN 1991-2 DK NA:2017, Anneks A, A.2.3.5(2))")
+        span_phis = []
+        for i in range(params['num_spans']):
+            L = params['L_list'][i]
+            p_i = phi_from_length(L)
+            phi_members[f"S{i+1}"] = p_i
+            span_phis.append(p_i)
+            phi_log.append(f"Span{i+1}: L_inf = {L:.2f} m -> Phi = {p_i:.3f}")
+        if params['mode'] == 'Frame' and span_phis:
+            for i in range(params['num_spans'] + 1):
+                if i == 0:
+                    p_w = span_phis[0]
+                elif i == params['num_spans']:
+                    p_w = span_phis[-1]
+                else:
+                    p_w = max(span_phis[i-1], span_phis[i])
+                phi_members[f"W{i+1}"] = p_w
+            phi_log.append("Walls: Phi = max of adjacent spans "
+                           "(NA gives no rule for substructure; conservative assumption)")
+        if span_phis:
+            calc_phi = max(span_phis)
+            if params.get('phi_application', 'Per member') == 'Governing':
+                # Collapse to a single conservative value for all members.
+                phi_members = {}
+                phi_log.append(f"Application: governing (max) Phi = {calc_phi:.3f} applied to ALL members")
+            else:
+                phi_log.append(f"Application: per member; governing (max) Phi = {calc_phi:.3f}")
+        else:
+            phi_log.append("Geometry invalid/empty. Phi=1.0")
     else:
+        phi_log.append("Methodology: determinant length per DS/EN 1991-2:2003, "
+                       "Table 6.2 (renumbered Table 8.2 in the 2023 edition), "
+                       "used as L_inf in DK NA:2017 Anneks A, A.2.3.5(2)")
         lengths_for_phi = []
         comp_desc = []
-        
+
         if params['mode'] == 'Frame':
             h_left_total = params['h_list'][0]
             lengths_for_phi.append(h_left_total)
@@ -520,8 +576,8 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
             h_right_total = params['h_list'][end_idx]
             lengths_for_phi.append(h_right_total)
             comp_desc.append(f"RightLeg({h_right_total:.2f}m)")
-            
-        else: 
+
+        else:
             for i in range(params['num_spans']):
                 L = params['L_list'][i]
                 lengths_for_phi.append(L)
@@ -547,17 +603,14 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                 phi_log.append(f"L_mean = {sum(lengths_for_phi):.2f}/{n} = {L_mean:.2f} m")
                 phi_log.append(f"L_phi = {k_fac} * {L_mean:.2f} = {L_phi_calc:.3f} m (Min {L_max:.2f})")
 
+            calc_phi = phi_from_length(L_phi)
             if L_phi <= 5.0:
-                calc_phi = 1.25
                 phi_log.append(f"L_phi <= 5.0m: Phi set to upper limit (1.25)")
             elif L_phi >= 50.0:
-                calc_phi = 1.05
                 phi_log.append(f"L_phi >= 50.0m: Phi set to lower limit (1.05)")
             else:
-                raw_val = 1.25 - (L_phi - 5.0) / 225.0
-                calc_phi = raw_val
                 phi_log.append(f"5.0 < L_phi < 50.0: Calc Formula applied.")
-                phi_log.append(f"Phi = 1.25 - ({L_phi:.3f}-5)/225 = {raw_val:.3f}")
+                phi_log.append(f"Phi = 1.25 - ({L_phi:.3f}-5)/225 = {calc_phi:.3f}")
             phi_log.append(f"Final Phi = {calc_phi:.3f}")
         else:
             phi_log.append("Geometry invalid/empty. Phi=1.0")
@@ -1170,6 +1223,8 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         'Vehicle Steps B_Rev': steps_B['Reverse'],
         'phi_calc': calc_phi,
         'phi_log': phi_log,
+        # Per-member phi (eid -> value). Empty dict means calc_phi is uniform.
+        'Phi Members': phi_members,
         # Nodes carrying boundary springs. Reaction summaries must use this
         # instead of guessing from node ids/coordinates: in Frame mode a
         # zero-height wall places its restraint at the top node (200+i),
@@ -1180,22 +1235,49 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
 
 def combine_results(raw_res, params, result_mode="Design (ULS)"):
     KFI = params.get('KFI', 1.0)
-    gamma_g = params.get('gamma_g', 1.0) 
+    gamma_g = params.get('gamma_g', 1.0)
     gamma_j = params.get('gamma_j', 1.0)
-    gamma_vA = params.get('gamma_veh', 1.0) 
-    gamma_vB = params.get('gamma_vehB', 1.0) 
+    gamma_vA = params.get('gamma_veh', 1.0)
+    gamma_vB = params.get('gamma_vehB', 1.0)
     phi = raw_res['phi_calc'] if params.get('phi_mode') == 'Calculate' else params.get('phi', 1.0)
-    
+
+    # Per-member phi from the span-based L_inf methodology. Empty (or manual
+    # phi mode) means the single phi value applies uniformly.
+    phi_members = raw_res.get('Phi Members') or {}
+    if params.get('phi_mode') != 'Calculate':
+        phi_members = {}
+
+    # Optional SLS stoedfaktor reduction per "Vejledning til belastnings- og
+    # beregningsgrundlag for broer" 5.4.2: phi_SLS = 1 + (phi_ULS - 1)/2.
+    reduce_sls = bool(params.get('phi_sls_reduction', False)) and result_mode == "Characteristic (SLS)"
+
+    def phi_for(eid):
+        if result_mode == "Characteristic (No Dynamic Factor)":
+            return 1.0
+        p = phi_members.get(eid, phi)
+        if reduce_sls:
+            p = 1.0 + (p - 1.0) / 2.0
+        return p
+
+    phi_repr = phi_for('__representative__')
+
     if result_mode == "Design (ULS)":
-        f_sw = KFI * gamma_g 
+        f_sw = KFI * gamma_g
         f_soil = KFI * gamma_j
-        f_vehA = KFI * gamma_vA * phi
-        f_vehB = KFI * gamma_vB * phi
-        f_surch = KFI * gamma_vA 
+        f_vehA_base = KFI * gamma_vA
+        f_vehB_base = KFI * gamma_vB
+        f_surch = KFI * gamma_vA
     elif result_mode == "Characteristic (SLS)":
-        f_sw = 1.0; f_soil = 1.0; f_vehA = 1.0 * phi; f_vehB = 1.0 * phi; f_surch = 1.0
+        f_sw = 1.0; f_soil = 1.0; f_vehA_base = 1.0; f_vehB_base = 1.0; f_surch = 1.0
     else:
-        f_sw = 1.0; f_soil = 1.0; f_vehA = 1.0; f_vehB = 1.0; f_surch = 1.0
+        f_sw = 1.0; f_soil = 1.0; f_vehA_base = 1.0; f_vehB_base = 1.0; f_surch = 1.0
+
+    # Representative (governing) factors, plus per-member maps used by the
+    # step viewer when phi varies per member.
+    f_vehA = f_vehA_base * phi_repr
+    f_vehB = f_vehB_base * phi_repr
+    f_vehA_map = {}
+    f_vehB_map = {}
 
     def factor_res(res, f):
         out = {}
@@ -1242,18 +1324,23 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
                       'def_x_max': z, 'def_x_min': z,
                       'def_y_max': z, 'def_y_min': z}
             base = dA['base']
+            phi_e = phi_for(eid)
+            fA_e = f_vehA_base * phi_e
+            fB_e = f_vehB_base * phi_e
+            f_vehA_map[eid] = fA_e
+            f_vehB_map[eid] = fB_e
             out_veh_env[eid] = {
                 **base,
-                'M_max': dA['M_max']*f_vehA + dB['M_max']*f_vehB,
-                'M_min': dA['M_min']*f_vehA + dB['M_min']*f_vehB,
-                'V_max': dA['V_max']*f_vehA + dB['V_max']*f_vehB,
-                'V_min': dA['V_min']*f_vehA + dB['V_min']*f_vehB,
-                'N_max': dA['N_max']*f_vehA + dB['N_max']*f_vehB,
-                'N_min': dA['N_min']*f_vehA + dB['N_min']*f_vehB,
-                'def_x_max': dA['def_x_max']*f_vehA + dB['def_x_max']*f_vehB,
-                'def_x_min': dA['def_x_min']*f_vehA + dB['def_x_min']*f_vehB,
-                'def_y_max': dA['def_y_max']*f_vehA + dB['def_y_max']*f_vehB,
-                'def_y_min': dA['def_y_min']*f_vehA + dB['def_y_min']*f_vehB
+                'M_max': dA['M_max']*fA_e + dB['M_max']*fB_e,
+                'M_min': dA['M_min']*fA_e + dB['M_min']*fB_e,
+                'V_max': dA['V_max']*fA_e + dB['V_max']*fB_e,
+                'V_min': dA['V_min']*fA_e + dB['V_min']*fB_e,
+                'N_max': dA['N_max']*fA_e + dB['N_max']*fB_e,
+                'N_min': dA['N_min']*fA_e + dB['N_min']*fB_e,
+                'def_x_max': dA['def_x_max']*fA_e + dB['def_x_max']*fB_e,
+                'def_x_min': dA['def_x_min']*fA_e + dB['def_x_min']*fB_e,
+                'def_y_max': dA['def_y_max']*fA_e + dB['def_y_max']*fB_e,
+                'def_y_min': dA['def_y_min']*fA_e + dB['def_y_min']*fB_e
             }
 
     out_total = {}
@@ -1321,7 +1408,13 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         'Vehicle Steps B': raw_res.get('Vehicle Steps B', []),
         'Vehicle Steps B_Rev': raw_res.get('Vehicle Steps B_Rev', []),
         'f_vehA': f_vehA, 'f_vehB': f_vehB,
+        # Per-member vehicle factors (eid -> factor incl. phi). Used by the
+        # step viewer so step results scale consistently with the envelopes
+        # when phi varies per member.
+        'f_vehA_map': f_vehA_map, 'f_vehB_map': f_vehB_map,
         'phi_calc': phi, 'phi_log': raw_res['phi_log'],
+        'Phi Members': phi_members,
+        'phi_sls_reduced': reduce_sls,
         'Restrained Nodes': raw_res.get('Restrained Nodes', []),
         'Reactions': raw_res.get('Reactions', {})
     }
