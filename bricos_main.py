@@ -505,6 +505,25 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     if gam_selB == "Custom": p['gamma_vehB'] = c_gb.number_input(r"Custom $\gamma_{B}$", value=float(gam_valB), key=f"{curr}_gamB_cust", disabled=ui_locked)
     else: p['gamma_vehB'] = float(gam_selB)
 
+    gudl_opts = [0.56, 0.40, 1.0, 1.40]
+    c_gu, c_us = st.columns(2)
+    gudl_val = p.get('gamma_udl', 0.56)
+    idx_gudl = gudl_opts.index(gudl_val) if gudl_val in gudl_opts else len(gudl_opts)
+    help_gudl = (
+        "Partial factor for the Traffic UDL (fladelast) in ULS (with KFI). Vejledning til "
+        "belastnings- og beregningsgrundlag for broer, Fig. B3.1: 0.56 as companion to the "
+        "standard vehicles (LC 1); 1.40 for the large-bridge UDL-alone combination (LC 3). "
+        "The UDL itself is defined under Vehicle Definitions. Phi is never applied to it "
+        "(intensity includes the stoedtillaeg, DK NA A.2.3.2)."
+    )
+    gudl_sel = c_gu.selectbox(r"$\gamma_{UDL}$ (ULS)", gudl_opts + ["Custom"], index=min(idx_gudl, len(gudl_opts)), key=f"{curr}_gudl_sel", disabled=ui_locked, help=help_gudl)
+    if gudl_sel == "Custom":
+        p['gamma_udl'] = c_gu.number_input(r"Custom $\gamma_{UDL}$", value=float(gudl_val), min_value=0.0, key=f"{curr}_gudl_cust", disabled=ui_locked)
+    else:
+        p['gamma_udl'] = float(gudl_sel)
+    help_udl_sls = "Factor on the Traffic UDL in the Characteristic (SLS) result mode. Vejledning Fig. B3.2: 0.40."
+    p['udl_sls_factor'] = c_us.number_input("UDL SLS factor", value=float(p.get('udl_sls_factor', 0.40)), min_value=0.0, max_value=2.0, step=0.05, format="%.2f", key=f"{curr}_udlsls", disabled=ui_locked, help=help_udl_sls)
+
     phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", disabled=ui_locked)
     p['phi_mode'] = phi_mode
     if phi_mode == "Manual":
@@ -944,6 +963,29 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
     st.markdown("---")
     st.markdown("**Vehicle B**")
     handle_veh_inputs("B", f"{curr}_vehB_class", 'vehicleB_loads', 'vehicleB_space', 'vehicleB')
+
+    st.markdown("---")
+    st.markdown("**Traffic UDL (fladelast)**")
+    help_udl_q = (
+        "Uniformly distributed traffic load, defined as a LINE load on the analysis strip "
+        "like selfweight - account for the effective width manually. DS/EN 1991-2 DK NA:2017, "
+        "Anneks A.2.3.2: 2.5 kN/m2 (incl. stoedtillaeg, so the dynamic factor Phi is NOT "
+        "applied) times the considered width. Set 0 to deactivate. Applied only in the "
+        "unfavourable parts of the influence surface per EN 1991-2:2003, 4.3.2(1)(b). "
+        "Partial factors are set under Design Factors & Type."
+    )
+    p['udl_q'] = st.number_input("q [kN/m]", value=float(p.get('udl_q', 0.0)), min_value=0.0, step=0.5, format="%.2f", key=f"{curr}_udlq", disabled=ui_locked, help=help_udl_q)
+
+    udl_line = data_mod.udl_line_load(p)
+    if udl_line > 0.0:
+        st.success(f"Traffic UDL active: {udl_line:.2f} kN/m on the strip")
+        st.caption(
+            "Application: static, full deck, adverse-only (EN 1991-2 4.3.2(1)(b)) - equals the "
+            "large-bridge model and is conservative for the companion case. The moving window "
+            "with the Fig. A.2.2-2 gap (10 m) ships in the next release."
+        )
+    else:
+        st.caption("No Traffic UDL (q = 0). DK NA value: 2.5 kN/m2 x considered width.")
 
 # ==========================================
 # SOLVER EXECUTION

@@ -180,7 +180,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
     sysB['scale_manual'] = man_scale
 
     # --- 2. STICKY TOOLBAR & COMBINATION ---
-    view_options = ["Total Envelope", "Selfweight", "Soil", "Surcharge", "Vehicle Envelope", "Vehicle Steps"]
+    view_options = ["Total Envelope", "Selfweight", "Soil", "Surcharge", "Vehicle Envelope", "Traffic UDL", "Vehicle Steps"]
     
     # Ensure session state for selector persistence
     if 'view_case_selector' not in st.session_state: st.session_state.view_case_selector = "Total Envelope"
@@ -332,7 +332,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             rA = get_step(res_A, step_idx, veh_key_res, f_A, f_map_A)
             rB = get_step(res_B, step_idx, veh_key_res, f_B, f_map_B) if valid_B else {}
     else:
-        key_map = {"Total Envelope": "Total Envelope", "Selfweight": "Selfweight", "Soil": "Soil", "Surcharge": "Surcharge", "Vehicle Envelope": "Vehicle Envelope"}
+        key_map = {"Total Envelope": "Total Envelope", "Selfweight": "Selfweight", "Soil": "Soil", "Surcharge": "Surcharge", "Vehicle Envelope": "Vehicle Envelope", "Traffic UDL": "Traffic UDL"}
         target_key = key_map.get(view_case, "Total Envelope")
         rA = res_A.get(target_key, {})
         rB = res_B.get(target_key, {}) if valid_B else {}

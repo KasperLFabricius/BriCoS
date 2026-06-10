@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.50"
+APP_VERSION = "0.51"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -289,6 +289,20 @@ def _validate_section_geometry(params, geom_key, fallback_key, index, label, sys
     return errors
 
 
+def udl_line_load(params) -> float:
+    """Traffic UDL line load [kN/m] on the analysis strip.
+
+    Defined directly as a line load, like selfweight; the user accounts for
+    the effective width in the input. Returns 0.0 when the UDL is inactive
+    or invalidly defined - an invalid definition must never enter the
+    analysis.
+    """
+    q = _as_float(params.get('udl_q', 0.0), 0.0)
+    if q is None or q <= 0.0:
+        return 0.0
+    return q
+
+
 def parse_vehicle_text(load_text: str, spacing_text: str):
     """Parse vehicle text inputs without mutating UI state."""
     load_text = "" if load_text is None else str(load_text)
@@ -508,6 +522,15 @@ def validate_analysis_inputs(params: dict, system_label: str = "System") -> list
     if has_vehicle and (step_size is None or step_size <= 0.0):
         errors.append(f"{system_label}: Vehicle step size must be positive when vehicle loads exist.")
 
+    # Traffic UDL (fladelast). q = 0 (or blank) simply deactivates the load;
+    # negative or non-finite definitions are rejected.
+    udl_q = _as_float(params.get('udl_q', 0.0), None)
+    if udl_q is None or udl_q < 0.0:
+        errors.append(f"{system_label}: Traffic UDL line load must be a non-negative number (0 deactivates it).")
+    udl_gap = _as_float(params.get('udl_gap', 10.0), None)
+    if udl_gap is None or udl_gap < 0.0:
+        errors.append(f"{system_label}: Traffic UDL distance to vehicle must be non-negative.")
+
     e_default = _as_float(params.get('E', None), None)
     active_spans = max(0, min(num_spans_int, 10))
     for i in range(active_spans):
@@ -636,6 +659,17 @@ def get_def():
         'phi_sls_mode': 'Same',
         'phi_sls': 1.0,
 
+        # Traffic UDL (fladelast, DK NA Anneks A.2.2/A.2.3.2). Defined as a
+        # LINE load [kN/m] on the analysis strip, like selfweight: the user
+        # accounts for the effective width (DK NA intensity is 2.5 kN/m2
+        # times the considered width). Off by default (q = 0) so existing
+        # sessions are unaffected.
+        'udl_q': 0.0,            # line load [kN/m]; 0 deactivates
+        'udl_gap': 10.0,         # clear distance to vehicle [m] (Fig. A.2.2-2);
+                                 # used by the moving-window mode (next release)
+        'udl_mode': 'Static',    # 'Static' (full deck, adverse) for now
+        'gamma_udl': 0.56,       # ULS partial factor (Vejledning Fig. B3.1, LC1)
+        'udl_sls_factor': 0.40,  # SLS characteristic factor (Fig. B3.2)
 
         # 0.5 m mesh keeps the (undocumented before v0.48) deflection
         # interpolation error negligible; affordable since the v0.47
@@ -686,6 +720,11 @@ def get_clear(name_suffix, current_mode):
         'phi_span_list': [1.0]*10,
         'phi_sls_mode': 'Same',
         'phi_sls': 1.0,
+        'udl_q': 0.0,
+        'udl_gap': 10.0,
+        'udl_mode': 'Static',
+        'gamma_udl': 1.0,
+        'udl_sls_factor': 1.0,
 
         'scale_manual': 2.0, 
         'mesh_size': 0.5, 'step_size': 0.5,
@@ -737,6 +776,12 @@ def force_ui_update(sys_key, data):
                'Manual': "Manual SLS value"}
     st.session_state[f"{sys_key}_phisls"] = sls_map.get(sls_mode, "Same as ULS")
     st.session_state[f"{sys_key}_phislsv"] = data.get('phi_sls', 1.0)
+
+    # Traffic UDL keys
+    st.session_state[f"{sys_key}_udlq"] = data.get('udl_q', 0.0)
+    st.session_state[f"{sys_key}_udlgap"] = data.get('udl_gap', 10.0)
+    st.session_state[f"{sys_key}_gudl_cust"] = data.get('gamma_udl', 0.56)
+    st.session_state[f"{sys_key}_udlsls"] = data.get('udl_sls_factor', 0.40)
     st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
     
     # 2. Shear Deformation Keys & Analysis Settings
