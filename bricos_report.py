@@ -750,6 +750,45 @@ class BricosReportGenerator:
         if raw_res:
             self._add_dynamic_factor_section(p, raw_res)
 
+        # 7. GLOBAL EQUILIBRIUM CHECK
+        if raw_res and raw_res.get('Equilibrium'):
+            self._add_equilibrium_section(raw_res['Equilibrium'])
+
+    def _add_equilibrium_section(self, equilibrium):
+        """Applied loads vs support reactions per unfactored static case."""
+        rows = [["Load case", "Sum applied Fx / Fy [kN]", "Sum reactions Rx / Ry [kN]", "Residual Fx / Fy [kN]", "Status"]]
+        for case in ('Selfweight', 'Soil', 'Surcharge'):
+            eq = equilibrium.get(case)
+            if not eq:
+                continue
+            a_x, a_y = eq['applied_x'], eq['applied_y']
+            r_x, r_y = eq['reactions_x'], eq['reactions_y']
+            res_x, res_y = eq['residual_x'], eq['residual_y']
+            if max(abs(a_x), abs(a_y), abs(r_x), abs(r_y)) < 1e-9:
+                rows.append([case, "0.00 / 0.00", "0.00 / 0.00", "-", "(no loads)"])
+                continue
+            scale = max(abs(a_x), abs(a_y), abs(r_x), abs(r_y), 1.0)
+            tol = max(1e-3, 1e-6 * scale)
+            ok = abs(res_x) <= tol and abs(res_y) <= tol
+            rows.append([
+                case,
+                f"{a_x:.2f} / {a_y:.2f}",
+                f"{r_x:.2f} / {r_y:.2f}",
+                f"{res_x:.2e} / {res_y:.2e}",
+                "PASS" if ok else "CHECK FAILED",
+            ])
+
+        self.elements.append(Spacer(1, 0.2*cm))
+        self.elements.append(Paragraph("Global Equilibrium Check:", self.styles['SwecoSmall']))
+        self.elements.append(Paragraph(
+            "Sum of applied loads (computed from the load definitions by simple statics) compared "
+            "with the sum of support reactions (boundary-spring forces) for each unfactored static "
+            "load case, in global axes. A vanishing residual verifies load assembly, load splitting "
+            "across the mesh and the solution itself.",
+            self.styles['SwecoCell']))
+        t = self._make_std_table(rows, [2.8*cm, 4.3*cm, 4.3*cm, 4.0*cm, 2.6*cm], font_size=8)
+        self.elements.append(KeepTogether([t]))
+
     def _add_dynamic_factor_section(self, p, raw_res):
         """Methodology statement, per-member phi table (ULS and SLS values),
         and the calculation log for the dynamic factor."""

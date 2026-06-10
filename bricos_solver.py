@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import streamlit as st
 import numpy as np
 import bricos_kernels as kernels
@@ -433,6 +436,7 @@ def get_safe_error_result():
         'Vehicle Steps A': [], 'Vehicle Steps B': [],
         'phi_calc': 1.0, 'phi_log': ["System Unstable or Empty"],
         'Phi Members': {},
+        'Equilibrium': {},
         'Restrained Nodes': []
     }
 
@@ -491,6 +495,12 @@ def solver_cache_params(params):
 # the uniform kernel grid.
 USE_BATCH_STEP_RECOVERY = True
 
+# Limits for solving all load cases (static + every vehicle step) against a
+# single factorization of K. Beyond these the RHS block is solved per chunk
+# instead, trading extra factorizations for memory.
+MAX_SINGLE_SOLVE_RHS = 6000
+MAX_SINGLE_SOLVE_ELEMENTS = 12_000_000
+
 
 def phi_from_length(L_inf):
     """Stoedfaktor curve per DS/EN 1991-2 DK NA:2017, Anneks A, A.2.3.5(2)."""
@@ -501,11 +511,42 @@ def phi_from_length(L_inf):
     return 1.25 - (L_inf - 5.0) / 225.0
 
 
+# Session-state result cache. st.cache_data pickled the full result on every
+# write and unpickled it again on EVERY rerun (~0.1 s per interaction for
+# nothing); storing the result objects directly avoids the round-trip.
+# Contract: cached results are shared objects and must be treated as
+# read-only by all consumers (combine_results and the UI already copy
+# before scaling).
+_SOLVER_CACHE_KEY = '_bricos_solver_result_cache'
+_SOLVER_CACHE_MAX_ENTRIES = 4
+
+
+def _solver_cache_hash(cache_params, phi_val_override):
+    payload = json.dumps(cache_params, sort_keys=True, default=str)
+    return (hashlib.md5(payload.encode('utf-8')).hexdigest(), phi_val_override)
+
+
+def clear_solver_cache():
+    """Drop all cached raw-analysis results (used by tests and migrations)."""
+    try:
+        st.session_state.pop(_SOLVER_CACHE_KEY, None)
+    except Exception:
+        pass
+
+
 def run_raw_analysis(params, phi_val_override=None):
-    return _run_raw_analysis_cached(solver_cache_params(params), phi_val_override)
+    cache_params = solver_cache_params(params)
+    key = _solver_cache_hash(cache_params, phi_val_override)
+    cache = st.session_state.setdefault(_SOLVER_CACHE_KEY, {})
+    if key in cache:
+        return cache[key]
+    result = _run_raw_analysis_cached(cache_params, phi_val_override)
+    while len(cache) >= _SOLVER_CACHE_MAX_ENTRIES:
+        cache.pop(next(iter(cache)))
+    cache[key] = result
+    return result
 
 
-@st.cache_data(show_spinner=False)
 def _run_raw_analysis_cached(params, phi_val_override=None):
     phi_mode = params.get('phi_mode', 'Calculate')
     # L_inf methodology for the calculated stoedfaktor:
@@ -910,21 +951,13 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                 add_member_load(surch_loads_map, pid, 'distributed_trapezoid', False,
                                 [sign*sur['q'], sign*sur['q'], 0.0, sur['h']])
 
-    # Solve all static load cases against a single factorization of K
-    # instead of one np.linalg.solve (O(n^3)) per case.
+    # Static load case RHS. Solved further below together with all vehicle
+    # step RHS against a SINGLE factorization of K.
     F_static = np.column_stack([
         assemble_F(sw_loads_map),
         assemble_F(soil_loads_map),
         assemble_F(surch_loads_map),
     ])
-    try:
-        D_static = np.linalg.solve(K_glob, F_static)
-    except np.linalg.LinAlgError:
-        raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
-
-    res_sw = aggregate_member_results(recover_results(sw_loads_map, D_static[:, 0]), sw_global_loads)
-    res_soil = aggregate_member_results(recover_results(soil_loads_map, D_static[:, 1]), soil_global_loads)
-    res_surch = aggregate_member_results(recover_results(surch_loads_map, D_static[:, 2]), surch_global_loads)
 
     def get_empty_env():
         # The unloaded case has D = 0 identically; recover the result
@@ -947,144 +980,272 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     veh_env_A = get_empty_env()
     veh_env_B = get_empty_env()
     
-    def run_stepping(vehicle_key, env_to_fill):
+    # --- VEHICLE ANALYSIS SETUP ---
+    # Model arrays, span mapping, S-matrices and parent assembly are
+    # vehicle-independent; computed once and shared by both vehicles
+    # (previously rebuilt inside run_stepping per vehicle).
+    sp_start_x = []
+    sp_lens = []
+    sp_el_indices = []
+    c_x = 0
+    sp_elems_info = []
+
+    for sp_i in range(num_spans):
+        pid = f'S{sp_i+1}'
+        indices = [k for k, el in enumerate(elems_base) if el['parent'] == pid]
+        indices.sort(key=lambda k: elems_base[k]['local_offset'])
+        for k in indices:
+            true_L = elem_objects[k].L
+            sp_start_x.append(c_x)
+            sp_lens.append(true_L)
+            sp_el_indices.append(k)
+            sp_elems_info.append((c_x, true_L, k))
+            c_x += true_L
+
+    sp_start_x = np.array(sp_start_x, dtype=np.float64)
+    sp_lens = np.array(sp_lens, dtype=np.float64)
+    sp_el_indices = np.array(sp_el_indices, dtype=np.int32)
+
+    total_structure_len = c_x
+    n_elems = len(elem_objects)
+    el_L = np.zeros(n_elems, dtype=np.float64)
+    el_T = np.zeros((n_elems, 6, 6), dtype=np.float64)
+    el_k_local = np.zeros((n_elems, 6, 6), dtype=np.float64)
+    el_dof_indices = np.zeros((n_elems, 6), dtype=np.int32)
+    el_E = np.zeros(n_elems, dtype=np.float64)
+    el_G = np.zeros(n_elems, dtype=np.float64)
+    el_eff_shape = np.zeros(n_elems, dtype=np.int32)
+    el_v_type = np.zeros(n_elems, dtype=np.int32)
+    el_eff_vals = np.zeros((n_elems, 3), dtype=np.float64)
+    el_b_eff = np.zeros(n_elems, dtype=np.float64)
+    el_As_avg = np.zeros(n_elems, dtype=np.float64)
+
+    for k in range(n_elems):
+        el_obj = elem_objects[k]
+        el_L[k] = el_obj.L
+        el_T[k] = el_obj.T
+        el_k_local[k] = el_obj.k_local
+        el_E[k] = el_obj.E
+        el_G[k] = el_obj.G_val
+        el_eff_shape[k] = el_obj.eff_shape
+        el_v_type[k] = el_obj.v_type
+        el_eff_vals[k, :] = el_obj.eff_vals
+        el_b_eff[k] = el_obj.b_eff
+        el_As_avg[k] = el_obj.As_avg
+        ni, nj = elems_base[k]['nodes']
+        idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
+        el_dof_indices[k] = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
+
+    mesh_sz = params.get('mesh_size', 0.5)
+    max_len = np.max(el_L) if len(el_L) > 0 else 1.0
+    n_pts_kernel = max(3, int(max_len / mesh_sz) + 1)
+
+    S_matrices = kernels.jit_precompute_stress_recovery(n_elems, n_pts_kernel, el_L, el_k_local)
+
+    # --- BATCHED STEP RECOVERY (fast path) ---
+    # The batched kernel evaluates every element on the uniform
+    # n_pts_kernel grid. That matches the legacy per-element grid only
+    # when max(3, int(L/mesh)+1) is the same for all elements (always
+    # true for mesh sub-elements, which are at most mesh_size long);
+    # otherwise fall back to the legacy per-step Python recovery.
+    legacy_pts_match = all(
+        max(3, int(el_L[k] / mesh_sz) + 1) == n_pts_kernel for k in range(n_elems)
+    )
+    use_batch_recovery = USE_BATCH_STEP_RECOVERY and legacy_pts_match and n_elems > 0
+
+    parent_assembly = []
+    if use_batch_recovery:
+        parent_groups = {}
+        for k, el_data in enumerate(elems_base):
+            parent_groups.setdefault(el_data['parent'], []).append(k)
+        for pid, indices in parent_groups.items():
+            indices.sort(key=lambda k: elems_base[k]['local_offset'])
+            offsets = [elems_base[k]['local_offset'] for k in indices]
+            x_agg = np.concatenate([
+                np.linspace(0.0, el_L[k], n_pts_kernel) + off
+                for k, off in zip(indices, offsets)
+            ])
+            first, last = indices[0], indices[-1]
+            ni_id = elems_base[first]['nodes'][0]
+            nj_id = elems_base[last]['nodes'][1]
+            parent_assembly.append({
+                'pid': pid,
+                'indices': np.array(indices, dtype=np.int64),
+                'x': x_agg,
+                'L': float(sum(el_L[k] for k in indices)),
+                'cx': elem_objects[first].cx,
+                'cy': elem_objects[first].cy,
+                'ni': nodes[ni_id], 'nj': nodes[nj_id],
+                'ni_id': ni_id, 'nj_id': nj_id,
+            })
+
+    def build_vehicle_runs(vehicle_key):
+        """One run per travel direction: step positions and axle data.
+
+        RHS assembly and solving happen separately so that all runs (and the
+        static cases) can share a single factorization of K.
+        """
         v_loads_raw = np.array(params[vehicle_key]['loads']) * 9.81
+        if len(v_loads_raw) == 0:
+            return []
         v_dists_raw = np.cumsum(params[vehicle_key]['spacing'])
         veh_dir = params.get('vehicle_direction', 'Forward')
         directions_to_run = ['Forward', 'Reverse'] if veh_dir == 'Both' else [veh_dir]
-        steps_out = {'Forward': [], 'Reverse': []}
-        
-        sp_start_x = []
-        sp_lens = []
-        sp_el_indices = []
-        c_x = 0
-        sp_elems_info = [] 
-        
-        for sp_i in range(num_spans):
-            pid = f'S{sp_i+1}'
-            indices = [k for k, el in enumerate(elems_base) if el['parent'] == pid]
-            indices.sort(key=lambda k: elems_base[k]['local_offset'])
-            for k in indices:
-                true_L = elem_objects[k].L
-                sp_start_x.append(c_x)
-                sp_lens.append(true_L)
-                sp_el_indices.append(k)
-                sp_elems_info.append((c_x, true_L, k))
-                c_x += true_L
+        max_d = max(v_dists_raw) if len(v_dists_raw) > 0 else 0
+        step_val = params.get('step_size', 0.5)
 
-        sp_start_x = np.array(sp_start_x, dtype=np.float64)
-        sp_lens = np.array(sp_lens, dtype=np.float64)
-        sp_el_indices = np.array(sp_el_indices, dtype=np.int32)
-
-        total_structure_len = c_x 
-        n_elems = len(elem_objects)
-        el_L = np.zeros(n_elems, dtype=np.float64)
-        el_T = np.zeros((n_elems, 6, 6), dtype=np.float64)
-        el_k_local = np.zeros((n_elems, 6, 6), dtype=np.float64)
-        el_dof_indices = np.zeros((n_elems, 6), dtype=np.int32)
-        el_E = np.zeros(n_elems, dtype=np.float64)
-        el_G = np.zeros(n_elems, dtype=np.float64)
-        el_eff_shape = np.zeros(n_elems, dtype=np.int32)
-        el_v_type = np.zeros(n_elems, dtype=np.int32)
-        el_eff_vals = np.zeros((n_elems, 3), dtype=np.float64)
-        el_b_eff = np.zeros(n_elems, dtype=np.float64)
-        el_As_avg = np.zeros(n_elems, dtype=np.float64)
-        
-        for k in range(n_elems):
-            el_obj = elem_objects[k]
-            el_L[k] = el_obj.L
-            el_T[k] = el_obj.T
-            el_k_local[k] = el_obj.k_local
-            el_E[k] = el_obj.E
-            el_G[k] = el_obj.G_val
-            el_eff_shape[k] = el_obj.eff_shape
-            el_v_type[k] = el_obj.v_type
-            el_eff_vals[k, :] = el_obj.eff_vals
-            el_b_eff[k] = el_obj.b_eff
-            el_As_avg[k] = el_obj.As_avg
-            ni, nj = elems_base[k]['nodes']
-            idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
-            el_dof_indices[k] = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
-        
-        mesh_sz = params.get('mesh_size', 0.5)
-        max_len = np.max(el_L) if len(el_L) > 0 else 1.0
-        n_pts_kernel = max(3, int(max_len / mesh_sz) + 1)
-        
-        S_matrices = kernels.jit_precompute_stress_recovery(n_elems, n_pts_kernel, el_L, el_k_local)
-        env_results_accum = np.zeros((n_elems, n_pts_kernel, 10))
-        is_first_run = True
-
-        # --- BATCHED STEP RECOVERY (fast path) ---
-        # The batched kernel evaluates every element on the uniform
-        # n_pts_kernel grid. That matches the legacy per-element grid only
-        # when max(3, int(L/mesh)+1) is the same for all elements (always
-        # true for mesh sub-elements, which are at most mesh_size long);
-        # otherwise fall back to the legacy per-step Python recovery.
-        legacy_pts_match = all(
-            max(3, int(el_L[k] / mesh_sz) + 1) == n_pts_kernel for k in range(n_elems)
-        )
-        use_batch_recovery = USE_BATCH_STEP_RECOVERY and legacy_pts_match and n_elems > 0
-
-        parent_assembly = []
-        if use_batch_recovery:
-            parent_groups = {}
-            for k, el_data in enumerate(elems_base):
-                parent_groups.setdefault(el_data['parent'], []).append(k)
-            for pid, indices in parent_groups.items():
-                indices.sort(key=lambda k: elems_base[k]['local_offset'])
-                offsets = [elems_base[k]['local_offset'] for k in indices]
-                x_agg = np.concatenate([
-                    np.linspace(0.0, el_L[k], n_pts_kernel) + off
-                    for k, off in zip(indices, offsets)
-                ])
-                first, last = indices[0], indices[-1]
-                ni_id = elems_base[first]['nodes'][0]
-                nj_id = elems_base[last]['nodes'][1]
-                parent_assembly.append({
-                    'pid': pid,
-                    'indices': np.array(indices, dtype=np.int64),
-                    'x': x_agg,
-                    'L': float(sum(el_L[k] for k in indices)),
-                    'cx': elem_objects[first].cx,
-                    'cy': elem_objects[first].cy,
-                    'ni': nodes[ni_id], 'nj': nodes[nj_id],
-                    'ni_id': ni_id, 'nj_id': nj_id,
-                })
-
+        runs = []
         for current_dir in directions_to_run:
-            if len(v_loads_raw) == 0: continue
-            max_d = max(v_dists_raw) if len(v_dists_raw) > 0 else 0
-            step_val = params.get('step_size', 0.5)
-            
             if current_dir == 'Forward':
                 x_steps = np.arange(-max_d-1.0, total_structure_len + max_d + 1.0, step_val)
                 v_dists_run = v_dists_raw
             else:
                 x_steps = np.arange(total_structure_len + max_d + 1.0, -max_d-1.0, -step_val)
                 v_dists_run = -v_dists_raw
-                
+            runs.append({
+                'dir': current_dir,
+                'x_steps': x_steps,
+                'v_loads_raw': v_loads_raw,
+                'v_dists_run': v_dists_run,
+            })
+        return runs
+
+    runs_A = build_vehicle_runs('vehicle')
+    runs_B = build_vehicle_runs('vehicleB')
+    all_runs = runs_A + runs_B
+
+    # --- SINGLE FACTORIZATION FOR ALL LOAD CASES ---
+    # The static cases and every vehicle step share one np.linalg.solve call
+    # (one O(n^3) factorization, all RHS at O(n^2) each). For very large
+    # models/step counts the combined RHS block is built and solved per run
+    # in chunks instead, trading the extra factorizations for memory.
+    total_rhs = F_static.shape[1] + sum(len(r['x_steps']) for r in all_runs)
+    single_solve = (total_rhs <= MAX_SINGLE_SOLVE_RHS
+                    and NDOF * total_rhs <= MAX_SINGLE_SOLVE_ELEMENTS)
+
+    try:
+        if single_solve and all_runs:
+            F_blocks = [F_static]
+            for r in all_runs:
+                F_blocks.append(kernels.jit_build_batch_F(
+                    NDOF, len(r['x_steps']), r['x_steps'],
+                    r['v_loads_raw'], r['v_dists_run'],
+                    sp_start_x, sp_lens, sp_el_indices,
+                    el_L, el_T, el_dof_indices,
+                    el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+                ))
+            D_all = np.linalg.solve(K_glob, np.concatenate(F_blocks, axis=1))
+            D_static = D_all[:, :F_static.shape[1]]
+            col = F_static.shape[1]
+            for r in all_runs:
+                w = len(r['x_steps'])
+                r['D'] = D_all[:, col:col+w]
+                col += w
+        else:
+            # Fallback: static solve now; vehicle runs solved per chunk in
+            # process_vehicle_runs (no precomputed 'D' on the run dicts).
+            D_static = np.linalg.solve(K_glob, F_static)
+    except np.linalg.LinAlgError:
+        raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
+
+    res_sw = aggregate_member_results(recover_results(sw_loads_map, D_static[:, 0]), sw_global_loads)
+    res_soil = aggregate_member_results(recover_results(soil_loads_map, D_static[:, 1]), soil_global_loads)
+    res_surch = aggregate_member_results(recover_results(surch_loads_map, D_static[:, 2]), surch_global_loads)
+
+    # --- GLOBAL EQUILIBRIUM CHECK (static load cases) ---
+    # Applied totals are computed from the parent-level load definitions by
+    # simple statics (total = average intensity x loaded length, resolved to
+    # global axes); reactions are the boundary-spring forces (-k*D at the
+    # restrained DOFs). Comparing the two verifies the consistent-load
+    # assembly, splitting and solve end to end for each case.
+    parent_orient = {}
+    for k, el_data in enumerate(elems_base):
+        pid = el_data['parent']
+        if pid not in parent_orient:
+            parent_orient[pid] = (elem_objects[k].cx, elem_objects[k].cy)
+
+    def case_applied_totals(global_loads_map):
+        ax = ay = 0.0
+        for pid, loads in global_loads_map.items():
+            cx_p, cy_p = parent_orient.get(pid, (1.0, 0.0))
+            for ld in loads:
+                prm = ld['params']
+                if ld['type'] == 'point':
+                    Q = prm[0]
+                elif ld['type'] == 'distributed_trapezoid':
+                    Q = (prm[0] + prm[1]) / 2.0 * (prm[3] - prm[2])
+                else:
+                    continue
+                if ld.get('is_gravity'):
+                    # Positive gravity load values act vertically downward.
+                    ay -= Q
+                else:
+                    # Positive transverse load values act in local -y
+                    # (the same sense gravity takes on a horizontal member).
+                    ax += Q * cy_p
+                    ay += Q * (-cx_p)
+        return ax, ay
+
+    def case_spring_reactions(D_col):
+        # Force exerted by the supports on the structure: -k * d.
+        rx = ry = 0.0
+        for nid, kvec in restraints.items():
+            base = node_map[nid] * 3
+            if kvec[0]: rx -= kvec[0] * D_col[base]
+            if kvec[1]: ry -= kvec[1] * D_col[base + 1]
+        return rx, ry
+
+    equilibrium = {}
+    for case_name, loads_map_g, col in (
+        ('Selfweight', sw_global_loads, 0),
+        ('Soil', soil_global_loads, 1),
+        ('Surcharge', surch_global_loads, 2),
+    ):
+        a_x, a_y = case_applied_totals(loads_map_g)
+        r_x, r_y = case_spring_reactions(D_static[:, col])
+        equilibrium[case_name] = {
+            'applied_x': a_x, 'applied_y': a_y,
+            'reactions_x': r_x, 'reactions_y': r_y,
+            'residual_x': a_x + r_x, 'residual_y': a_y + r_y,
+        }
+
+    def process_vehicle_runs(runs, env_to_fill):
+        steps_out = {'Forward': [], 'Reverse': []}
+        if not runs:
+            return steps_out
+        env_results_accum = np.zeros((n_elems, n_pts_kernel, 10))
+        is_first_run = True
+
+        for r in runs:
+            current_dir = r['dir']
+            x_steps = r['x_steps']
+            v_loads_raw = r['v_loads_raw']
+            v_dists_run = r['v_dists_run']
             total_steps = len(x_steps)
             v_steps_res_list = []
             CHUNK_SIZE = 2000
-            
+
             for start_idx in range(0, total_steps, CHUNK_SIZE):
                 end_idx = min(start_idx + CHUNK_SIZE, total_steps)
                 x_chunk = x_steps[start_idx:end_idx]
                 n_chunk = len(x_chunk)
                 is_init_chunk = (is_first_run and start_idx == 0)
-                
-                F_chunk = kernels.jit_build_batch_F(
-                    NDOF, n_chunk, x_chunk, v_loads_raw, v_dists_run,
-                    sp_start_x, sp_lens, sp_el_indices,
-                    el_L, el_T, el_dof_indices,
-                    el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
-                )
-                
-                # OPTIMIZATION: Use direct solver batch processing
-                try:
-                    D_chunk = np.linalg.solve(K_glob, F_chunk)
-                except np.linalg.LinAlgError:
-                    raise ValueError("Structural Instability Detected during Vehicle Analysis.")
+
+                if 'D' in r:
+                    # Pre-solved against the shared single factorization.
+                    D_chunk = r['D'][:, start_idx:end_idx]
+                else:
+                    # Memory fallback: build and solve this chunk only.
+                    F_chunk = kernels.jit_build_batch_F(
+                        NDOF, n_chunk, x_chunk, v_loads_raw, v_dists_run,
+                        sp_start_x, sp_lens, sp_el_indices,
+                        el_L, el_T, el_dof_indices,
+                        el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+                    )
+                    try:
+                        D_chunk = np.linalg.solve(K_glob, F_chunk)
+                    except np.linalg.LinAlgError:
+                        raise ValueError("Structural Instability Detected during Vehicle Analysis.")
                 
                 kernels.jit_envelope_batch_parallel(
                     n_chunk, n_elems, n_pts_kernel,
@@ -1187,7 +1348,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
             steps_out[current_dir] = v_steps_res_list
             is_first_run = False 
 
-        if len(v_loads_raw) > 0 and env_to_fill:
+        if env_to_fill:
             parent_map = {}
             for k, el_data in enumerate(elems_base):
                 pid = el_data['parent']
@@ -1230,8 +1391,8 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
 
         return steps_out
 
-    steps_A = run_stepping('vehicle', veh_env_A)
-    steps_B = run_stepping('vehicleB', veh_env_B)
+    steps_A = process_vehicle_runs(runs_A, veh_env_A)
+    steps_B = process_vehicle_runs(runs_B, veh_env_B)
 
     return {
         'Selfweight': res_sw,
@@ -1247,6 +1408,8 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         'phi_log': phi_log,
         # Per-member phi (eid -> value). Empty dict means calc_phi is uniform.
         'Phi Members': phi_members,
+        # Global equilibrium check per static case (applied vs reactions).
+        'Equilibrium': equilibrium,
         # Nodes carrying boundary springs. Reaction summaries must use this
         # instead of guessing from node ids/coordinates: in Frame mode a
         # zero-height wall places its restraint at the top node (200+i),
