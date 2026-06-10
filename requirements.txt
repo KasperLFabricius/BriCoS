@@ -1,4 +1,5 @@
-streamlit>=1.49,<2
+# >=1.52 required for callable data in st.download_button (deferred downloads)
+streamlit>=1.52,<2
 pandas>=2.0,<3
 numpy>=1.24,<2.4
 plotly>=5.18,<7

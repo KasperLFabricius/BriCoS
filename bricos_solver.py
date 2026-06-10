@@ -1,6 +1,5 @@
 import streamlit as st
 import numpy as np
-import copy
 import bricos_kernels as kernels
 
 # ==========================================
@@ -224,9 +223,13 @@ def build_stiffness_matrix(nodes, elements, restraints_stiffness, shear_config):
                 
     return K_global, node_map, elem_objects, NDOF
 
-def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_total, loads_map, mesh_size=0.5):
-    node_keys = sorted(nodes.keys())
-    node_map = {nid: i for i, nid in enumerate(node_keys)}
+def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_total, loads_map, mesh_size=0.5, node_map=None):
+    # node_map can be passed in by callers that invoke this once per vehicle
+    # step; rebuilding it (sort + dict over all nodes) dominated the
+    # per-step cost on profiling.
+    if node_map is None:
+        node_keys = sorted(nodes.keys())
+        node_map = {nid: i for i, nid in enumerate(node_keys)}
     results = {}
     
     for i, el_data in enumerate(elements_source_data):
@@ -343,7 +346,10 @@ def aggregate_member_results(detailed_results, global_loads_override=None):
             # Load Aggregation (Lists are unavoidable here, but less critical)
             if not global_loads_override or parent not in global_loads_override:
                 for load in p['loads']:
-                    new_load = copy.deepcopy(load)
+                    # Loads are flat dicts with a scalar params list; copying
+                    # them directly is far cheaper than deepcopy in this hot
+                    # path (called once per vehicle step).
+                    new_load = {**load, 'params': list(load['params'])}
                     params = new_load['params']
                     if load['type'] == 'point':
                         params[1] += offset
@@ -715,7 +721,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     # Basic stability check using condition number is too expensive for real-time.
     # We rely on the solver throwing LinAlgError if singular.
 
-    def solve_static(loads_dict):
+    def assemble_F(loads_dict):
         F = np.zeros(NDOF)
         for idx, load_list in loads_dict.items():
             el = elem_objects[idx]
@@ -726,14 +732,10 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                 idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
                 indices = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
                 F[indices] -= f_glob
-        
-        # OPTIMIZATION: Use direct solver instead of inverse multiplication
-        try:
-            D = np.linalg.solve(K_glob, F)
-        except np.linalg.LinAlgError:
-             raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
-             
-        return get_detailed_results_optimized(elem_objects, elems_base, nodes, D, loads_dict, params.get('mesh_size', 0.5))
+        return F
+
+    def recover_results(loads_dict, D):
+        return get_detailed_results_optimized(elem_objects, elems_base, nodes, D, loads_dict, params.get('mesh_size', 0.5), node_map)
 
     def add_member_load(target_map, parent_id, load_type, is_gravity, params_list):
         indices = [k for k, el in enumerate(elems_base) if el['parent'] == parent_id]
@@ -792,9 +794,6 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     'params': [val, val, 0, el_L]
                 })
 
-    res_sw_detailed = solve_static(sw_loads_map)
-    res_sw = aggregate_member_results(res_sw_detailed, sw_global_loads)
-
     # 2. Soil
     soil_loads_map = {}
     soil_global_loads = {}
@@ -809,10 +808,8 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     'type': 'distributed_trapezoid', 'is_gravity': False,
                     'params': [sign*s['q_bot'], sign*s['q_top'], 0.0, s['h']]
                 })
-                add_member_load(soil_loads_map, pid, 'distributed_trapezoid', False, 
+                add_member_load(soil_loads_map, pid, 'distributed_trapezoid', False,
                                 [sign*s['q_bot'], sign*s['q_top'], 0.0, s['h']])
-                                
-    res_soil = aggregate_member_results(solve_static(soil_loads_map), soil_global_loads)
 
     # 3. Surcharge
     surch_loads_map = {}
@@ -830,11 +827,27 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                 })
                 add_member_load(surch_loads_map, pid, 'distributed_trapezoid', False,
                                 [sign*sur['q'], sign*sur['q'], 0.0, sur['h']])
-                                
-    res_surch = aggregate_member_results(solve_static(surch_loads_map), surch_global_loads)
+
+    # Solve all static load cases against a single factorization of K
+    # instead of one np.linalg.solve (O(n^3)) per case.
+    F_static = np.column_stack([
+        assemble_F(sw_loads_map),
+        assemble_F(soil_loads_map),
+        assemble_F(surch_loads_map),
+    ])
+    try:
+        D_static = np.linalg.solve(K_glob, F_static)
+    except np.linalg.LinAlgError:
+        raise ValueError("Structural Instability Detected: The model is insufficiently constrained (Mechanism). Please check boundary conditions.")
+
+    res_sw = aggregate_member_results(recover_results(sw_loads_map, D_static[:, 0]), sw_global_loads)
+    res_soil = aggregate_member_results(recover_results(soil_loads_map, D_static[:, 1]), soil_global_loads)
+    res_surch = aggregate_member_results(recover_results(surch_loads_map, D_static[:, 2]), surch_global_loads)
 
     def get_empty_env():
-        res_empty_det = solve_static({})
+        # The unloaded case has D = 0 identically; recover the result
+        # skeleton directly instead of factorizing K for a zero RHS.
+        res_empty_det = recover_results({}, np.zeros(NDOF))
         res_empty_agg = aggregate_member_results(res_empty_det)
         env = {}
         if res_empty_agg:
@@ -965,6 +978,9 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     is_init_chunk
                 )
                 
+                # Sorted sub-element start positions for O(log n) span lookup
+                # per axle; the original linear scan dominated step mapping.
+                n_sp = len(sp_elems_info)
                 for i_local in range(n_chunk):
                     x_front = x_chunk[i_local]
                     D_step = D_chunk[:, i_local]
@@ -972,9 +988,17 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     has_loads = False
                     for ax_i, d in enumerate(v_dists_run):
                         ax_x = x_front - d
-                        for info_idx, (start_x, L_span, el_idx) in enumerate(sp_elems_info):
-                            local_x = ax_x - start_x
-                            is_last = info_idx == len(sp_elems_info) - 1
+                        guess = int(np.searchsorted(sp_start_x, ax_x, side='right')) - 1
+                        if guess < 0: guess = 0
+                        if guess >= n_sp: guess = n_sp - 1
+                        # The original predicate stays authoritative for the
+                        # boundary tolerance; a load within tolerance just
+                        # below a boundary belongs to the next sub-element,
+                        # so test the neighbour as well.
+                        for info_idx in (guess, guess + 1):
+                            if info_idx >= n_sp: break
+                            start_x, L_span, el_idx = sp_elems_info[info_idx]
+                            is_last = info_idx == n_sp - 1
                             if point_load_belongs_to_sub_element(ax_x, start_x, start_x + L_span, is_last, 1e-9):
                                 local_x = min(max(ax_x - start_x, 0.0), L_span)
                                 P_val = v_loads_raw[ax_i]
@@ -984,7 +1008,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                                 has_loads = True
                                 break
                     if has_loads:
-                        raw_step = get_detailed_results_optimized(elem_objects, elems_base, nodes, D_step, step_loads_map, params.get('mesh_size', 0.5))
+                        raw_step = get_detailed_results_optimized(elem_objects, elems_base, nodes, D_step, step_loads_map, params.get('mesh_size', 0.5), node_map)
                         agg_step = aggregate_member_results(raw_step)
                         v_steps_res_list.append({'x': x_front, 'res': agg_step})
             
@@ -1082,7 +1106,7 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         for eid, dat in res.items():
             new_loads = []
             for l in dat.get('loads', []):
-                new_l = copy.deepcopy(l)
+                new_l = {**l, 'params': list(l['params'])}
                 if new_l['type'] == 'point': new_l['params'][0] *= f
                 elif new_l['type'] == 'distributed_trapezoid': 
                     new_l['params'][0] *= f

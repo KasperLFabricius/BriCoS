@@ -230,6 +230,36 @@ def test_combine_results_missing_envelope_b_element_contributes_zero():
         np.testing.assert_allclose(veh[key], env_a)
 
 
+def test_combine_results_factoring_does_not_mutate_raw_loads():
+    # factor_res copies loads without deepcopy; the raw (cached) results
+    # must never be mutated by factoring.
+    x = np.array([0.0, 1.0])
+    raw_load = {"type": "point", "is_gravity": True, "params": [100.0, 0.5]}
+    base = {
+        "x": x,
+        "M": np.array([1.0, 2.0]), "V": np.zeros(2), "N": np.zeros(2),
+        "def_x": np.zeros(2), "def_y": np.zeros(2),
+        "loads": [raw_load], "L": 1.0, "cx": 1.0, "cy": 0.0,
+        "ni": (0.0, 0.0), "nj": (1.0, 0.0), "ni_id": 200, "nj_id": 201,
+    }
+    raw = {
+        "Selfweight": {"S1": base}, "Soil": {}, "Surcharge": {},
+        "Vehicle Envelope A": {}, "Vehicle Envelope B": {},
+        "phi_calc": 1.0, "phi_log": [],
+    }
+    params = {
+        "KFI": 2.0, "gamma_g": 3.0, "gamma_j": 1.0,
+        "gamma_veh": 1.0, "gamma_vehB": 1.0,
+        "phi_mode": "Manual", "phi": 1.0,
+        "combine_surcharge_vehicle": False,
+    }
+
+    results = solver.combine_results(raw, params, "Design (ULS)")
+
+    assert raw_load["params"][0] == 100.0
+    assert results["Selfweight"]["S1"]["loads"][0]["params"][0] == 600.0
+
+
 def test_combine_results_has_no_duplicate_literal_dict_keys():
     tree = ast.parse(textwrap.dedent(inspect.getsource(solver.combine_results)))
     duplicates = []
