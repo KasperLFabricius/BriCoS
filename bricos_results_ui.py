@@ -69,10 +69,26 @@ def fmt_pct_cap(val):
     if val < -999.0: return "<-999%"
     return "{:+.1f}%".format(val)
 
-def get_reaction_envelope(res_dict, nodes_dict, mode):
-    """Extracts reaction forces from envelope results."""
+def get_reaction_envelope(res_dict, nodes_dict, mode, restrained_nodes=None):
+    """Extracts reaction forces from envelope results.
+
+    restrained_nodes: collection of node ids carrying boundary springs, as
+    reported by the solver ('Restrained Nodes'). When provided it is the
+    authoritative support test; the id/coordinate heuristic is only a
+    fallback for results produced before the key existed. The heuristic
+    misses Frame-mode supports at zero-height walls, where the restraint
+    sits at the top node (200+i) at y=0.
+    """
     reacts = {}
     if not res_dict or not nodes_dict: return reacts
+
+    restrained_set = set(restrained_nodes) if restrained_nodes else None
+
+    def is_support(nid):
+        if restrained_set is not None:
+            return nid in restrained_set
+        y_node = nodes_dict[nid][1]
+        return (y_node < -0.01) if mode == 'Frame' else (nid >= 200)
     
     for eid, dat in res_dict.items():
         if 'ni_id' not in dat or 'nj_id' not in dat: continue
@@ -115,9 +131,7 @@ def get_reaction_envelope(res_dict, nodes_dict, mode):
         fx_mx, fx_mn = get_bounds(c, s)
         fy_mx, fy_mn = get_bounds(s, -c) 
         
-        y_start = nodes_dict[dat['ni_id']][1]
-        is_supp_start = (y_start < -0.01) if mode == 'Frame' else (dat['ni_id'] >= 200) 
-        if is_supp_start: add_to_node(dat['ni_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
+        if is_support(dat['ni_id']): add_to_node(dat['ni_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
 
         # End Node Processing
         n_mx = get_val('N_max', -1); n_mn = get_val('N_min', -1)
@@ -131,9 +145,7 @@ def get_reaction_envelope(res_dict, nodes_dict, mode):
         fx_mx, fx_mn = get_bounds(c, s)
         fy_mx, fy_mn = get_bounds(s, -c)
         
-        y_end = nodes_dict[dat['nj_id']][1]
-        is_supp_end = (y_end < -0.01) if mode == 'Frame' else (dat['nj_id'] >= 200)
-        if is_supp_end: add_to_node(dat['nj_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
+        if is_support(dat['nj_id']): add_to_node(dat['nj_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
              
     return reacts
 
@@ -475,8 +487,10 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
         
         # C. Reactions
         st.markdown("##### Envelope Support Reactions")
-        reactsA = get_reaction_envelope(rA, nodes_A, sysA['mode'])
-        reactsB = get_reaction_envelope(rB, nodes_B, sysB['mode']) if valid_B else {}
+        restrained_A = (raw_res_A or {}).get('Restrained Nodes')
+        restrained_B = (raw_res_B or {}).get('Restrained Nodes')
+        reactsA = get_reaction_envelope(rA, nodes_A, sysA['mode'], restrained_A)
+        reactsB = get_reaction_envelope(rB, nodes_B, sysB['mode'], restrained_B) if valid_B else {}
         
         all_react_nodes = sorted(list(set(reactsA.keys()) | set(reactsB.keys())))
         r_rows = []

@@ -425,7 +425,8 @@ def get_safe_error_result():
         'Selfweight': empty_dict, 'Soil': empty_dict, 'Surcharge': empty_dict,
         'Vehicle Envelope A': empty_dict, 'Vehicle Envelope B': empty_dict,
         'Vehicle Steps A': [], 'Vehicle Steps B': [],
-        'phi_calc': 1.0, 'phi_log': ["System Unstable or Empty"]
+        'phi_calc': 1.0, 'phi_log': ["System Unstable or Empty"],
+        'Restrained Nodes': []
     }
 
 def split_distributed_trapezoid_for_sub_element(params_list, loc_start, loc_end, tol=1e-9):
@@ -1048,7 +1049,12 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         'Vehicle Steps B_Rev': steps_B['Reverse'],
         'phi_calc': calc_phi,
         'phi_log': phi_log,
-        'Reactions': calculate_reactions(nodes, res_sw) 
+        # Nodes carrying boundary springs. Reaction summaries must use this
+        # instead of guessing from node ids/coordinates: in Frame mode a
+        # zero-height wall places its restraint at the top node (200+i),
+        # which coordinate/id heuristics misclassify as a free node.
+        'Restrained Nodes': sorted(restraints.keys()),
+        'Reactions': calculate_reactions(nodes, res_sw)
     }, nodes, model_props, 0
 
 def combine_results(raw_res, params, result_mode="Design (ULS)"):
@@ -1105,7 +1111,15 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
     if raw_env_A:
         for eid in raw_env_A:
             dA = raw_env_A[eid]
-            dB = raw_env_B.get(eid, dA) 
+            dB = raw_env_B.get(eid)
+            if dB is None:
+                # An element missing from envelope B must contribute nothing.
+                # Falling back to dA here would double-count vehicle A.
+                z = np.zeros_like(dA['M_max'])
+                dB = {'M_max': z, 'M_min': z, 'V_max': z, 'V_min': z,
+                      'N_max': z, 'N_min': z,
+                      'def_x_max': z, 'def_x_min': z,
+                      'def_y_max': z, 'def_y_min': z}
             base = dA['base']
             out_veh_env[eid] = {
                 **base,
@@ -1187,5 +1201,6 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         'Vehicle Steps B_Rev': raw_res.get('Vehicle Steps B_Rev', []),
         'f_vehA': f_vehA, 'f_vehB': f_vehB,
         'phi_calc': phi, 'phi_log': raw_res['phi_log'],
+        'Restrained Nodes': raw_res.get('Restrained Nodes', []),
         'Reactions': raw_res.get('Reactions', {})
     }

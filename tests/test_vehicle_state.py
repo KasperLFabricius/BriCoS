@@ -117,6 +117,25 @@ def test_force_ui_update_ignores_stale_blank_widget_keys_for_non_empty_vehicle()
     assert st.session_state["sysB_A_space_input"] == copied["vehicle_space"]
 
 
+def test_force_ui_update_clears_only_spring_keys_not_kfi():
+    st = data.st
+    st.session_state.clear()
+    params = _class_100_params()
+    params["KFI"] = 1.1
+    # Stale custom-spring widget keys from a previous support configuration
+    # must be cleared; unrelated keys containing "_k" must survive.
+    st.session_state["sysA_kx_3"] = 123.0
+    st.session_state["sysA_ky_3"] = 456.0
+    st.session_state["sysA_km_3"] = 789.0
+
+    data.force_ui_update("sysA", params)
+
+    assert st.session_state["sysA_kfi"] == 1.1
+    assert "sysA_kx_3" not in st.session_state
+    assert "sysA_ky_3" not in st.session_state
+    assert "sysA_km_3" not in st.session_state
+
+
 def test_signature_refresh_overwrites_stale_widget_values_after_state_change():
     st = data.st
     st.session_state.clear()

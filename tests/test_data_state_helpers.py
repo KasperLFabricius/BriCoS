@@ -122,6 +122,42 @@ def test_solver_cache_params_strips_cosmetic_and_combination_keys():
     assert filtered["mode"] == params["mode"]
 
 
+def test_combine_results_missing_envelope_b_element_contributes_zero():
+    x = np.array([0.0, 1.0])
+    env_a = np.array([10.0, 20.0])
+    base = {
+        "x": x,
+        "M": np.zeros(2), "V": np.zeros(2), "N": np.zeros(2),
+        "def_x": np.zeros(2), "def_y": np.zeros(2),
+        "loads": [], "L": 1.0, "cx": 1.0, "cy": 0.0,
+        "ni": (0.0, 0.0), "nj": (1.0, 0.0), "ni_id": 200, "nj_id": 201,
+    }
+    env_keys = (
+        "M_max", "M_min", "V_max", "V_min", "N_max", "N_min",
+        "def_x_max", "def_x_min", "def_y_max", "def_y_min",
+    )
+    raw = {
+        "Selfweight": {}, "Soil": {}, "Surcharge": {},
+        "Vehicle Envelope A": {"S1": {**{k: env_a for k in env_keys}, "base": base}},
+        # S1 is missing from envelope B entirely; it must contribute zero,
+        # not fall back to envelope A (which double-counted vehicle A).
+        "Vehicle Envelope B": {},
+        "phi_calc": 1.0, "phi_log": [],
+    }
+    params = {
+        "KFI": 1.0, "gamma_g": 1.0, "gamma_j": 1.0,
+        "gamma_veh": 1.0, "gamma_vehB": 10.0,
+        "phi_mode": "Manual", "phi": 1.0,
+        "combine_surcharge_vehicle": False,
+    }
+
+    results = solver.combine_results(raw, params, "Design (ULS)")
+    veh = results["Vehicle Envelope"]["S1"]
+
+    for key in env_keys:
+        np.testing.assert_allclose(veh[key], env_a)
+
+
 def test_combine_results_has_no_duplicate_literal_dict_keys():
     tree = ast.parse(textwrap.dedent(inspect.getsource(solver.combine_results)))
     duplicates = []

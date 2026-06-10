@@ -1165,6 +1165,24 @@ class BricosReportGenerator:
         if self.valid_B:
             self.elements.append(Paragraph("Values shown as: Sys A / Sys B", self.styles['Italic']))
 
+    @staticmethod
+    def _valid_support_nodes(params, raw_res):
+        """Node ids to show in reaction tables.
+
+        Prefers the solver-reported 'Restrained Nodes' (authoritative,
+        includes Frame-mode supports placed at top nodes for zero-height
+        walls). Falls back to the legacy id-range heuristic for results
+        produced before the key existed.
+        """
+        restrained = (raw_res or {}).get('Restrained Nodes')
+        if restrained:
+            return set(restrained)
+        params = params or {}
+        mode = params.get('mode', 'Frame')
+        num = params.get('num_spans', 1)
+        base = 100 if mode == 'Frame' else 200
+        return {base + i for i in range(num + 1)}
+
     def _add_reaction_table(self, resA_full, paramsA, resB_full, paramsB):
         if self.valid_B:
             self.elements.append(Paragraph("Support Reactions (Sys A / Sys B)", self.styles['SwecoTableHead']))
@@ -1176,17 +1194,10 @@ class BricosReportGenerator:
         if self.valid_B:
             reactB = self._calculate_reaction_envelope(resB_full, self.nodes_B)
         
-        def get_valid_supports(p):
-            mode = p.get('mode', 'Frame'); num = p.get('num_spans', 1)
-            valid_ids = []
-            base = 100 if mode == 'Frame' else 200
-            for i in range(num + 1): valid_ids.append(base + i)
-            return set(valid_ids)
-            
-        valid_A = get_valid_supports(paramsA)
+        valid_A = self._valid_support_nodes(paramsA, self.raw_A)
         valid_B = set()
         if self.valid_B:
-            valid_B = get_valid_supports(paramsB)
+            valid_B = self._valid_support_nodes(paramsB, self.raw_B)
             
         all_nodes = sorted(list(set(reactA.keys()) | set(reactB.keys())))
         filtered_nodes = [n for n in all_nodes if (n in valid_A) or (n in valid_B)]
