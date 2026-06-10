@@ -322,7 +322,8 @@ def jit_numerical_fef(load_type, params, L, E, G, shape_mode, val_mode, geom_val
         theta_j += M0 * m2 * fac
         
         # Shear Work for Load Vector: Integral (V0 * v / GAs)
-        # v1 = -1/L, v2 = 1/L
+        # With the end-moment convention m1 = 1 - x/L and m2 = -x/L, both
+        # unit shear diagrams are v1 = v2 = -1/L.
         if has_shear:
             # Shear work uses simplified constant area integration for consistency with stiffness kernel
             # Factor: (weight * d_step / 3.0) / (G * As_avg)
@@ -646,9 +647,10 @@ def jit_build_batch_F(
                     elif local_x > sp_lens[k]:
                         local_x = sp_lens[k]
                     el_idx = sp_el_indices[k]
-                    # Prismatic members use the analytical point-load FEF for speed.
-                    # Non-prismatic members use the numerical FEF path to remain
-                    # consistent with the non-prismatic stiffness formulation.
+                    # The analytical point-load FEF is Hermite-consistent and
+                    # independent of EI(x), so it is exact for both prismatic
+                    # and non-prismatic members (see
+                    # jit_vehicle_transverse_point_fef).
                     T = el_T[el_idx]
                     cx = T[0, 0]
                     cy = T[0, 1]

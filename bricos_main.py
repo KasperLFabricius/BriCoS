@@ -76,6 +76,17 @@ def trigger_lock(geom_data):
 
 data_mod.initialize_session_state()
 
+# Show the outcome of any autosave/configuration load. Stored in session
+# state because loads are followed by st.rerun(), which would wipe a
+# directly rendered message.
+load_status = st.session_state.pop('load_status', None)
+if load_status:
+    load_kind, load_msg = load_status
+    if load_kind == 'warning':
+        st.warning(load_msg)
+    else:
+        st.success(load_msg)
+
 # Global Lock (Report Gen)
 ui_locked = st.session_state.is_generating_report
 
@@ -92,7 +103,10 @@ if st.session_state.autosave_interval > 0 and not ui_locked:
             st.session_state.last_autosave_time = current_time
             st.toast("Session Autosaved 💾")
         except Exception:
-            pass 
+            # Reset the timer so a persistent write failure surfaces once per
+            # interval instead of on every rerun.
+            st.session_state.last_autosave_time = current_time
+            st.toast("⚠️ Autosave failed: could not write the session file.")
 
 # ==========================================
 # SIDEBAR CONTROLS
@@ -199,11 +213,20 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
     if uploaded_file is not None:
         try:
             df_load = pd.read_csv(uploaded_file)
-            if data_mod.load_data_from_df(df_load):
+            loaded, skipped = data_mod.load_data_from_df(df_load)
+            if loaded:
                 st.session_state.uploader_key += 1
-                st.success("Configuration loaded! UI will update.")
+                if skipped:
+                    preview = ", ".join(skipped[:5]) + ("..." if len(skipped) > 5 else "")
+                    st.session_state['load_status'] = (
+                        'warning',
+                        f"Configuration loaded, but {len(skipped)} entries could not be read "
+                        f"and were skipped: {preview}"
+                    )
+                else:
+                    st.session_state['load_status'] = ('success', "Configuration loaded.")
                 st.rerun()
-            else: st.error("Invalid CSV format.")
+            else: st.error("Invalid CSV format: missing System/Parameter/Value columns.")
         except Exception as e: st.error(f"Error loading file: {e}")
     
     st.markdown("---")
@@ -432,7 +455,12 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     gg_val = p.get('gamma_g', 1.0)
     idx_gg = gg_opts.index(gg_val) if gg_val in gg_opts else len(gg_opts)
     
-    help_gg = "Partial factor for permanent loads (Self-weight). Applied to the 'Selfweight' load case."
+    help_gg = (
+        "Partial factor for permanent loads (Self-weight). Applied to the 'Selfweight' load case. "
+        "Note: this single factor is applied to both maximum and minimum results - favorable/unfavorable "
+        "permanent-load combinations are not evaluated automatically. For checks where self-weight is "
+        "favorable (e.g. uplift), re-run with the favorable factor (e.g. 0.9 or 1.0)."
+    )
     gg_sel = c_gg.selectbox(r"$\gamma_{g}$ (Self-weight)", gg_opts + ["Custom"], index=min(idx_gg, len(gg_opts)), key=f"{curr}_gg_sel", disabled=ui_locked, help=help_gg)
     if gg_sel == "Custom": p['gamma_g'] = c_gg.number_input(r"Custom $\gamma_{g}$", value=float(gg_val), key=f"{curr}_gg_cust", disabled=ui_locked)
     else: p['gamma_g'] = float(gg_sel)
@@ -441,7 +469,12 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     gj_val = p.get('gamma_j', 1.0)
     idx_gj = gj_opts.index(gj_val) if gj_val in gj_opts else len(gj_opts)
     
-    help_gj = "Partial factor for permanent soil loads (Earth Pressure). Applied to the 'Soil' load case."
+    help_gj = (
+        "Partial factor for permanent soil loads (Earth Pressure). Applied to the 'Soil' load case. "
+        "Note: this single factor is applied to both maximum and minimum results - favorable/unfavorable "
+        "permanent-load combinations are not evaluated automatically. Re-run with the favorable factor "
+        "where earth pressure acts favorably."
+    )
     gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts + ["Custom"], index=min(idx_gj, len(gj_opts)), key=f"{curr}_gj_sel", disabled=ui_locked, help=help_gj)
     if gj_sel == "Custom": p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust", disabled=ui_locked)
     else: p['gamma_j'] = float(gj_sel)

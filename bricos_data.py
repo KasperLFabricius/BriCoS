@@ -38,13 +38,34 @@ def get_writable_path(filename):
     Get path for writing persistent user data.
     """
     if getattr(sys, 'frozen', False):
+        # The executable may live in a read-only location (e.g. Program
+        # Files), so persist user data under %APPDATA%\BriCoS instead.
+        appdata = os.environ.get('APPDATA')
         base_path = os.path.dirname(sys.executable)
+        if appdata:
+            candidate = os.path.join(appdata, 'BriCoS')
+            try:
+                os.makedirs(candidate, exist_ok=True)
+                base_path = candidate
+            except OSError:
+                pass
     else:
         # Use script directory to ensure autosaves go to the project folder
         # regardless of where the terminal command was run.
         base_path = os.path.dirname(os.path.abspath(__file__))
-    
+
     return os.path.join(base_path, filename)
+
+def get_legacy_writable_path(filename):
+    """Pre-v0.45 location of persistent user data (next to the executable).
+
+    Read-only fallback so frozen builds keep loading autosaves written
+    before user data moved to %APPDATA%\\BriCoS. Returns None when not
+    running as a frozen executable.
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.join(os.path.dirname(sys.executable), filename)
+    return None
 
 # ==========================================
 # DATA HELPERS & CALCULATIONS
@@ -103,7 +124,7 @@ def load_vehicle_from_csv(target_name):
                 'loads': l_arr, 'spacing': s_arr,
                 'l_str': l_str, 's_str': s_str
             }
-        except:
+        except (ValueError, TypeError, KeyError):
             pass
     return None
 
@@ -120,7 +141,7 @@ def identify_vehicle_class(loads, spacing):
     try:
         curr_l = np.array(loads, dtype=float)
         curr_s = np.array(spacing, dtype=float)
-    except:
+    except (ValueError, TypeError):
         return "Custom"
 
     for name, data in lib_data.items():
@@ -136,7 +157,7 @@ def identify_vehicle_class(loads, spacing):
             # 2. Check values with tolerance
             if np.allclose(lib_l, curr_l, atol=1e-3) and np.allclose(lib_s, curr_s, atol=1e-3):
                 return name
-        except:
+        except (ValueError, TypeError, KeyError):
             continue
             
     return "Custom"
@@ -801,30 +822,39 @@ def generate_csv_data():
     return df.to_csv(index=False).encode('utf-8')
 
 def load_data_from_df(df_load):
-    """Loads session state from a DataFrame."""
-    if 'System' in df_load.columns and 'Parameter' in df_load.columns:
-        clean_transient_keys()
-        
-        for _, row in df_load.iterrows():
-            sys_n = row['System']
-            try:
-                val = json.loads(row['Value'])
-                if sys_n in ['sysA', 'sysB']:
-                    if sys_n not in st.session_state:
-                         st.session_state[sys_n] = get_def() 
-                    st.session_state[sys_n][row['Parameter']] = val
-                elif sys_n == 'Global':
-                    st.session_state[row['Parameter']] = val
-            except: pass
-        
-        if 'sysA' in st.session_state:
-            st.session_state['sysA'] = sanitize_input_data(st.session_state['sysA'])
-            force_ui_update('sysA', st.session_state['sysA'])
-        if 'sysB' in st.session_state:
-            st.session_state['sysB'] = sanitize_input_data(st.session_state['sysB'])
-            force_ui_update('sysB', st.session_state['sysB'])
-        return True
-    return False
+    """Loads session state from a DataFrame.
+
+    Returns (loaded, skipped): loaded is False when the frame lacks any of
+    the expected System/Parameter/Value columns; skipped lists
+    'System/Parameter' labels of rows that could not be parsed, so callers
+    can warn instead of silently dropping configuration entries.
+    """
+    if not {'System', 'Parameter', 'Value'}.issubset(df_load.columns):
+        return False, []
+
+    clean_transient_keys()
+    skipped = []
+
+    for _, row in df_load.iterrows():
+        sys_n = row['System']
+        try:
+            val = json.loads(row['Value'])
+            if sys_n in ['sysA', 'sysB']:
+                if sys_n not in st.session_state:
+                     st.session_state[sys_n] = get_def()
+                st.session_state[sys_n][row['Parameter']] = val
+            elif sys_n == 'Global':
+                st.session_state[row['Parameter']] = val
+        except Exception:
+            skipped.append(f"{sys_n}/{row.get('Parameter', '?')}")
+
+    if 'sysA' in st.session_state:
+        st.session_state['sysA'] = sanitize_input_data(st.session_state['sysA'])
+        force_ui_update('sysA', st.session_state['sysA'])
+    if 'sysB' in st.session_state:
+        st.session_state['sysB'] = sanitize_input_data(st.session_state['sysB'])
+        force_ui_update('sysB', st.session_state['sysB'])
+    return True, skipped
 
 def initialize_session_state():
     """
@@ -839,17 +869,34 @@ def initialize_session_state():
 
     if 'sysA' not in st.session_state:
         autosave_path = get_writable_path(AUTOSAVE_FILE)
+        # Frozen builds wrote autosaves next to the executable before user
+        # data moved to %APPDATA%; fall back to that location for reading.
+        if not os.path.exists(autosave_path):
+            legacy_path = get_legacy_writable_path(AUTOSAVE_FILE)
+            if legacy_path and os.path.exists(legacy_path):
+                autosave_path = legacy_path
         loaded_from_autosave = False
-        
+
         if os.path.exists(autosave_path):
             try:
                 df_auto = pd.read_csv(autosave_path)
                 st.session_state['sysA'] = get_def()
                 st.session_state['sysB'] = get_def()
-                if load_data_from_df(df_auto):
+                loaded, skipped = load_data_from_df(df_auto)
+                if loaded:
                     loaded_from_autosave = True
+                    if skipped:
+                        preview = ", ".join(skipped[:5]) + ("..." if len(skipped) > 5 else "")
+                        st.session_state['load_status'] = (
+                            'warning',
+                            f"Autosave restored, but {len(skipped)} entries could not be read "
+                            f"and were skipped: {preview}"
+                        )
             except Exception:
-                pass 
+                st.session_state['load_status'] = (
+                    'warning',
+                    "An autosave file was found but could not be read. Starting with defaults."
+                )
 
         if not loaded_from_autosave:
             d = get_def()
