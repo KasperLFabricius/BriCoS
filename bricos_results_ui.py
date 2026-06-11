@@ -171,6 +171,24 @@ def resolve_component_key(eid, base_key):
     return base_key
 
 
+def step_display_loads(loads, f_factor, effects_mode):
+    """Loads to draw on a step chart under the given effects mode.
+
+    Vehicle axle point loads are scaled by the member's vehicle factor; in
+    the UDL-only view they are omitted entirely - the axles are not part of
+    the displayed effects, so drawing them was misleading.
+    """
+    out = []
+    for load in loads or []:
+        if effects_mode == STEP_EFFECTS_UDL and load.get('type') == 'point':
+            continue
+        new_l = {**load, 'params': list(load['params'])}
+        if new_l['params']:
+            new_l['params'][0] *= f_factor
+        out.append(new_l)
+    return out
+
+
 def step_combined_field(res_el, base_key, side, f_veh, f_udl, effects_mode):
     """Factored per-step field for one component and adverse side.
 
@@ -433,14 +451,10 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                     out = {}
                     for k, v in step_data.items():
                         f_factor = f_map.get(k, f_default)
-                        # Scale loads for visualization
-                        scaled_loads = []
-                        if 'loads' in v:
-                            for l in v['loads']:
-                                new_l = {**l, 'params': list(l['params'])}
-                                if new_l['params']:
-                                    new_l['params'][0] *= f_factor
-                                scaled_loads.append(new_l)
+                        # Loads for visualization: factored, and without the
+                        # axle arrows in the UDL-only view.
+                        scaled_loads = step_display_loads(
+                            v.get('loads'), f_factor, effects_mode)
 
                         out_el = {**v, 'loads': scaled_loads}
                         for base in ('M', 'V', 'N', 'def_x', 'def_y'):

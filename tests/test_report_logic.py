@@ -204,6 +204,33 @@ def test_udl_application_text_modes():
     assert "clear distance" not in no_vehicle
 
 
+def test_critical_step_titles_state_lead_axle_chainage():
+    import numpy as np
+
+    params = _params(vehicle={"loads": [10.0], "spacing": [0.0]},
+                     num_spans=1)
+    arr = np.array([0.0, -25.0])
+    steps = [
+        {"x": -4.0, "res": {"S1": {"M": arr, "V": arr * 0.5}}},
+        {"x": 6.0, "res": {"S1": {"M": -arr, "V": arr}}},
+    ]
+    gen = _generator(params, {"Vehicle Steps A": steps})
+
+    try:
+        groups = gen._identify_critical_steps(
+            params, {"Vehicle Steps A": steps}, "System A",
+            {200: (0.0, 0.0)}, "Vehicle Steps A", "Vehicle A", "Forward")
+    finally:
+        gen.executor.shutdown(wait=True)
+
+    titles = [p["title"] for g in groups for p in g["plots"]]
+    assert titles
+    # Negative chainage (vehicle entering/leaving the deck) is labeled as
+    # the lead-axle position instead of a bare "X=-4.00m".
+    assert any("lead axle at x = -4.00 m" in t for t in titles)
+    assert all("lead axle at x =" in t for t in titles)
+
+
 def test_has_any_vehicle_false_when_all_vehicle_lists_are_empty():
     gen = _generator(_params())
 

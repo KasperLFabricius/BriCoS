@@ -6,19 +6,29 @@ import bricos_kernels as kernels
 # ANNOTATION SOLVER & HELPERS
 # ==========================================
 
-def solve_annotations(annotations):
+def solve_annotations(annotations, extent_x=None, font_scale=1.0):
     """
     Optimizes label placement to prevent overlaps using a rigid-body physics approach.
     """
     if not annotations: return []
     n = len(annotations)
     data_arr = np.zeros((n, 6))
-    
+
+    # Label footprint in DATA units. Labels render at a fixed pixel size, so
+    # their data-unit size grows with the plotted extent; the legacy
+    # constants (0.15 per char, 0.40 high) match a ~15 m structure at font
+    # scale 1 and understate the footprint on longer decks, letting the
+    # solver leave labels stacked on top of each other.
+    if extent_x is not None and extent_x > 1e-6:
+        char_w = 0.0094 * extent_x * font_scale
+        box_h = 0.025 * extent_x * font_scale
+    else:
+        char_w, box_h = 0.15, 0.40
+
     # Pack data for Numba kernel
     for i, ann in enumerate(annotations):
-        # Heuristic width calculation based on character count
-        ann['w'] = len(ann['text']) * 0.15 
-        ann['h'] = 0.40 # Fixed height assumption
+        ann['w'] = len(ann['text']) * char_w
+        ann['h'] = box_h
         data_arr[i, :] = [ann['x'], ann['y'], ann['w'], ann['h'], ann['perp_x'], ann['perp_y']]
         
     # Run the solver (Pure Math)
@@ -29,6 +39,23 @@ def solve_annotations(annotations):
         ann['x'] = result_arr[i, 0]
         ann['y'] = result_arr[i, 1]
     return annotations
+
+def structure_extent_x(sources):
+    """Horizontal extent [m] spanned by the element dicts' ni/nj global
+    coordinates, or None when no usable geometry is present."""
+    xs = []
+    for src in sources:
+        if not src:
+            continue
+        for dat in src.values():
+            if isinstance(dat, dict) and 'ni' in dat and 'nj' in dat:
+                xs.append(dat['ni'][0])
+                xs.append(dat['nj'][0])
+    if not xs:
+        return None
+    ext = max(xs) - min(xs)
+    return ext if ext > 1e-6 else None
+
 
 def _add_support_icon(fig, x, y, supp_type, size, color='black'):
     """
@@ -467,8 +494,11 @@ def create_plotly_fig(
                             showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=2.5, 
                             arrowcolor='orange', opacity=1.0
                         )
-                        is_staggered = (i_load % 2 == 1)
-                        shift_val = (25 if is_staggered else 10) * font_scale
+                        # Three stagger levels: with closely spaced axles
+                        # (e.g. 1.4 m bogies) two levels still place every
+                        # second label on the same row, where they overlap
+                        # on longer decks.
+                        shift_val = (10 + (i_load % 3) * 15) * font_scale
                         load_text = f"{int(round(abs(p_val)))} kN"
                         fig.add_annotation(
                             x=tail_x, y=tail_y, text=load_text, 
@@ -595,8 +625,20 @@ def create_plotly_fig(
 
     if show_A: add_traces(sysA_data, name_A, "blue", "solid")
     if show_B: add_traces(sysB_data, name_B, "red", "dash")
-    
-    solved = solve_annotations(ann_candidates)
+
+    # Horizontal structure extent, for sizing annotation footprints in data
+    # units (labels render at fixed pixel size, so their data-unit size
+    # scales with the extent shown). Only the SHOWN systems count: callers
+    # (e.g. report critical-step plots) pass both geometries with a single
+    # show flag, and a hidden longer deck must not inflate the sizing.
+    ext_sources = []
+    if show_A:
+        ext_sources.extend((geom_A, sysA_data))
+    if show_B:
+        ext_sources.extend((geom_B, sysB_data))
+    extent_x = structure_extent_x(ext_sources)
+
+    solved = solve_annotations(ann_candidates, extent_x=extent_x, font_scale=font_scale)
     for ann in solved:
         fig.add_annotation(
             x=ann['x'], y=ann['y'], text=ann['text'], showarrow=False,

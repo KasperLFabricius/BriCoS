@@ -1,5 +1,6 @@
 import io
 import datetime
+import logging
 import threading
 import numpy as np
 import pandas as pd
@@ -22,6 +23,8 @@ from reportlab.graphics import renderPDF
 import bricos_solver as solver
 import bricos_viz as viz
 import bricos_data as data_mod
+
+_logger = logging.getLogger("bricos.report")
 
 # ==========================================
 # CUSTOM CANVAS FOR PAGE NUMBERING
@@ -392,7 +395,10 @@ class BricosReportGenerator:
                 "Vehicle positions causing peak effects per span. Plotted values are the "
                 "unfactored vehicle effects; where a Traffic UDL is defined, the shaded "
                 "band marks the deck regions carrying the UDL for that step (the window "
-                "around the vehicle is left clear).", self.styles['SwecoSmall']))
+                "around the vehicle is left clear). Step titles state the lead-axle "
+                "chainage measured from the left end of the deck; values outside the "
+                "deck range occur while the vehicle enters or leaves it.",
+                self.styles['SwecoSmall']))
             self.elements.append(Spacer(1, 0.2*cm))
             self._add_smart_vehicle_steps(prog_range=(0.75, 0.95))
             self.chapter_count += 1
@@ -1077,9 +1083,15 @@ class BricosReportGenerator:
                 fig.write_image(b, format='png', scale=1.5)
             b.seek(0)
             if not b.getvalue().startswith(b'\x89PNG'):
+                _logger.error("Plot export produced a corrupt image for %r",
+                              fig_kwargs.get('title', '?'))
                 return None
             return b
         except Exception:
+            # The placeholder "[Image Failed]" appears in the PDF; without a
+            # log line the cause is undiagnosable.
+            _logger.exception("Plot rendering failed for %r",
+                              fig_kwargs.get('title', '?'))
             return None
 
     def _submit_parallel_plots(self, task_list, prog_range=(0.0, 0.0)):
@@ -1375,7 +1387,8 @@ class BricosReportGenerator:
                 # UPDATED: Construct unified plot title with System and Vehicle Info
                 s_short = "Sys A" if "A" in sys_label else "Sys B"
                 v_short = "Veh A" if "A" in veh_label else "Veh B"
-                title = f"{s_short} - {v_short} - {direction_label} - Step {idx}: {label} @ X={x_loc:.2f}m"
+                title = (f"{s_short} - {v_short} - {direction_label} - Step {idx}: "
+                         f"{label} | lead axle at x = {x_loc:.2f} m")
                 
                 is_A = (sys_label == "System A")
                 
