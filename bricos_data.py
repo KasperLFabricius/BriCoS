@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.53"
+APP_VERSION = "0.54"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -306,6 +306,25 @@ def udl_line_load(params) -> float:
     if q is None or q <= 0.0:
         return 0.0
     return q
+
+
+# Selectbox presets for the vehicle-to-UDL clear distance. Single source of
+# truth for the UI selectbox and for force_ui_update, which must restore the
+# selector to the label matching the stored value (a stale selector silently
+# overwrites a loaded custom distance with its preset on the next rerun).
+UDL_GAP_PRESETS = {
+    "10.0 m (DK NA Fig. A.2.2-2)": 10.0,
+    "0.0 m (adjacent to vehicle)": 0.0,
+}
+
+
+def udl_gap_preset_label(gap) -> str:
+    """The gap selectbox label matching a stored clear distance."""
+    g = _as_float(gap, 10.0)
+    for label, val in UDL_GAP_PRESETS.items():
+        if abs(val - g) < 1e-9:
+            return label
+    return "Custom"
 
 
 def parse_vehicle_text(load_text: str, spacing_text: str):
@@ -804,6 +823,9 @@ def force_ui_update(sys_key, data):
         else "Moving with vehicle"
     )
     st.session_state[f"{sys_key}_udlgap_cust"] = data.get('udl_gap', 10.0)
+    # Restore the preset selector too: left stale, it re-applies its old
+    # preset on the next rerun and silently overwrites a custom distance.
+    st.session_state[f"{sys_key}_udlgap_sel"] = udl_gap_preset_label(data.get('udl_gap', 10.0))
     st.session_state[f"{sys_key}_udlfoot"] = bool(data.get('udl_footprint', False))
     st.session_state[f"{sys_key}_gudl_cust"] = data.get('gamma_udl', 0.56)
 

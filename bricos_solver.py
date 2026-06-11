@@ -1206,7 +1206,10 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                 if ld['type'] == 'point':
                     Q = prm[0]
                 elif ld['type'] == 'distributed_trapezoid':
-                    Q = (prm[0] + prm[1]) / 2.0 * (prm[3] - prm[2])
+                    # params = [q_start, q_end, x_start, loaded_length]
+                    # (the convention of split_distributed_trapezoid_for_
+                    # sub_element; x_start is 0 in all global maps today).
+                    Q = (prm[0] + prm[1]) / 2.0 * prm[3]
                 else:
                     continue
                 if ld.get('is_gravity'):
@@ -1240,6 +1243,10 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
             'applied_x': a_x, 'applied_y': a_y,
             'reactions_x': r_x, 'reactions_y': r_y,
             'residual_x': a_x + r_x, 'residual_y': a_y + r_y,
+            # Opposing definitions (e.g. mirrored earth pressure on both
+            # walls) cancel in the global sums; this flag lets consumers
+            # tell "loads cancel" apart from "no loads defined".
+            'has_loads': bool(loads_map_g),
         }
 
     # --- TRAFFIC UDL ADVERSE ENVELOPE ---

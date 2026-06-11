@@ -11,6 +11,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 # Graphics Imports for Vehicle Diagram
@@ -80,6 +81,11 @@ class BricosReportGenerator:
         
         # New style for logs with increased leading to prevent overlap
         self.styles.add(ParagraphStyle(name='SwecoLog', parent=self.styles['Normal'], fontSize=8, leading=14))
+
+        # Formula lines with sub/superscripts: the markup descends below the
+        # 10 pt line box of SwecoSmall and collides with whatever flowable
+        # follows (e.g. the Phi_SLS line ran into the phi table).
+        self.styles.add(ParagraphStyle(name='SwecoFormula', parent=self.styles['Normal'], fontSize=8, leading=12, spaceBefore=2, spaceAfter=4))
 
         # Use pre-calculated results passed from Main UI to avoid redundant Numba execution
         self.params_A = self.state['sysA']
@@ -376,7 +382,7 @@ class BricosReportGenerator:
         if self._has_any_vehicle():
             self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
 
-            self.elements.append(Paragraph("<b>Table 8.1: Critical Vehicle Effects (Raw Step Values)</b>", self.styles['SwecoSmall']))
+            self.elements.append(Paragraph(f"<b>Table {self.chapter_count}.1: Critical Vehicle Effects (Raw Step Values)</b>", self.styles['SwecoSmall']))
             self.elements.append(Paragraph("Values represent raw forward and/or reverse moving-load step effects before application of Partial Factors (Gamma, KFI) and Dynamic Factor (Phi). Vehicle A and Vehicle B are combined by independent moving-load envelope superposition.", self.styles['SwecoCell']))
             self._add_unfactored_vehicle_table()
             self.elements.append(Spacer(1, 0.4*cm))
@@ -586,7 +592,13 @@ class BricosReportGenerator:
         t = self._make_std_table(data, [4*cm, 5.5*cm, 6.5*cm])
         self.elements.append(KeepTogether([t]))
 
-    def _draw_vehicle_stick_model(self, loads, spacing, width=400, height=80, udl_gap=None):
+    def _draw_vehicle_stick_model(self, loads, spacing, width=400, height=72, udl_gap=None):
+        # Fixed vertical bands from the bottom: caption (baseline 2), axle
+        # spacing labels (baseline 12), dimension line (22), axle line (34),
+        # arrows up to 50, load labels (baseline 55). Sized so no band
+        # overlaps its neighbour (proportional placement used to draw the
+        # caption across the dimension labels at small heights).
+        height = max(height, 72)
         d = Drawing(width, height)
         if not loads or len(loads) == 0:
             d.add(String(width/2, height/2, "No Load Data", textAnchor='middle', fontSize=10, fillColor=colors.gray))
@@ -600,8 +612,8 @@ class BricosReportGenerator:
         if total_len < 0.1: scale_x = 0; offset_x = width / 2
         else: scale_x = draw_w / total_len; offset_x = margin_x
 
-        y_axle_line = height * 0.4
-        arrow_len = height * 0.25
+        y_axle_line = 34.0
+        arrow_len = 16.0
 
         d.add(Line(margin_x - 10, y_axle_line, width - margin_x + 10, y_axle_line, strokeColor=colors.black, strokeWidth=1))
 
@@ -632,7 +644,7 @@ class BricosReportGenerator:
             d.add(Group(Polygon(points=[x_pos-2, y_axle_line-2, x_pos+2, y_axle_line-2, x_pos+2, y_axle_line+2, x_pos-2, y_axle_line+2], 
                                 fillColor=colors.black, strokeWidth=0)))
 
-        dim_y = y_axle_line - 15
+        dim_y = y_axle_line - 12
         for i in range(len(spacing)):
             if i == 0: continue
             dist = spacing[i]
@@ -642,8 +654,8 @@ class BricosReportGenerator:
             d.add(Line(x_prev, dim_y-2, x_prev, dim_y+2, strokeColor=colors.blue, strokeWidth=0.5))
             d.add(Line(x_curr, dim_y-2, x_curr, dim_y+2, strokeColor=colors.blue, strokeWidth=0.5))
             mid_x = (x_prev + x_curr) / 2
-            d.add(String(mid_x, dim_y - 8, f"{dist}m", textAnchor='middle', fontSize=7, fillColor=colors.blue))
-            
+            d.add(String(mid_x, dim_y - 10, f"{dist}m", textAnchor='middle', fontSize=7, fillColor=colors.blue))
+
         return d
 
     def _get_geometry_description(self, p, prefix, idx, simple_list_key):
@@ -677,19 +689,38 @@ class BricosReportGenerator:
                 desc += f"<br/>Slope: {inc_txt}"
         return desc
 
+    @staticmethod
+    def _udl_application_text(p, sys_has_vehicle):
+        """Step-result application wording for the Traffic UDL line."""
+        if p.get('udl_mode') == 'Static':
+            return "static full deck at every step"
+        if not sys_has_vehicle:
+            return ("no vehicle load model in this system, so no step results exist; "
+                    "the UDL enters the Total Envelope as the full adverse envelope")
+        if p.get('udl_footprint', False):
+            return "moving with the vehicle, also applied within the vehicle window"
+        return (f"moving with the vehicle, clear distance "
+                f"{p.get('udl_gap', 10.0):.2f} m in front of and behind the axles "
+                "(the excluded window snaps inward to whole mesh segments, "
+                "erring on the loaded side - conservative)")
+
     def _add_system_input_summary(self, sys_label, p, raw_res, props, sys_key_id):
         self.elements.append(Paragraph(f"<b>{sys_label} ({p.get('name', '')})</b> - {p['mode']}", self.styles['Heading3']))
-        
-        if p.get('phi_mode') == 'Calculate' and raw_res:
+
+        sys_has_vehicle = self._has_vehicle_loads(p)
+        if not sys_has_vehicle:
+            # Phi only multiplies vehicle effects; a value would be noise here.
+            phi_txt = "n/a (no vehicle load model in this system)"
+        elif p.get('phi_mode') == 'Calculate' and raw_res:
             method = "per span" if p.get('phi_linf_mode') == 'Span' else "combined system"
             phi_txt = f"{self._phi_display_text(p, raw_res)} (Calc, {method})"
         else:
             scope = "per span" if p.get('phi_manual_scope') == 'Per span' else "global"
             phi_txt = f"{self._phi_display_text(p, raw_res)} (Manual, {scope})"
         sls_mode = p.get('phi_sls_mode', 'Same')
-        if sls_mode == 'Reduced':
+        if sys_has_vehicle and sls_mode == 'Reduced':
             phi_txt += " | SLS reduced per Vejl. 5.4.2"
-        elif sls_mode == 'Manual':
+        elif sys_has_vehicle and sls_mode == 'Manual':
             phi_txt += f" | SLS manual = {p.get('phi_sls', 1.0):.3f}"
 
         analyze_uls = bool(p.get('analyze_uls', True))
@@ -725,13 +756,7 @@ class BricosReportGenerator:
         self.elements.append(KeepTogether([t]))
 
         if udl_line > 0.0:
-            if p.get('udl_mode') == 'Static':
-                app_txt = "static full deck at every step"
-            elif p.get('udl_footprint', False):
-                app_txt = "moving with the vehicle, also applied within the vehicle window"
-            else:
-                app_txt = (f"moving with the vehicle, clear distance "
-                           f"{p.get('udl_gap', 10.0):.2f} m in front of and behind the axles")
+            app_txt = self._udl_application_text(p, sys_has_vehicle)
             self.elements.append(Paragraph(
                 f"<b>Traffic UDL:</b> q = {udl_line:.2f} kN/m "
                 "(line load on the analysis strip; loaded width considered in the input) | "
@@ -826,22 +851,22 @@ class BricosReportGenerator:
             supp_data.append([lbl, s_type, k_str])
             has_supp = True
         if has_supp:
-            self.elements.append(Paragraph("Boundary Conditions:", self.styles['SwecoSmall']))
             t = self._make_std_table(supp_data, [4*cm, 4*cm, 7*cm])
-            self.elements.append(KeepTogether([t]))
+            self.elements.append(KeepTogether([
+                Paragraph("Boundary Conditions:", self.styles['SwecoSmall']), t]))
 
         # 4. SOIL
         soil_list = p.get('soil', [])
         if soil_list:
             self.elements.append(Spacer(1, 0.2*cm))
-            self.elements.append(Paragraph("Soil Loads (Earth Pressure):", self.styles['SwecoSmall']))
             soil_table = [["Wall", "Face", "Height [m]", "q_top [kN/m]", "q_bot [kN/m]"]]
             for s in soil_list:
                 soil_table.append([
                     f"W{s['wall_idx']+1}", s['face'], f"{s['h']:.2f}", f"{s['q_top']:.1f}", f"{s['q_bot']:.1f}"
                 ])
             t = self._make_std_table(soil_table, [2*cm, 2*cm, 3*cm, 3*cm, 3*cm])
-            self.elements.append(KeepTogether([t]))
+            self.elements.append(KeepTogether([
+                Paragraph("Soil Loads (Earth Pressure):", self.styles['SwecoSmall']), t]))
 
         # 5. VEHICLES
         self.elements.append(Spacer(1, 0.2*cm))
@@ -863,23 +888,52 @@ class BricosReportGenerator:
                 if (data_mod.udl_line_load(p) > 0.0 and p.get('udl_mode') != 'Static'
                         and not p.get('udl_footprint', False)):
                     udl_gap_draw = float(p.get('udl_gap', 10.0))
-                drawing = self._draw_vehicle_stick_model(v_loads, v_spac, width=400, height=60, udl_gap=udl_gap_draw)
+                drawing = self._draw_vehicle_stick_model(v_loads, v_spac, width=400, height=72, udl_gap=udl_gap_draw)
                 self.elements.append(drawing)
                 self.elements.append(Spacer(1, 0.3*cm))
         
         add_veh_table('vehicle', "A", "vehA")
         add_veh_table('vehicleB', "B", "vehB")
 
+        # Vehicles are defined per system; a one-sided definition is easy to
+        # miss in the sidebar (it edits the active system only), so call it
+        # out where the vehicle tables would have been.
+        if not sys_has_vehicle and self.valid_B:
+            other_p = self.params_B if sys_key_id == "sysA" else self.params_A
+            other_lbl = "System B" if sys_key_id == "sysA" else "System A"
+            if self._has_vehicle_loads(other_p):
+                self.elements.append(Paragraph(
+                    f"<b>Note:</b> no vehicle load model is defined for {sys_label}, "
+                    f"while {other_lbl} includes one. Moving-load envelopes and "
+                    "critical vehicle steps are reported only for systems with a "
+                    "vehicle definition.",
+                    self.styles['SwecoBody']))
+                self.elements.append(Spacer(1, 0.2*cm))
+
         # 6. DYNAMIC FACTOR (PHI)
         if raw_res:
-            self._add_dynamic_factor_section(p, raw_res)
+            if sys_has_vehicle:
+                self._add_dynamic_factor_section(p, raw_res)
+            else:
+                self.elements.append(Spacer(1, 0.2*cm))
+                self.elements.append(Paragraph(
+                    "Dynamic Factor (<i>Φ</i>): not applicable - no vehicle "
+                    "load model in this system.",
+                    self.styles['SwecoSmall']))
 
         # 7. GLOBAL EQUILIBRIUM CHECK
         if raw_res and raw_res.get('Equilibrium'):
             self._add_equilibrium_section(raw_res['Equilibrium'])
 
-    def _add_equilibrium_section(self, equilibrium):
-        """Applied loads vs support reactions per unfactored static case."""
+    @staticmethod
+    def _equilibrium_rows(equilibrium):
+        """Table rows for the global equilibrium check.
+
+        Cases without any load definition show "(no loads)". Cases whose
+        loads cancel in the global sums (e.g. mirrored earth pressure on
+        both walls) still get the residual check: the reactions must cancel
+        too, so PASS/FAIL remains meaningful at zero sums.
+        """
         rows = [["Load case", "Sum applied Fx / Fy [kN]", "Sum reactions Rx / Ry [kN]", "Residual Fx / Fy [kN]", "Status"]]
         for case in ('Selfweight', 'Soil', 'Surcharge'):
             eq = equilibrium.get(case)
@@ -888,7 +942,11 @@ class BricosReportGenerator:
             a_x, a_y = eq['applied_x'], eq['applied_y']
             r_x, r_y = eq['reactions_x'], eq['reactions_y']
             res_x, res_y = eq['residual_x'], eq['residual_y']
-            if max(abs(a_x), abs(a_y), abs(r_x), abs(r_y)) < 1e-9:
+            has_loads = eq.get('has_loads')
+            if has_loads is None:
+                # Legacy raw results without the flag: infer from magnitudes.
+                has_loads = max(abs(a_x), abs(a_y), abs(r_x), abs(r_y)) >= 1e-9
+            if not has_loads:
                 rows.append([case, "0.00 / 0.00", "0.00 / 0.00", "-", "(no loads)"])
                 continue
             scale = max(abs(a_x), abs(a_y), abs(r_x), abs(r_y), 1.0)
@@ -901,17 +959,25 @@ class BricosReportGenerator:
                 f"{res_x:.2e} / {res_y:.2e}",
                 "PASS" if ok else "CHECK FAILED",
             ])
+        return rows
 
-        self.elements.append(Spacer(1, 0.2*cm))
-        self.elements.append(Paragraph("Global Equilibrium Check:", self.styles['SwecoSmall']))
-        self.elements.append(Paragraph(
+    def _add_equilibrium_section(self, equilibrium):
+        """Applied loads vs support reactions per unfactored static case."""
+        rows = self._equilibrium_rows(equilibrium)
+        heading = Paragraph("Global Equilibrium Check:", self.styles['SwecoSmall'])
+        explanation = Paragraph(
             "Sum of applied loads (computed from the load definitions by simple statics) compared "
             "with the sum of support reactions (boundary-spring forces) for each unfactored static "
             "load case, in global axes. A vanishing residual verifies load assembly, load splitting "
-            "across the mesh and the solution itself.",
-            self.styles['SwecoCell']))
+            "across the mesh and the solution itself. Opposing load definitions (e.g. symmetric "
+            "earth pressure on both walls) may cancel to zero sums; the residual comparison "
+            "remains valid.",
+            self.styles['SwecoCell'])
         t = self._make_std_table(rows, [2.8*cm, 4.3*cm, 4.3*cm, 4.0*cm, 2.6*cm], font_size=8)
-        self.elements.append(KeepTogether([t]))
+        self.elements.append(Spacer(1, 0.2*cm))
+        # Keep the heading and explanation with the table so a page break
+        # cannot strand them at the bottom of the previous page.
+        self.elements.append(KeepTogether([heading, explanation, t]))
 
     def _add_dynamic_factor_section(self, p, raw_res):
         """Methodology statement, per-member phi table (ULS and SLS values),
@@ -940,19 +1006,20 @@ class BricosReportGenerator:
                 "DS/EN 1991-2:2003, Table 6.2, Case 5.1/5.2/5.3 (renumbered Table 8.2 in the "
                 "2023 edition); <i>Φ</i> per DS/EN 1991-2 DK NA:2017, Annex A, A.2.3.5(2)."
             )
-        self.elements.append(Paragraph(method_txt, self.styles['SwecoSmall']))
+        self.elements.append(Paragraph(method_txt, self.styles['SwecoFormula']))
 
         sls_mode = p.get('phi_sls_mode', 'Same')
         if sls_mode == 'Reduced':
             self.elements.append(Paragraph(
                 "SLS reduction enabled: <i>Φ<sub>SLS</sub></i> = 1 + (<i>Φ<sub>ULS</sub></i> - 1)/2 "
                 "per Vejledning til belastnings- og beregningsgrundlag for broer, 5.4.2.",
-                self.styles['SwecoSmall']))
+                self.styles['SwecoFormula']))
         elif sls_mode == 'Manual':
             self.elements.append(Paragraph(
                 f"SLS: user-defined uniform <i>Φ<sub>SLS</sub></i> = {p.get('phi_sls', 1.0):.3f} "
                 "replaces all member values in the Characteristic (SLS) result mode.",
-                self.styles['SwecoSmall']))
+                self.styles['SwecoFormula']))
+        self.elements.append(Spacer(1, 0.15*cm))
 
         # Phi value table: per member when available, otherwise one row.
         # Per-member values exist for the calculated span-based methodology
@@ -1081,17 +1148,15 @@ class BricosReportGenerator:
                 })
 
         images = self._submit_parallel_plots(tasks, prog_range)
-        
-        self.elements.append(Paragraph("System A", self.styles['SwecoSmall']))
-        self._append_image_grid(images[0:4]) 
-        
+
+        self._append_image_grid(images[0:4], heading="System A")
+
         if self.valid_B:
             self.elements.append(Spacer(1, 0.3*cm))
-            self.elements.append(Paragraph("System B", self.styles['SwecoSmall']))
-            self._append_image_grid(images[4:8]) 
+            self._append_image_grid(images[4:8], heading="System B")
 
         self.elements.append(Spacer(1, 0.5*cm))
-        
+
         title_str = f"Tabular Summary - {res_mode.upper()}"
         self.elements.append(Paragraph(title_str, self.styles['Heading3']))
         
@@ -1133,15 +1198,13 @@ class BricosReportGenerator:
                 })
 
         images = self._submit_parallel_plots(tasks, prog_range)
-        
-        self.elements.append(Paragraph("System A", self.styles['SwecoSmall']))
-        self._append_image_grid(images[0:4])
-        
+
+        self._append_image_grid(images[0:4], heading="System A")
+
         if self.valid_B:
             self.elements.append(Spacer(1, 0.3*cm))
-            self.elements.append(Paragraph("System B", self.styles['SwecoSmall']))
-            self._append_image_grid(images[4:8])
-        
+            self._append_image_grid(images[4:8], heading="System B")
+
         self.elements.append(Spacer(1, 0.5*cm))
         self._add_force_summary_table(res_A.get(load_key, {}), res_B.get(load_key, {}))
         self.elements.append(Spacer(1, 0.3*cm))
@@ -1150,7 +1213,7 @@ class BricosReportGenerator:
         wrap_B = {'Total Envelope': res_B.get(load_key, {})} if self.valid_B else {}
         self._add_reaction_table(wrap_A, self.params_A, wrap_B, self.params_B)
 
-    def _append_image_grid(self, img_bytes_list):
+    def _append_image_grid(self, img_bytes_list, heading=None):
         img_flowables = []
         for b in img_bytes_list:
             if b:
@@ -1161,17 +1224,22 @@ class BricosReportGenerator:
                     img_flowables.append(Paragraph("[Image Corrupt]", self.styles['SwecoSmall']))
             else:
                 img_flowables.append(Paragraph("[Image Failed]", self.styles['SwecoSmall']))
-        
+
         if img_flowables:
             rows = []
             for i in range(0, len(img_flowables), 2):
                 rows.append(img_flowables[i:i+2])
             if len(rows[-1]) == 1:
                 rows[-1].append(Paragraph("", self.styles['Normal']))
-                
+
             t = Table(rows, colWidths=[8.5*cm, 8.5*cm], hAlign='LEFT')
             t.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'MIDDLE'), ('ALIGN', (0,0), (-1,-1), 'CENTER')]))
-            self.elements.append(KeepTogether([t]))
+            # Keep the heading with the grid: appended separately, a page
+            # break can strand it alone at the bottom of the previous page.
+            parts = [t]
+            if heading:
+                parts.insert(0, Paragraph(heading, self.styles['SwecoSmall']))
+            self.elements.append(KeepTogether(parts))
 
     def _add_unfactored_vehicle_table(self):
         """Adds table showing raw vehicle effects (Unfactored) for validation."""
@@ -1488,8 +1556,30 @@ class BricosReportGenerator:
         self.elements.append(KeepTogether([t]))
 
     def _make_std_table(self, data, col_widths, font_size=9, header_rows=1):
-        t = Table(data, colWidths=col_widths, hAlign='LEFT')
-        
+        # ReportLab does not wrap plain-string cells: any text wider than its
+        # column runs over the table edge or into the neighbour cell. Wrap
+        # cells that would overflow into Paragraphs (which do wrap); short
+        # strings stay plain so the table's CENTER alignment applies.
+        body_style = ParagraphStyle(
+            f'_cell{font_size}', parent=self.styles['Normal'],
+            fontSize=font_size, leading=font_size + 2)
+        head_style = ParagraphStyle(
+            f'_cellh{font_size}', parent=body_style, fontName='Helvetica-Bold')
+        pad = 12.0  # default LEFTPADDING + RIGHTPADDING
+        rows = []
+        for r, row in enumerate(data):
+            cells = []
+            for ci, cell in enumerate(row):
+                if isinstance(cell, str) and ci < len(col_widths) and col_widths[ci]:
+                    is_head = r < header_rows
+                    font = 'Helvetica-Bold' if is_head else 'Helvetica'
+                    if stringWidth(cell, font, font_size) > col_widths[ci] - pad:
+                        cell = Paragraph(cell, head_style if is_head else body_style)
+                cells.append(cell)
+            rows.append(cells)
+
+        t = Table(rows, colWidths=col_widths, hAlign='LEFT')
+
         t.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
             ('FONTSIZE', (0,0), (-1,-1), font_size),
