@@ -108,6 +108,25 @@ def test_window_ranges_exclude_vehicle_window():
         assert b <= axle_x - 2.0 + 0.5 + 1e-9 or a >= axle_x + 2.0 - 0.5 - 1e-9
 
 
+def test_entry_exit_window_includes_offdeck_axles():
+    # Two-axle vehicle (4 m apart) entering/leaving a 10 m deck with gap 0:
+    # axles still off the deck must bound the UDL-free window, so no UDL is
+    # applied under the vehicle footprint near the abutments.
+    raw = _run(_beam_params(udl_mode="Moving", udl_gap=0.0,
+                            vehicle={"loads": [10.0, 10.0],
+                                     "spacing": [0.0, 4.0]}))
+    steps = {round(float(s["x"]), 6): s for s in raw["Vehicle Steps A"]}
+
+    # Entering: front axle at 2.0 m, rear axle at -2.0 m (off deck). The
+    # deck between the abutment and the front axle is under the vehicle.
+    entry = steps[2.0]["res"]["S1"]
+    assert entry["udl_loaded_ranges"] == [(2.0, 10.0)]
+
+    # Leaving: front axle at 12.0 m (off deck), rear axle at 8.0 m.
+    exiting = steps[12.0]["res"]["S1"]
+    assert exiting["udl_loaded_ranges"] == [(0.0, 8.0)]
+
+
 def test_no_udl_keys_when_inactive():
     raw = _run(_beam_params(udl_q=0.0))
     res = raw["Vehicle Steps A"][0]["res"]["S1"]

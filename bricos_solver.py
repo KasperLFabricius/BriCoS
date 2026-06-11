@@ -1309,20 +1309,23 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         lo, hi = parent_deck_extent.get(pid, (seg_s, seg_s + seg_L))
         parent_deck_extent[pid] = (min(lo, seg_s), max(hi, seg_s + seg_L))
 
-    def attach_step_udl(step_res, axle_positions):
+    def attach_step_udl(step_res, axle_lo, axle_hi):
         """Attach per-step adverse UDL fields and loaded ranges to a step.
 
-        The window [min axle - gap, max axle + gap] is excluded, snapped
+        The window [axle_lo - gap, axle_hi + gap] is excluded, snapped
         inward to segment boundaries: a segment is excluded only when it
         lies fully inside the window, which is conservative for the load
-        effects. With the footprint option, or in static application, no
-        window is excluded.
+        effects. The axle extent spans ALL axles of the run, including
+        axles still off the deck while the vehicle enters or leaves, so
+        the vehicle footprint and its clear distance are honoured near
+        the abutments. With the footprint option, or in static
+        application, no window is excluded.
         """
         if not n_udl:
             return
-        if udl_moving and not udl_footprint and len(axle_positions):
-            w_lo = min(axle_positions) - udl_gap
-            w_hi = max(axle_positions) + udl_gap
+        if udl_moving and not udl_footprint:
+            w_lo = axle_lo - udl_gap
+            w_hi = axle_hi + udl_gap
             # Segments fully inside the window: start >= w_lo and end <= w_hi.
             i0 = int(np.searchsorted(seg_starts_arr, w_lo, side='left'))
             i1 = int(np.searchsorted(seg_ends_arr, w_hi, side='right'))
@@ -1372,6 +1375,10 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
             x_steps = r['x_steps']
             v_loads_raw = r['v_loads_raw']
             v_dists_run = r['v_dists_run']
+            # Full vehicle extent per step (all axles, on deck or not) for
+            # the moving UDL window; reverse runs carry negated distances.
+            v_d_min = float(np.min(v_dists_run))
+            v_d_max = float(np.max(v_dists_run))
             total_steps = len(x_steps)
             v_steps_res_list = []
             CHUNK_SIZE = 2000
@@ -1429,7 +1436,6 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     x_front = x_chunk[i_local]
                     step_loads_map = {}
                     parent_loads = {}
-                    axle_deck_xs = []
                     has_loads = False
                     for ax_i, d in enumerate(v_dists_run):
                         ax_x = x_front - d
@@ -1447,7 +1453,6 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                             if point_load_belongs_to_sub_element(ax_x, start_x, start_x + L_span, is_last, 1e-9):
                                 local_x = min(max(ax_x - start_x, 0.0), L_span)
                                 P_val = v_loads_raw[ax_i]
-                                axle_deck_xs.append(ax_x)
                                 if use_batch_recovery:
                                     pid = elems_base[el_idx]['parent']
                                     parent_x = elems_base[el_idx]['local_offset'] + local_x
@@ -1491,13 +1496,13 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                                 'f_start_local': np.array([-N_agg[0], V_agg[0], M_agg[0]]),
                                 'f_end_local': np.array([N_agg[-1], -V_agg[-1], -M_agg[-1]]),
                             }
-                        attach_step_udl(step_res, axle_deck_xs)
+                        attach_step_udl(step_res, x_front - v_d_max, x_front - v_d_min)
                         v_steps_res_list.append({'x': x_front, 'res': step_res})
                     else:
                         D_step = D_chunk[:, i_local]
                         raw_step = get_detailed_results_optimized(elem_objects, elems_base, nodes, D_step, step_loads_map, params.get('mesh_size', 0.5), node_map)
                         agg_step = aggregate_member_results(raw_step)
-                        attach_step_udl(agg_step, axle_deck_xs)
+                        attach_step_udl(agg_step, x_front - v_d_max, x_front - v_d_min)
                         v_steps_res_list.append({'x': x_front, 'res': agg_step})
             
             steps_out[current_dir] = v_steps_res_list
