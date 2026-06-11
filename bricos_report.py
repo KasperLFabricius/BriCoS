@@ -382,7 +382,11 @@ class BricosReportGenerator:
             self.elements.append(Spacer(1, 0.4*cm))
 
             self.elements.append(Paragraph("<b>Vehicle Step Plots</b>", self.styles['SwecoBody']))
-            self.elements.append(Paragraph("Vehicle positions causing peak effects per span.", self.styles['SwecoSmall']))
+            self.elements.append(Paragraph(
+                "Vehicle positions causing peak effects per span. Plotted values are the "
+                "unfactored vehicle effects; where a Traffic UDL is defined, the shaded "
+                "band marks the deck regions carrying the UDL for that step (the window "
+                "around the vehicle is left clear).", self.styles['SwecoSmall']))
             self.elements.append(Spacer(1, 0.2*cm))
             self._add_smart_vehicle_steps(prog_range=(0.75, 0.95))
             self.chapter_count += 1
@@ -582,24 +586,41 @@ class BricosReportGenerator:
         t = self._make_std_table(data, [4*cm, 5.5*cm, 6.5*cm])
         self.elements.append(KeepTogether([t]))
 
-    def _draw_vehicle_stick_model(self, loads, spacing, width=400, height=80):
+    def _draw_vehicle_stick_model(self, loads, spacing, width=400, height=80, udl_gap=None):
         d = Drawing(width, height)
         if not loads or len(loads) == 0:
             d.add(String(width/2, height/2, "No Load Data", textAnchor='middle', fontSize=10, fillColor=colors.gray))
             return d
-            
+
         cum_dist = np.cumsum(spacing)
         total_len = cum_dist[-1]
         draw_w = width * 0.8
         margin_x = width * 0.1
-        
+
         if total_len < 0.1: scale_x = 0; offset_x = width / 2
         else: scale_x = draw_w / total_len; offset_x = margin_x
-            
+
         y_axle_line = height * 0.4
         arrow_len = height * 0.25
-        
+
         d.add(Line(margin_x - 10, y_axle_line, width - margin_x + 10, y_axle_line, strokeColor=colors.black, strokeWidth=1))
+
+        if udl_gap is not None:
+            # Schematic of the accompanying UDL fore and aft of the vehicle
+            # with the clear-distance dimension (not to scale).
+            band_col = colors.Color(0.18, 0.55, 0.34, alpha=0.5)
+            band_h = 7
+            for x0, x1 in ((2, margin_x - 28), (width - margin_x + 28, width - 2)):
+                if x1 > x0:
+                    d.add(Polygon(points=[x0, y_axle_line, x1, y_axle_line,
+                                          x1, y_axle_line + band_h, x0, y_axle_line + band_h],
+                                  fillColor=band_col, strokeWidth=0))
+            d.add(String(margin_x - 19, y_axle_line + 10, f"{udl_gap:g} m",
+                         textAnchor='middle', fontSize=7, fillColor=colors.Color(0.13, 0.4, 0.25)))
+            d.add(String(width - margin_x + 19, y_axle_line + 10, f"{udl_gap:g} m",
+                         textAnchor='middle', fontSize=7, fillColor=colors.Color(0.13, 0.4, 0.25)))
+            d.add(String(width / 2, 2, "UDL accompanies the vehicle with the shown clear distance (not to scale)",
+                         textAnchor='middle', fontSize=6, fillColor=colors.gray))
         
         for i, load_val in enumerate(loads):
             x_pos = offset_x + (cum_dist[i] if total_len > 0.1 else 0) * scale_x
@@ -704,10 +725,20 @@ class BricosReportGenerator:
         self.elements.append(KeepTogether([t]))
 
         if udl_line > 0.0:
+            if p.get('udl_mode') == 'Static':
+                app_txt = "static full deck at every step"
+            elif p.get('udl_footprint', False):
+                app_txt = "moving with the vehicle, also applied within the vehicle window"
+            else:
+                app_txt = (f"moving with the vehicle, clear distance "
+                           f"{p.get('udl_gap', 10.0):.2f} m in front of and behind the axles")
             self.elements.append(Paragraph(
                 f"<b>Traffic UDL:</b> q = {udl_line:.2f} kN/m "
-                "(line load on the analysis strip; effective width considered in the input) | "
-                "application: static full deck, adverse-only (EN 1991-2, 4.3.2(1)(b))",
+                "(line load on the analysis strip; loaded width considered in the input) | "
+                "adverse-only application (EN 1991-2, 4.3.2(1)(b)) | "
+                f"step results: {app_txt}. The Total Envelope combines the vehicle envelope "
+                "with the full adverse UDL envelope by independent superposition, which "
+                "bounds every window arrangement including the vehicle-absent situation.",
                 self.styles['SwecoBody']))
         self.elements.append(Spacer(1, 0.2*cm))
         
@@ -828,7 +859,11 @@ class BricosReportGenerator:
                     header_text += " - In accordance with DS/EN 1991-2, DK:NA (bridges):2017"
                 
                 self.elements.append(Paragraph(header_text, self.styles['SwecoSmall']))
-                drawing = self._draw_vehicle_stick_model(v_loads, v_spac, width=400, height=60)
+                udl_gap_draw = None
+                if (data_mod.udl_line_load(p) > 0.0 and p.get('udl_mode') != 'Static'
+                        and not p.get('udl_footprint', False)):
+                    udl_gap_draw = float(p.get('udl_gap', 10.0))
+                drawing = self._draw_vehicle_stick_model(v_loads, v_spac, width=400, height=60, udl_gap=udl_gap_draw)
                 self.elements.append(drawing)
                 self.elements.append(Spacer(1, 0.3*cm))
         

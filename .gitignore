@@ -184,3 +184,6 @@ pytest-cache-files-*/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# BriCoS session autosave (user data, never committed)
+latest_session.csv

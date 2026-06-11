@@ -423,6 +423,30 @@ def create_plotly_fig(
                             'perp_x': nx, 'perp_y': ny
                         })
 
+            # --- TRAFFIC UDL EXTENT (step views) ---
+            # Translucent band along the deck regions carrying the UDL for
+            # this step; the window around the vehicle stays visibly empty.
+            if load_case_name == "Vehicle Steps" and data.get('udl_loaded_ranges'):
+                band_h = 0.45
+                first_band = True
+                for (r_a, r_b) in data['udl_loaded_ranges']:
+                    ax0 = ni[0] + c * r_a; ay0 = ni[1] + s * r_a
+                    ax1 = ni[0] + c * r_b; ay1 = ni[1] + s * r_b
+                    tx0 = ax0 - s * band_h; ty0 = ay0 + c * band_h
+                    tx1 = ax1 - s * band_h; ty1 = ay1 + c * band_h
+                    fig.add_trace(go.Scatter(
+                        x=[ax0, ax1, tx1, tx0, ax0],
+                        y=[ay0, ay1, ty1, ty0, ay0],
+                        fill='toself', fillcolor='seagreen', opacity=0.25,
+                        mode='none', hoverinfo='skip', showlegend=False
+                    ))
+                    if first_band and (r_b - r_a) > 0.5:
+                        fig.add_annotation(
+                            x=(ax0 + ax1) / 2, y=(ay0 + ay1) / 2 + band_h,
+                            text="UDL", showarrow=False, yshift=4 * font_scale,
+                            font=dict(color='seagreen', size=marker_size, weight="bold"))
+                        first_band = False
+
             # --- LOADS (Cannot be easily merged due to diverse shapes) ---
             if 'Envelope' not in load_case_name and 'loads' in data:
                 for i_load, load in enumerate(data['loads']):

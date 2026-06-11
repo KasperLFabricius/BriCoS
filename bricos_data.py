@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.52"
+APP_VERSION = "0.53"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -670,9 +670,11 @@ def get_def():
         # times the considered width). Off by default (q = 0) so existing
         # sessions are unaffected.
         'udl_q': 0.0,            # line load [kN/m]; 0 deactivates
-        'udl_gap': 10.0,         # clear distance to vehicle [m] (Fig. A.2.2-2);
-                                 # used by the moving-window mode (next release)
-        'udl_mode': 'Static',    # 'Static' (full deck, adverse) for now
+        'udl_gap': 10.0,         # clear distance vehicle -> UDL [m] in the
+                                 # step coupling (preset: DK NA Fig. A.2.2-2)
+        'udl_mode': 'Moving',    # 'Moving' (window follows the vehicle in
+                                 # the step results) or 'Static' (full deck)
+        'udl_footprint': False,  # True: UDL also within the vehicle window
         'gamma_udl': 0.56,       # ULS partial factor (Vejledning Fig. B3.1, LC1)
 
         # SLS combination factors (Vejledning Fig. B3.2, characteristic
@@ -736,7 +738,8 @@ def get_clear(name_suffix, current_mode):
         'phi_sls': 1.0,
         'udl_q': 0.0,
         'udl_gap': 10.0,
-        'udl_mode': 'Static',
+        'udl_mode': 'Moving',
+        'udl_footprint': False,
         'gamma_udl': 1.0,
         'sls_g': 1.0, 'sls_j': 1.0,
         'sls_veh': 1.0, 'sls_vehB': 1.0,
@@ -796,7 +799,12 @@ def force_ui_update(sys_key, data):
 
     # Traffic UDL keys
     st.session_state[f"{sys_key}_udlq"] = data.get('udl_q', 0.0)
-    st.session_state[f"{sys_key}_udlgap"] = data.get('udl_gap', 10.0)
+    st.session_state[f"{sys_key}_udlmode"] = (
+        "Static (full deck)" if data.get('udl_mode') == 'Static'
+        else "Moving with vehicle"
+    )
+    st.session_state[f"{sys_key}_udlgap_cust"] = data.get('udl_gap', 10.0)
+    st.session_state[f"{sys_key}_udlfoot"] = bool(data.get('udl_footprint', False))
     st.session_state[f"{sys_key}_gudl_cust"] = data.get('gamma_udl', 0.56)
 
     # SLS factor set
