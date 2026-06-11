@@ -124,7 +124,7 @@ def _combine(raw, result_mode, **param_overrides):
         "gamma_veh": 1.0, "gamma_vehB": 1.0,
         "phi_mode": "Manual", "phi": 1.0,
         "combine_surcharge_vehicle": False,
-        "gamma_udl": 0.56, "udl_sls_factor": 0.40,
+        "gamma_udl": 0.56, "sls_udl": 0.40,
     }
     params.update(param_overrides)
     return solver.combine_results(raw, params, result_mode)
@@ -138,7 +138,7 @@ def test_udl_factoring_per_result_mode_and_no_phi():
     np.testing.assert_allclose(uls["Traffic UDL"]["S1"]["M_max"], base * 1.1 * 0.56)
     assert uls["f_udl"] == pytest.approx(1.1 * 0.56)
 
-    sls = _combine(raw, "Characteristic (SLS)", udl_sls_factor=0.40, phi=1.30)
+    sls = _combine(raw, "Characteristic (SLS)", sls_udl=0.40, phi=1.30)
     np.testing.assert_allclose(sls["Traffic UDL"]["S1"]["M_max"], base * 0.40)
 
     nodyn = _combine(raw, "Characteristic (No Dynamic Factor)")
@@ -165,6 +165,6 @@ def test_cache_key_excludes_udl_factors_but_includes_geometry():
     filtered = solver.solver_cache_params(params)
 
     assert "gamma_udl" not in filtered
-    assert "udl_sls_factor" not in filtered
+    assert "sls_udl" not in filtered
     assert filtered["udl_q"] == params["udl_q"]
     assert filtered["udl_gap"] == params["udl_gap"]

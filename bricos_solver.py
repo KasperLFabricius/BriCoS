@@ -483,9 +483,13 @@ NON_SOLVER_PARAM_KEYS = frozenset({
     'combine_surcharge_vehicle',
     # SLS phi treatment is applied in combine_results, not in the raw analysis.
     'phi_sls_mode', 'phi_sls',
-    # Traffic UDL partial factors are combination-stage only; the UDL
+    # Traffic UDL partial factor is combination-stage only; the UDL
     # definition (udl_q, udl_gap, udl_mode) stays in the key.
-    'gamma_udl', 'udl_sls_factor',
+    'gamma_udl',
+    # The SLS factor set and the ULS/SLS analysis toggles never affect the
+    # raw analysis.
+    'sls_g', 'sls_j', 'sls_veh', 'sls_vehB', 'sls_udl',
+    'analyze_uls', 'analyze_sls',
 })
 
 
@@ -1503,8 +1507,13 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
     sls_active = result_mode == "Characteristic (SLS)" and sls_mode in ('Reduced', 'Manual')
     phi_sls_manual = params.get('phi_sls', 1.0)
 
+    # Any mode other than ULS/SLS is the unfactored combination: every load
+    # at factor 1.0 with no dynamic factor. (The legacy mode name
+    # "Characteristic (No Dynamic Factor)" maps here as well.)
+    is_unfactored = result_mode not in ("Design (ULS)", "Characteristic (SLS)")
+
     def phi_for(eid):
-        if result_mode == "Characteristic (No Dynamic Factor)":
+        if is_unfactored:
             return 1.0
         if sls_active and sls_mode == 'Manual':
             return phi_sls_manual
@@ -1522,14 +1531,21 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         f_vehB_base = KFI * gamma_vB
         f_surch = KFI * gamma_vA
         # Traffic UDL: KFI * gamma (Vejledning Fig. B3.1; 0.56 in LC1).
-        # The 2.5 kN/m2 fladelast includes the stoedtillaeg (DK NA A.2.3.2),
-        # so phi is never applied to it.
+        # The traffic UDL intensity includes the dynamic increment
+        # (DK NA A.2.3.2), so phi is never applied to it.
         f_udl = KFI * params.get('gamma_udl', 0.56)
     elif result_mode == "Characteristic (SLS)":
-        f_sw = 1.0; f_soil = 1.0; f_vehA_base = 1.0; f_vehB_base = 1.0; f_surch = 1.0
-        # SLS characteristic factor for the fladelast (Fig. B3.2; 0.40).
-        f_udl = params.get('udl_sls_factor', 0.40)
+        # Dedicated SLS factor set (Vejledning Fig. B3.2, characteristic
+        # combination). KFI is not applied in SLS. The surcharge follows
+        # the vehicle A factor, mirroring the ULS convention.
+        f_sw = params.get('sls_g', 1.0)
+        f_soil = params.get('sls_j', 1.0)
+        f_vehA_base = params.get('sls_veh', 1.0)
+        f_vehB_base = params.get('sls_vehB', 1.0)
+        f_surch = params.get('sls_veh', 1.0)
+        f_udl = params.get('sls_udl', 0.40)
     else:
+        # Unfactored: every load with factor 1.0 and no dynamic factor.
         f_sw = 1.0; f_soil = 1.0; f_vehA_base = 1.0; f_vehB_base = 1.0; f_surch = 1.0
         f_udl = 1.0
 

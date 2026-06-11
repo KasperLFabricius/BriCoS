@@ -312,6 +312,22 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     st.session_state['sysB']['combine_surcharge_vehicle'] = is_simultaneous
 
     st.markdown("---")
+    st.markdown("**Limit states to analyze**")
+    help_ls = (
+        "Select which limit states are combined and reported. ULS uses the partial factors "
+        "(x KFI), SLS uses the SLS combination factors - both sets are defined under Design "
+        "Factors & Type per system. The unfactored combination (all loads x 1.0, no dynamic "
+        "factor) is always available; if neither limit state is selected it is the only one."
+    )
+    c_uls, c_sls = st.columns(2)
+    uls_on = c_uls.checkbox("ULS (Design)", value=bool(st.session_state['sysA'].get('analyze_uls', True)), key="uls_toggle_sidebar", help=help_ls, disabled=ui_locked)
+    sls_on = c_sls.checkbox("SLS (Characteristic)", value=bool(st.session_state['sysA'].get('analyze_sls', True)), key="sls_toggle_sidebar", help=help_ls, disabled=ui_locked)
+    st.session_state['sysA']['analyze_uls'] = uls_on
+    st.session_state['sysB']['analyze_uls'] = uls_on
+    st.session_state['sysA']['analyze_sls'] = sls_on
+    st.session_state['sysB']['analyze_sls'] = sls_on
+
+    st.markdown("---")
     st.markdown("**Shear Deformations (Timoshenko)**")
     
     help_shear = (
@@ -452,10 +468,16 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     e_mode = st.radio("Material Definition", ["Eurocode (f_ck)", "Manual (E-Modulus)"], horizontal=True, index=0 if p['e_mode']=='Eurocode' else 1, key=f"{curr}_emode", help=help_mat, disabled=ui_locked)
     p['e_mode'] = "Eurocode" if "Eurocode" in e_mode else "Manual"
 
+    st.markdown("---")
+    st.markdown("**ULS partial factors**")
+    st.caption(
+        "Applied in the Design (ULS) result mode, multiplied by KFI. Defaults follow "
+        "Vejledning til belastnings- og beregningsgrundlag for broer, Fig. B3.1."
+    )
     kfi_opts = [0.9, 1.0, 1.1]
     curr_kfi = p.get('KFI', 1.0)
     idx_kfi = kfi_opts.index(curr_kfi) if curr_kfi in kfi_opts else 1
-    help_KFI = "Partial factor for consequence class. Applied to all loads."
+    help_KFI = "Partial factor for consequence class. Applied to all loads in ULS (not in SLS)."
     p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", disabled=ui_locked, help=help_KFI)
     
     gg_opts = [0.9, 1.0, 1.10, 1.25]
@@ -506,24 +528,54 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     else: p['gamma_vehB'] = float(gam_selB)
 
     gudl_opts = [0.56, 0.40, 1.0, 1.40]
-    c_gu, c_us = st.columns(2)
+    c_gu, _c_spare = st.columns(2)
     gudl_val = p.get('gamma_udl', 0.56)
     idx_gudl = gudl_opts.index(gudl_val) if gudl_val in gudl_opts else len(gudl_opts)
     help_gudl = (
-        "Partial factor for the Traffic UDL (fladelast) in ULS (with KFI). Vejledning til "
+        "Partial factor for the Traffic UDL in ULS (with KFI). Vejledning til "
         "belastnings- og beregningsgrundlag for broer, Fig. B3.1: 0.56 as companion to the "
         "standard vehicles (LC 1); 1.40 for the large-bridge UDL-alone combination (LC 3). "
         "The UDL itself is defined under Vehicle Definitions. Phi is never applied to it "
-        "(intensity includes the stoedtillaeg, DK NA A.2.3.2)."
+        "(intensity includes the dynamic increment, DK NA A.2.3.2)."
     )
-    gudl_sel = c_gu.selectbox(r"$\gamma_{UDL}$ (ULS)", gudl_opts + ["Custom"], index=min(idx_gudl, len(gudl_opts)), key=f"{curr}_gudl_sel", disabled=ui_locked, help=help_gudl)
+    gudl_sel = c_gu.selectbox(r"$\gamma_{UDL}$", gudl_opts + ["Custom"], index=min(idx_gudl, len(gudl_opts)), key=f"{curr}_gudl_sel", disabled=ui_locked, help=help_gudl)
     if gudl_sel == "Custom":
         p['gamma_udl'] = c_gu.number_input(r"Custom $\gamma_{UDL}$", value=float(gudl_val), min_value=0.0, key=f"{curr}_gudl_cust", disabled=ui_locked)
     else:
         p['gamma_udl'] = float(gudl_sel)
-    help_udl_sls = "Factor on the Traffic UDL in the Characteristic (SLS) result mode. Vejledning Fig. B3.2: 0.40."
-    p['udl_sls_factor'] = c_us.number_input("UDL SLS factor", value=float(p.get('udl_sls_factor', 0.40)), min_value=0.0, max_value=2.0, step=0.05, format="%.2f", key=f"{curr}_udlsls", disabled=ui_locked, help=help_udl_sls)
 
+    st.markdown("---")
+    st.markdown("**SLS combination factors**")
+    st.caption(
+        "Applied in the Characteristic (SLS) result mode. Defaults follow the characteristic "
+        "combination of Vejledning til belastnings- og beregningsgrundlag for broer, Fig. B3.2. "
+        "KFI is not applied in SLS."
+    )
+
+    def _sls_factor_input(col, label, param_key, options, default, help_txt, widget_tag):
+        val = p.get(param_key, default)
+        idx = options.index(val) if val in options else len(options)
+        sel = col.selectbox(label, options + ["Custom"], index=min(idx, len(options)), key=f"{curr}_{widget_tag}_sel", disabled=ui_locked, help=help_txt)
+        if sel == "Custom":
+            p[param_key] = col.number_input(f"Custom {label}", value=float(val), min_value=0.0, key=f"{curr}_{widget_tag}_cust", disabled=ui_locked)
+        else:
+            p[param_key] = float(sel)
+
+    c_s1, c_s2 = st.columns(2)
+    _sls_factor_input(c_s1, "Self-weight (SLS)", 'sls_g', [1.0, 0.9], 1.0,
+                      "SLS factor on the Selfweight load case. Fig. B3.2: 1.0.", "slsg")
+    _sls_factor_input(c_s2, "Soil (SLS)", 'sls_j', [1.0, 0.9], 1.0,
+                      "SLS factor on the Soil load case. Fig. B3.2: 1.0.", "slsj")
+    c_s3, c_s4 = st.columns(2)
+    _sls_factor_input(c_s3, "Vehicle A (SLS)", 'sls_veh', [1.0, 0.75], 1.0,
+                      "SLS factor on Vehicle A (with the SLS Phi treatment) and the Surcharge. Fig. B3.2: 1.00.", "slsA")
+    _sls_factor_input(c_s4, "Vehicle B (SLS)", 'sls_vehB', [0.75, 1.0], 0.75,
+                      "SLS factor on Vehicle B (with the SLS Phi treatment). Fig. B3.2: 0.75.", "slsB")
+    c_s5, _c_s6 = st.columns(2)
+    _sls_factor_input(c_s5, "Traffic UDL (SLS)", 'sls_udl', [0.40, 1.0], 0.40,
+                      "SLS factor on the Traffic UDL (Phi never applies to it). Fig. B3.2: 0.40.", "slsudl")
+
+    st.markdown("---")
     phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", disabled=ui_locked)
     p['phi_mode'] = phi_mode
     if phi_mode == "Manual":
@@ -554,7 +606,7 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
             p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv", disabled=ui_locked)
     else:
         help_linf = (
-            "How the influence length L_inf for the stoedfaktor (DK NA A.2.3.5(2)) is determined.\n"
+            "How the influence length L_inf for the dynamic factor (DK NA A.2.3.5(2)) is determined.\n"
             "- Combined system: one determinant length for the whole structure per DS/EN 1991-2:2003, "
             "Table 6.2 Case 5.1/5.2/5.3 (frame treated as equivalent continuous beam; renumbered "
             "Table 8.2 in the 2023 edition). Generally gives a lower Phi for short spans.\n"
@@ -965,11 +1017,11 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
     handle_veh_inputs("B", f"{curr}_vehB_class", 'vehicleB_loads', 'vehicleB_space', 'vehicleB')
 
     st.markdown("---")
-    st.markdown("**Traffic UDL (fladelast)**")
+    st.markdown("**Traffic UDL**")
     help_udl_q = (
         "Uniformly distributed traffic load, defined as a LINE load on the analysis strip "
         "like selfweight - account for the effective width manually. DS/EN 1991-2 DK NA:2017, "
-        "Anneks A.2.3.2: 2.5 kN/m2 (incl. stoedtillaeg, so the dynamic factor Phi is NOT "
+        "Annex A.2.3.2: 2.5 kN/m2 (including the dynamic increment, so the dynamic factor Phi is NOT "
         "applied) times the considered width. Set 0 to deactivate. Applied only in the "
         "unfavourable parts of the influence surface per EN 1991-2:2003, 4.3.2(1)(b). "
         "Partial factors are set under Design Factors & Type."
@@ -1039,7 +1091,7 @@ if active_raw_res:
             elif p.get('phi_linf_mode') == 'Span':
                 st.markdown(
                     "The influence length is taken as the actual span per member, per "
-                    "DS/EN 1991-2 DK NA Bridges:2017, Anneks A, A.2.3.5(2). The dynamic factor "
+                    "DS/EN 1991-2 DK NA Bridges:2017, Annex A, A.2.3.5(2). The dynamic factor "
                     "is calculated per member from this influence length."
                 )
             else:
@@ -1048,12 +1100,12 @@ if active_raw_res:
                     "accordance with DS/EN 1991-2:2003, Table 6.2, Case 5.1/5.2/5.3 (renumbered "
                     "Table 8.2 in the 2023 edition), used as the influence length. The dynamic "
                     "factor is then calculated in accordance with DS/EN 1991-2 DK NA Bridges:2017, "
-                    "Anneks A, A.2.3.5(2)."
+                    "Annex A, A.2.3.5(2)."
                 )
             sls_mode_ui = p.get('phi_sls_mode', 'Same')
             if sls_mode_ui == 'Reduced':
                 st.markdown(
-                    "In the Characteristic (SLS) result mode the stoedfaktor is reduced to "
+                    "In the Characteristic (SLS) result mode the dynamic factor is reduced to "
                     "phi_SLS = 1 + (phi_ULS - 1)/2 per Vejledning til belastnings- og "
                     "beregningsgrundlag for broer, 5.4.2."
                 )
