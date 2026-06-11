@@ -1,6 +1,8 @@
+import contextlib
 import io
 import datetime
 import logging
+import os
 import threading
 import numpy as np
 import pandas as pd
@@ -25,6 +27,76 @@ import bricos_viz as viz
 import bricos_data as data_mod
 
 _logger = logging.getLogger("bricos.report")
+
+
+def _chrome_available():
+    """Best-effort check that kaleido 1.x's browser exists, done BEFORE
+    starting its sync server.
+
+    start_sync_server marks the server singleton as running and returns
+    before the browser has launched inside the server thread; if no Chrome
+    is installed, that thread dies asynchronously and every subsequent
+    export blocks forever on the unserviced queue (write_image routes
+    through any running server). A missing browser is the realistic
+    failure - kaleido 1.x does not bundle Chrome - so detect it with the
+    same lookup the server would perform and skip the server entirely:
+    the per-image fallback then fails fast with [Image Failed]
+    placeholders instead of hanging the report with the UI locked.
+    """
+    if os.environ.get("BROWSER_PATH"):
+        return True
+    try:
+        from choreographer.browsers.chromium import Chromium
+        return Chromium.find_browser(skip_local=False) is not None
+    except Exception:
+        # Unknown choreographer layout/version: don't disable the shared
+        # server (a 10x speedup) on a failed heuristic.
+        return True
+
+
+@contextlib.contextmanager
+def persistent_image_export():
+    """Keep ONE kaleido export process alive for all plot exports.
+
+    With kaleido 1.x, every fig.write_image spawns and tears down a fresh
+    headless browser (~3-4 s per image; the v0.53 test report spent ~210 s
+    on its ~58 exports). kaleido's sync server is a singleton that
+    calc_fig_sync - plotly's write_image backend - reuses when running, so
+    starting it once around report generation reduces each export to the
+    actual render time. kaleido 0.2.x keeps a persistent global scope of
+    its own and has no sync server; export then works exactly as before.
+    """
+    try:
+        import kaleido
+        start = getattr(kaleido, 'start_sync_server', None)
+        stop = getattr(kaleido, 'stop_sync_server', None)
+    except Exception:
+        start = stop = None
+    if start is None or stop is None:
+        yield
+        return
+    if not _chrome_available():
+        _logger.error(
+            "kaleido found no Chrome/Chromium browser; skipping the shared "
+            "export server (its thread would die and hang all exports). "
+            "Install Chrome, e.g. via the `kaleido_get_chrome` command.")
+        yield
+        return
+    try:
+        start(silence_warnings=True)
+    except Exception:
+        _logger.exception("Could not start the kaleido sync server; "
+                          "plot exports fall back to one browser per image.")
+        yield
+        return
+    try:
+        yield
+    finally:
+        try:
+            stop(silence_warnings=True)
+        except Exception:
+            _logger.exception("Could not stop the kaleido sync server.")
+
 
 # ==========================================
 # CUSTOM CANVAS FOR PAGE NUMBERING
@@ -108,6 +180,18 @@ class BricosReportGenerator:
         # Serializes fig.write_image across worker threads; see
         # _render_plot_task for why the export step must not run in parallel.
         self._image_export_lock = threading.Lock()
+        # combine_results memo: every component chapter needs the same
+        # 'Unfactored' combination - recombining per chapter was pure waste.
+        # Cached results are read-only, like the solver cache contract.
+        self._combine_cache = {}
+
+    def _combined(self, sys_id, res_mode):
+        key = (sys_id, res_mode)
+        if key not in self._combine_cache:
+            raw = self.raw_A if sys_id == 'A' else self.raw_B
+            params = self.params_A if sys_id == 'A' else self.params_B
+            self._combine_cache[key] = solver.combine_results(raw, params, res_mode)
+        return self._combine_cache[key]
 
     def _update_progress(self, val):
         if self.progress_callback:
@@ -256,6 +340,12 @@ class BricosReportGenerator:
                     yield params, raw, sys_label, nodes, step_key, veh_label, direction_label
 
     def generate(self):
+        # All plot exports share one persistent kaleido process; see
+        # persistent_image_export for why this matters on kaleido 1.x.
+        with persistent_image_export():
+            self._generate_content()
+
+    def _generate_content(self):
         self._update_progress(0.05)
         
         # 1. Cover / Metadata
@@ -1071,16 +1161,21 @@ class BricosReportGenerator:
     # -----------------------------------------------
     def _render_plot_task(self, fig_kwargs):
         """Executed in ThreadPool to offload Plotly I/O."""
+        # Export resolution: grid images are placed at 8 cm width in the
+        # PDF, where the default 700 px figure already gives >200 dpi at
+        # scale 1.0; the full-width step plots (16 cm) keep scale 1.5.
+        # Export time scales with the pixel count.
+        export_scale = fig_kwargs.pop('export_scale', 1.5)
         try:
             fig = viz.create_plotly_fig(**fig_kwargs)
             b = io.BytesIO()
             # Figure construction runs in parallel across the pool, but the
             # PNG export is serialized: kaleido 0.2.x shares a single global
             # scope that is not thread-safe (the source of intermittently
-            # corrupted images), and kaleido 1.x spawns one Chrome process
-            # per concurrent export.
+            # corrupted images), and the kaleido 1.x sync server processes
+            # one request at a time anyway.
             with self._image_export_lock:
-                fig.write_image(b, format='png', scale=1.5)
+                fig.write_image(b, format='png', scale=export_scale)
             b.seek(0)
             if not b.getvalue().startswith(b'\x89PNG'):
                 _logger.error("Plot export produced a corrupt image for %r",
@@ -1125,10 +1220,10 @@ class BricosReportGenerator:
         return results
 
     def _add_results_section(self, res_mode, prog_range=(0.0, 0.0)):
-        res_A = solver.combine_results(self.raw_A, self.params_A, res_mode)
+        res_A = self._combined('A', res_mode)
         res_B = {}
         if self.valid_B:
-            res_B = solver.combine_results(self.raw_B, self.params_B, res_mode)
+            res_B = self._combined('B', res_mode)
         
         self.elements.append(Paragraph(f"Visualizations - {res_mode}", self.styles['Heading4']))
         
@@ -1144,7 +1239,8 @@ class BricosReportGenerator:
                 'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
                 'geom_A': self.raw_A.get('Selfweight'), 'geom_B': None,
                 'params_A': self.params_A, 'params_B': self.params_B,
-                'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5
+                'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5,
+                'export_scale': 1.0
             })
             
         if self.valid_B:
@@ -1156,7 +1252,8 @@ class BricosReportGenerator:
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
                     'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
                     'params_A': self.params_A, 'params_B': self.params_B,
-                    'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
+                    'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5,
+                    'export_scale': 1.0
                 })
 
         images = self._submit_parallel_plots(tasks, prog_range)
@@ -1177,10 +1274,10 @@ class BricosReportGenerator:
         self._add_reaction_table(res_A, self.params_A, res_B, self.params_B)
 
     def _add_component_section(self, load_key, prog_range=(0.0, 0.0)):
-        res_A = solver.combine_results(self.raw_A, self.params_A, "Unfactored")
+        res_A = self._combined('A', "Unfactored")
         res_B = {}
         if self.valid_B:
-             res_B = solver.combine_results(self.raw_B, self.params_B, "Unfactored")
+             res_B = self._combined('B', "Unfactored")
         
         tasks = []
         types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'), 
@@ -1194,7 +1291,8 @@ class BricosReportGenerator:
                 'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
                 'geom_A': self.raw_A.get('Selfweight'), 'geom_B': None,
                 'params_A': self.params_A, 'params_B': self.params_B,
-                'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5
+                'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5,
+                'export_scale': 1.0
             })
         
         if self.valid_B:
@@ -1206,7 +1304,8 @@ class BricosReportGenerator:
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
                     'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
                     'params_A': self.params_A, 'params_B': self.params_B,
-                    'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5
+                    'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5,
+                    'export_scale': 1.0
                 })
 
         images = self._submit_parallel_plots(tasks, prog_range)
