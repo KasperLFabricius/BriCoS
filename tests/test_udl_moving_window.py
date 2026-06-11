@@ -200,3 +200,27 @@ def test_resolve_component_key_deformation_per_member():
     assert results_ui.resolve_component_key("S1", "def") == "def_y"
     assert results_ui.resolve_component_key("W2", "def") == "def_x"
     assert results_ui.resolve_component_key("S1", "M") == "M"
+
+
+def test_step_display_loads_omits_axles_in_udl_only_view():
+    loads = [
+        {"type": "point", "params": [100.0, 2.5]},
+        {"type": "distributed_trapezoid", "is_gravity": True,
+         "params": [5.0, 5.0, 0.0, 10.0]},
+    ]
+
+    # UDL-only view: the axle arrows are not part of the displayed effects.
+    shown = results_ui.step_display_loads(
+        loads, 2.0, results_ui.STEP_EFFECTS_UDL)
+    assert [l["type"] for l in shown] == ["distributed_trapezoid"]
+
+    # Vehicle and combined views keep the axles, factored.
+    for mode in (results_ui.STEP_EFFECTS_VEHICLE,
+                 results_ui.STEP_EFFECTS_COMBINED):
+        shown = results_ui.step_display_loads(loads, 2.0, mode)
+        assert [l["type"] for l in shown] == ["point", "distributed_trapezoid"]
+        assert shown[0]["params"][0] == pytest.approx(200.0)
+
+    # The raw (cached) loads must never be mutated by the factoring.
+    assert loads[0]["params"][0] == 100.0
+    assert results_ui.step_display_loads(None, 1.0, results_ui.STEP_EFFECTS_VEHICLE) == []
