@@ -115,43 +115,47 @@ def get_reaction_envelope(res_dict, nodes_dict, mode, restrained_nodes=None):
                  return dat[key.replace("_max","")][idx]
             return 0.0
 
-        # Start Node Processing
+        # Start Node Processing. The M field is sagging-positive (v0.58);
+        # nodal reaction moments stay in the global CCW-positive
+        # convention, so the start node negates the field (M_nodal(0) =
+        # -M_field(0)) and the end node uses it directly (the historical
+        # end-equilibrium negation and the field flip cancel).
         n_mx = get_val('N_max', 0); n_mn = get_val('N_min', 0)
         v_mx = get_val('V_max', 0); v_mn = get_val('V_min', 0)
         m_mx = get_val('M_max', 0); m_mn = get_val('M_min', 0)
-        
+        m_mx, m_mn = -m_mn, -m_mx
+
         def get_bounds(c_fac, s_fac):
             vals = []
             for n_v in [n_mx, n_mn]:
                 for v_v in [v_mx, v_mn]:
                     vals.append(c_fac*n_v - s_fac*v_v)
             return max(vals), min(vals)
-        
+
         fx_mx, fx_mn = get_bounds(c, s)
-        fy_mx, fy_mn = get_bounds(s, -c) 
-        
+        fy_mx, fy_mn = get_bounds(s, -c)
+
         if is_support(dat['ni_id']): add_to_node(dat['ni_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
 
         # End Node Processing
         n_mx = get_val('N_max', -1); n_mn = get_val('N_min', -1)
         v_mx = get_val('V_max', -1); v_mn = get_val('V_min', -1)
         m_mx = get_val('M_max', -1); m_mn = get_val('M_min', -1)
-        
-        n_mx, n_mn = -n_mn, -n_mx 
+
+        n_mx, n_mn = -n_mn, -n_mx
         v_mx, v_mn = -v_mn, -v_mx
-        m_mx, m_mn = -m_mn, -m_mx
-        
+
         fx_mx, fx_mn = get_bounds(c, s)
         fy_mx, fy_mn = get_bounds(s, -c)
-        
+
         if is_support(dat['nj_id']): add_to_node(dat['nj_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
              
     return reacts
 
 # Envelope components selectable for critical-step navigation. Values are
 # (base result key, side); 'def' resolves per member (def_x for walls,
-# def_y for spans). Note the sign convention: sagging is negative, so
-# "Bending (Min)" navigates to the governing sagging step.
+# def_y for spans). Sign convention (v0.58): sagging is positive, so
+# "Bending (Max)" navigates to the governing sagging step.
 STEP_COMPONENT_OPTIONS = {
     "Bending (Max)": ("M", "max"), "Bending (Min)": ("M", "min"),
     "Shear (Max)": ("V", "max"), "Shear (Min)": ("V", "min"),
@@ -430,8 +434,8 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             help_nav = (
                 "Selecting a member and an envelope component moves the step slider to "
                 "the vehicle position producing that extreme (with the current step-"
-                "effects selection). E.g. S1 + Bending (Min) shows the governing "
-                "sagging step for span 1."
+                "effects selection). E.g. S1 + Bending (Max) shows the governing "
+                "sagging step for span 1 (sagging is positive)."
             )
             c_nav1, c_nav2, c_nav3 = st.columns([1, 1, 1])
             c_nav1.selectbox("Member:", member_ids, key="crit_member_sel",

@@ -6,6 +6,7 @@ import textwrap
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import bricos_data as data
 import bricos_report
@@ -120,6 +121,46 @@ def test_udl_gap_preset_label_matches_presets_and_custom():
     assert data.udl_gap_preset_label(7.5) == "Custom"
     # Invalid input falls back to the 10.0 m default preset.
     assert data.udl_gap_preset_label(None) == "10.0 m (DK NA Fig. A.2.2-2)"
+
+
+def test_soil_gamma_no_kfi_helpers():
+    # '1.0 (No KFI)' stores 1/KFI so the ULS KFI multiplication cancels.
+    assert data.soil_gamma_no_kfi_value(1.1) == pytest.approx(1.0 / 1.1)
+    assert data.soil_gamma_no_kfi_value(1.0) == pytest.approx(1.0)
+    assert data.soil_gamma_no_kfi_value(None) == pytest.approx(1.0)
+
+    assert data.soil_gamma_preset_label(1.0, 1.1) == "1.0"
+    assert data.soil_gamma_preset_label(1.1, 1.1) == "1.1"
+    assert data.soil_gamma_preset_label(1.0 / 1.1, 1.1) == data.SOIL_GAMMA_NO_KFI_LABEL
+    assert data.soil_gamma_preset_label(0.95, 1.1) == "Custom"
+
+    # The raw stored value must never be displayed for the No-KFI preset.
+    assert data.soil_gamma_display(1.0 / 1.1, 1.1) == "1.0 (No KFI)"
+    assert "0.90" not in data.soil_gamma_display(1.0 / 1.1, 1.1)
+    assert data.soil_gamma_display(0.95, 1.1) == "0.95"
+
+
+def test_force_ui_update_restores_soil_gamma_selector():
+    # Same failure mode as the udl_gap selector: left stale, the soil
+    # preset selectbox overwrites a loaded factor on the next rerun.
+    st = data.st
+    st.session_state.clear()
+    params = data.get_def()
+    params["KFI"] = 1.1
+
+    params["gamma_j"] = 1.0 / 1.1
+    st.session_state["sysA_gj_sel"] = "1.1"  # stale
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_gj_sel"] == data.SOIL_GAMMA_NO_KFI_LABEL
+
+    params["gamma_j"] = 0.95
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_gj_sel"] == "Custom"
+    assert st.session_state["sysA_gj_cust"] == 0.95
+
+    params["gamma_j"] = 1.1
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_gj_sel"] == "1.1"
 
 
 def test_get_clear_initializes_empty_vehicle_and_surcharge_state():

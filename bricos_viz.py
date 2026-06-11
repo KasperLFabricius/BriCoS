@@ -373,6 +373,11 @@ def create_plotly_fig(
                     fill_mode = False
             else:
                 key = type_base
+                if type_base == 'M':
+                    # Sagging-positive sign convention (v0.58): keep drawing
+                    # the moment diagram on the tension side (sagging below
+                    # the member), as before the flip.
+                    inv = -1.0
                 if f'{key}_max' in data:
                     vals_pos = data[f'{key}_max']
                     vals_neg = data[f'{key}_min']

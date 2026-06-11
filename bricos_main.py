@@ -479,7 +479,12 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     kfi_opts = [0.9, 1.0, 1.1]
     curr_kfi = p.get('KFI', 1.0)
     idx_kfi = kfi_opts.index(curr_kfi) if curr_kfi in kfi_opts else 1
-    help_KFI = "Partial factor for consequence class. Applied to all loads in ULS (not in SLS)."
+    help_KFI = (
+        "Partial factor for consequence class. Applied to all loads in ULS (not in SLS). "
+        "Exception: for permanent soil loads KFI can be negated by selecting the soil "
+        "factor '1.0 (No KFI)' below, as permitted for earth pressure (Vejledning til "
+        "belastnings- og beregningsgrundlag for broer)."
+    )
     p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", disabled=ui_locked, help=help_KFI)
     
     gg_opts = [0.9, 1.0, 1.10, 1.25]
@@ -497,19 +502,27 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     if gg_sel == "Custom": p['gamma_g'] = c_gg.number_input(r"Custom $\gamma_{g}$", value=float(gg_val), key=f"{curr}_gg_cust", disabled=ui_locked)
     else: p['gamma_g'] = float(gg_sel)
 
-    gj_opts = [1.0, 1.1]
     gj_val = p.get('gamma_j', 1.0)
-    idx_gj = gj_opts.index(gj_val) if gj_val in gj_opts else len(gj_opts)
-    
+    gj_opts = list(data_mod.SOIL_GAMMA_PRESETS) + [data_mod.SOIL_GAMMA_NO_KFI_LABEL, "Custom"]
+    gj_label = data_mod.soil_gamma_preset_label(gj_val, p['KFI'])
+    idx_gj = gj_opts.index(gj_label) if gj_label in gj_opts else len(gj_opts) - 1
+
     help_gj = (
         "Partial factor for permanent soil loads (Earth Pressure). Applied to the 'Soil' load case. "
+        "'1.0 (No KFI)' gives an effective factor of exactly 1.0 with KFI negated for the soil case, "
+        "as permitted for earth pressure (Vejledning til belastnings- og beregningsgrundlag for broer). "
         "Note: this single factor is applied to both maximum and minimum results - favorable/unfavorable "
         "permanent-load combinations are not evaluated automatically. Re-run with the favorable factor "
         "where earth pressure acts favorably."
     )
-    gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts + ["Custom"], index=min(idx_gj, len(gj_opts)), key=f"{curr}_gj_sel", disabled=ui_locked, help=help_gj)
-    if gj_sel == "Custom": p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust", disabled=ui_locked)
-    else: p['gamma_j'] = float(gj_sel)
+    gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts, index=idx_gj, key=f"{curr}_gj_sel", disabled=ui_locked, help=help_gj)
+    if gj_sel == "Custom":
+        p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust", disabled=ui_locked)
+    elif gj_sel == data_mod.SOIL_GAMMA_NO_KFI_LABEL:
+        # Tracks the active KFI so the cancellation stays exact.
+        p['gamma_j'] = data_mod.soil_gamma_no_kfi_value(p['KFI'])
+    else:
+        p['gamma_j'] = float(gj_sel)
 
     gam_opts = [0.56, 1.0, 1.05, 1.20, 1.25, 1.40]
     c_ga, c_gb = st.columns(2)
