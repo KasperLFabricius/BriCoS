@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.57"
+APP_VERSION = "0.58"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -325,6 +325,47 @@ def udl_gap_preset_label(gap) -> str:
         if abs(val - g) < 1e-9:
             return label
     return "Custom"
+
+
+# ULS soil partial factor presets. '1.0 (No KFI)' stores 1/KFI so that the
+# KFI multiplication in the ULS combination cancels exactly: the effective
+# soil factor is 1.0 with KFI negated, as permitted for permanent earth
+# pressure (Vejledning til belastnings- og beregningsgrundlag for broer).
+# The raw stored value (~0.909 at KFI = 1.1) is an implementation detail
+# and is never displayed.
+SOIL_GAMMA_PRESETS = ("1.0", "1.1")
+SOIL_GAMMA_NO_KFI_LABEL = "1.0 (No KFI)"
+
+
+def soil_gamma_no_kfi_value(kfi) -> float:
+    """Stored gamma_j for the '1.0 (No KFI)' option: 1/KFI."""
+    k = _as_float(kfi, 1.0)
+    if k is None or k <= 0.0:
+        k = 1.0
+    return 1.0 / k
+
+
+def soil_gamma_preset_label(gamma_j, kfi) -> str:
+    """The soil factor selectbox label matching a stored gamma_j."""
+    g = _as_float(gamma_j, 1.0)
+    if g is None:
+        return "Custom"
+    for preset in SOIL_GAMMA_PRESETS:
+        if abs(g - float(preset)) < 1e-9:
+            return preset
+    if abs(g - soil_gamma_no_kfi_value(kfi)) < 1e-9:
+        return SOIL_GAMMA_NO_KFI_LABEL
+    return "Custom"
+
+
+def soil_gamma_display(gamma_j, kfi) -> str:
+    """Report display for gamma_j: presets by label (never the raw 1/KFI
+    number behind the No-KFI option), custom values as plain numbers."""
+    label = soil_gamma_preset_label(gamma_j, kfi)
+    if label == "Custom":
+        g = _as_float(gamma_j, 1.0)
+        return f"{g:g}" if g is not None else "1"
+    return label
 
 
 def parse_vehicle_text(load_text: str, spacing_text: str):
@@ -851,6 +892,11 @@ def force_ui_update(sys_key, data):
     # 3. Factors
     st.session_state[f"{sys_key}_gg_cust"] = data.get('gamma_g', 1.0)
     st.session_state[f"{sys_key}_gj_cust"] = data.get('gamma_j', 1.0)
+    # Restore the soil preset selector too (cf. the udl_gap selector): left
+    # stale, it re-applies its old preset on the next rerun and overwrites
+    # the loaded factor.
+    st.session_state[f"{sys_key}_gj_sel"] = soil_gamma_preset_label(
+        data.get('gamma_j', 1.0), data.get('KFI', 1.0))
     st.session_state[f"{sys_key}_gamA_cust"] = data.get('gamma_veh', 1.0)
     st.session_state[f"{sys_key}_gamB_cust"] = data.get('gamma_vehB', 1.0)
 

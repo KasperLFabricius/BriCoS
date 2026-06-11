@@ -18,7 +18,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 # Graphics Imports for Vehicle Diagram
-from reportlab.graphics.shapes import Drawing, Line, String, Polygon, Group
+from reportlab.graphics.shapes import Drawing, Line, String, Polygon, PolyLine, Group
 from reportlab.graphics import renderPDF
 
 # Internal Modules
@@ -511,7 +511,8 @@ class BricosReportGenerator:
         """Adds audit-required conventions text."""
         conventions_text = f"""
         <b>Model Assumptions & Conventions:</b><br/>
-        • <b>Coordinate System:</b> 2D Plane Frame (X: Horizontal, Y: Vertical, M: Counter-clockwise positive).<br/>
+        • <b>Coordinate System:</b> 2D Plane Frame (X: Horizontal, Y: Vertical). Nodal loads and support reactions: counter-clockwise moments positive.<br/>
+        • <b>Result Sign Conventions (engineering convention):</b> Bending <i>M</i>: sagging positive, hogging negative; moment diagrams are drawn on the tension side. Normal force <i>N</i>: tension positive, compression negative. Shear <i>V</i>: classical beam convention (at the left support of a simply supported span under gravity, <i>V</i> = +<i>R</i>). Deflections: global axes - upwards/rightwards positive, downwards/leftwards negative.<br/>
         • <b>Effective Width:</b> Analysis properties are calculated based on the effective width <i>b<sub>eff</sub></i>. Area <i>A = b<sub>eff</sub> · h</i>. Inertia <i>I = b<sub>eff</sub> · h<sup>3</sup> / 12</i>.<br/>
         • <b>Shear Area:</b> The shear area <i>A<sub>s</sub></i> is assumed to be <i>5/6 · A</i> (Rectangular section).<br/>
         • <b>Material Stiffness:</b> Shear Modulus <i>G = E / (2·(1+&nu;))</i>. <br/>
@@ -521,6 +522,92 @@ class BricosReportGenerator:
         Soil and surcharge loads are applied as line loads (kN/m) acting on the analysis strip.<br/>
         """
         self.elements.append(Paragraph(conventions_text, self.styles['SwecoSmall']))
+        self.elements.append(Spacer(1, 0.2*cm))
+        self.elements.append(KeepTogether([
+            Paragraph("<b>Sign convention reference:</b>", self.styles['SwecoSmall']),
+            self._draw_sign_convention_diagram(),
+        ]))
+
+    def _draw_sign_convention_diagram(self, width=480, height=112):
+        """Schematic sign-convention reference for QA: sagging-positive
+        bending (drawn on the tension side), classical shear, tension-
+        positive axial force, global-axes deflections."""
+        d = Drawing(width, height)
+
+        def arrow(x0, y0, x1, y1, col, stroke_w=1.2):
+            d.add(Line(x0, y0, x1, y1, strokeColor=col, strokeWidth=stroke_w))
+            ux, uy = x1 - x0, y1 - y0
+            n = (ux * ux + uy * uy) ** 0.5
+            if n < 1e-9:
+                return
+            ux, uy = ux / n, uy / n
+            px, py = -uy, ux
+            s = 3.0
+            d.add(Polygon(points=[x1, y1,
+                                  x1 - 2 * s * ux + s * px, y1 - 2 * s * uy + s * py,
+                                  x1 - 2 * s * ux - s * px, y1 - 2 * s * uy - s * py],
+                          fillColor=col, strokeWidth=0))
+
+        def title(cx, text):
+            d.add(String(cx, 100, text, textAnchor='middle', fontSize=8,
+                         fontName='Helvetica-Bold', fillColor=colors.black))
+
+        red = colors.red
+        blue = colors.blue
+        grey = colors.grey
+
+        # --- Panel 1: Bending M (sagging positive, drawn on tension side) ---
+        title(60, "Bending M")
+        d.add(String(60, 80, "-M (hogging) over supports", textAnchor='middle',
+                     fontSize=6, fillColor=grey))
+        d.add(Line(15, 70, 105, 70, strokeColor=colors.black, strokeWidth=1.5))
+        for sx in (20, 100):
+            d.add(Polygon(points=[sx, 70, sx - 4, 63, sx + 4, 63],
+                          fillColor=colors.white, strokeColor=colors.black, strokeWidth=1))
+        pts = []
+        for i in range(21):
+            t = i / 20.0
+            pts.extend([20.0 + 80.0 * t, 70.0 - 88.0 * t * (1.0 - t)])
+        d.add(PolyLine(points=pts, strokeColor=red, strokeWidth=1.2))
+        d.add(String(60, 36, "+M (sagging)", textAnchor='middle', fontSize=7, fillColor=red))
+
+        # --- Panel 2: Shear V (classical beam convention) ---
+        title(180, "Shear V")
+        d.add(PolyLine(points=[165, 50, 195, 50, 195, 80, 165, 80, 165, 50],
+                       strokeColor=colors.black, strokeWidth=1.2))
+        arrow(157, 54, 157, 76, red)
+        arrow(203, 76, 203, 54, red)
+        d.add(String(180, 36, "+V", textAnchor='middle', fontSize=7, fillColor=red))
+
+        # --- Panel 3: Normal force N (tension positive) ---
+        title(300, "Normal force N")
+        d.add(Polygon(points=[270, 68, 330, 68, 330, 76, 270, 76],
+                      fillColor=colors.lightgrey, strokeColor=colors.black, strokeWidth=0.8))
+        arrow(270, 72, 252, 72, red)
+        arrow(330, 72, 348, 72, red)
+        d.add(String(300, 56, "+N (tension)", textAnchor='middle', fontSize=7, fillColor=red))
+        d.add(Polygon(points=[270, 34, 330, 34, 330, 42, 270, 42],
+                      fillColor=colors.lightgrey, strokeColor=colors.black, strokeWidth=0.8))
+        arrow(252, 38, 270, 38, blue)
+        arrow(348, 38, 330, 38, blue)
+        d.add(String(300, 22, "-N (compression)", textAnchor='middle', fontSize=7, fillColor=blue))
+
+        # --- Panel 4: Deflection (global axes) ---
+        title(425, "Deflection")
+        arrow(425, 58, 425, 86, colors.Color(0.13, 0.4, 0.25))
+        d.add(String(431, 82, "+", textAnchor='start', fontSize=8,
+                     fillColor=colors.Color(0.13, 0.4, 0.25)))
+        arrow(425, 58, 455, 58, colors.Color(0.13, 0.4, 0.25))
+        d.add(String(452, 64, "+", textAnchor='start', fontSize=8,
+                     fillColor=colors.Color(0.13, 0.4, 0.25)))
+        arrow(425, 58, 425, 30, grey)
+        d.add(String(431, 30, "-", textAnchor='start', fontSize=8, fillColor=grey))
+        arrow(425, 58, 395, 58, grey)
+        d.add(String(398, 64, "-", textAnchor='end', fontSize=8, fillColor=grey))
+        d.add(String(425, 14, "upwards / rightwards positive", textAnchor='middle',
+                     fontSize=6.5, fillColor=grey))
+
+        return d
 
     def _add_theory_section(self):
         """Adds standard background theory text, condensed to fit on one page."""
@@ -597,7 +684,13 @@ class BricosReportGenerator:
             has_B = bool(p.get('vehicleB', {}).get('loads'))
 
             perm = f"{kfi}·{gg}·SW"
-            if p.get('soil'): perm += f" + {kfi}·{gj}·Soil"
+            if p.get('soil'):
+                if data_mod.soil_gamma_preset_label(gj, kfi) == data_mod.SOIL_GAMMA_NO_KFI_LABEL:
+                    # KFI x 1/KFI cancels exactly; show the effective factor,
+                    # never the raw stored value.
+                    perm += " + 1.0·Soil (KFI negated)"
+                else:
+                    perm += f" + {kfi}·{gj}·Soil"
 
             var = ""
             if has_A: var += f" + {kfi}·{g_veh}·{phi_txt}·VehA"
@@ -837,7 +930,10 @@ class BricosReportGenerator:
         fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
         fact_rows.append(["Selfweight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
         if p.get('soil'):
-            fact_rows.append(["Soil", f"{p.get('gamma_j', 1.0)}", f"{p.get('sls_j', 1.0)}", "-"])
+            # Presets by label: the '1.0 (No KFI)' option must never leak
+            # its raw stored value (1/KFI).
+            gj_txt = data_mod.soil_gamma_display(p.get('gamma_j', 1.0), kfi)
+            fact_rows.append(["Soil", gj_txt, f"{p.get('sls_j', 1.0)}", "-"])
         if bool(p.get('vehicle', {}).get('loads')):
             fact_rows.append(["Vehicle A", f"{p.get('gamma_veh', 1.0)}", f"{p.get('sls_veh', 1.0)}", "Phi applied"])
         if bool(p.get('vehicleB', {}).get('loads')):
@@ -1533,25 +1629,31 @@ class BricosReportGenerator:
                 if len(arr) == 0: return 0.0
                 return arr[idx]
 
+            # The M field is sagging-positive (v0.58); nodal reaction
+            # moments stay in the global CCW-positive convention, so the
+            # start node negates the field (M_nodal(0) = -M_field(0)) and
+            # the end node uses it directly (the historical end-equilibrium
+            # negation and the field flip cancel).
             n_mx = get_val('N_max', 0); n_mn = get_val('N_min', 0)
             v_mx = get_val('V_max', 0); v_mn = get_val('V_min', 0)
             m_mx = get_val('M_max', 0); m_mn = get_val('M_min', 0)
-            
+            m_mx, m_mn = -m_mn, -m_mx
+
             def get_bounds(c_fac, s_fac, n_max, n_min, v_max, v_min):
                 vals = []
                 for n_v in [n_max, n_min]:
                     for v_v in [v_max, v_min]: vals.append(c_fac*n_v - s_fac*v_v)
                 return max(vals), min(vals)
-            
+
             fx_mx, fx_mn = get_bounds(c, s, n_mx, n_mn, v_mx, v_mn)
-            fy_mx, fy_mn = get_bounds(s, -c, n_mx, n_mn, v_mx, v_mn) 
+            fy_mx, fy_mn = get_bounds(s, -c, n_mx, n_mn, v_mx, v_mn)
             add_to_node(dat['ni_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)
 
             n_mx = get_val('N_max', -1); n_mn = get_val('N_min', -1)
             v_mx = get_val('V_max', -1); v_mn = get_val('V_min', -1)
             m_mx = get_val('M_max', -1); m_mn = get_val('M_min', -1)
-            n_mx, n_mn = -n_mn, -n_mx; v_mx, v_mn = -v_mn, -v_mx; m_mx, m_mn = -m_mn, -m_mx
-            
+            n_mx, n_mn = -n_mn, -n_mx; v_mx, v_mn = -v_mn, -v_mx
+
             fx_mx, fx_mn = get_bounds(c, s, n_mx, n_mn, v_mx, v_mn)
             fy_mx, fy_mn = get_bounds(s, -c, n_mx, n_mn, v_mx, v_mn)
             add_to_node(dat['nj_id'], fx_mx, fx_mn, fy_mx, fy_mn, m_mx, m_mn)

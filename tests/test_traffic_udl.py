@@ -67,11 +67,11 @@ def test_udl_single_span_matches_full_udl_closed_form():
     raw = _run(params)
     env = raw["Traffic UDL"]["S1"]
 
-    # Simply supported: every segment contributes sagging (negative M in
-    # the BriCoS sign convention), so the adverse min envelope equals the
-    # fully loaded closed form and the max envelope stays at zero.
-    assert np.min(env["M_min"]) == pytest.approx(-q * 10.0**2 / 8.0, rel=1e-6)
-    assert np.max(env["M_max"]) == pytest.approx(0.0, abs=1e-9)
+    # Simply supported: every segment contributes sagging (positive M in
+    # the engineering sign convention, v0.58), so the adverse max envelope
+    # equals the fully loaded closed form and the min envelope stays zero.
+    assert np.max(env["M_max"]) == pytest.approx(q * 10.0**2 / 8.0, rel=1e-6)
+    assert np.min(env["M_min"]) == pytest.approx(0.0, abs=1e-9)
 
 
 def test_udl_two_span_adverse_envelope_bounds_span_patterns():
@@ -100,14 +100,14 @@ def test_udl_two_span_adverse_envelope_bounds_span_patterns():
 
     # For bending the influence sign changes only at supports, so the
     # segment-level envelope must EQUAL the best span-level pattern.
-    # Sagging (negative M in the BriCoS convention) in S1 is worst with
-    # only S1 loaded; hogging (positive) over the interior support is
-    # worst with both spans loaded (qL^2/8 for two equal spans).
+    # Sagging (positive M, engineering convention) in S1 is worst with
+    # only S1 loaded; hogging (negative) over the interior support is
+    # worst with both spans loaded (-qL^2/8 for two equal spans).
     np.testing.assert_allclose(
-        np.min(env["S1"]["M_min"]), np.min(pat_s1["S1"]["M"]), rtol=1e-6)
+        np.max(env["S1"]["M_max"]), np.max(pat_s1["S1"]["M"]), rtol=1e-6)
     np.testing.assert_allclose(
-        np.max(env["S1"]["M_max"]), np.max(pat_both["S1"]["M"]), rtol=1e-6)
-    assert np.max(env["S1"]["M_max"]) == pytest.approx(q * 10.0**2 / 8.0, rel=1e-6)
+        np.min(env["S1"]["M_min"]), np.min(pat_both["S1"]["M"]), rtol=1e-6)
+    assert np.min(env["S1"]["M_min"]) == pytest.approx(-q * 10.0**2 / 8.0, rel=1e-6)
 
 
 def test_udl_inactive_when_q_zero():

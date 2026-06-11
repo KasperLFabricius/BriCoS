@@ -558,8 +558,13 @@ def jit_internal_forces(L, f_start, num_pts, load_data):
                         Mx += P * (x - a)
                     else:
                         Nx += P
-                    
-        M_vals[i] = Mx
+
+        # Engineering sign convention: sagging positive. The recovery math
+        # above runs in the historical nodal convention (gravity sagging
+        # negative); the field is flipped at storage so every consumer sees
+        # sagging-positive bending. N (tension positive) and V (classical
+        # beam convention) already match and stay as computed.
+        M_vals[i] = -Mx
         V_vals[i] = Vx
         N_vals[i] = Nx
         
@@ -825,7 +830,11 @@ def jit_envelope_batch_parallel(
                 
                 def_x_glob = cx * ux_loc - cy * uy_loc
                 def_y_glob = cy * ux_loc + cx * uy_loc
-                
+
+                # Sagging-positive sign convention (see jit_internal_forces):
+                # flip before the comparisons so max/min keep their meaning.
+                Mx = -Mx
+
                 if Mx > res_accum[e, p, 0]: res_accum[e, p, 0] = Mx
                 if Mx < res_accum[e, p, 1]: res_accum[e, p, 1] = Mx
                 if Vx > res_accum[e, p, 2]: res_accum[e, p, 2] = Vx
@@ -958,7 +967,8 @@ def jit_step_recovery_batch(
                                 Mx += P_trans * (x - a)
                                 Nx += P_axial
 
-                res_out[s, e, p, 0] = Mx
+                # Sagging-positive sign convention (see jit_internal_forces).
+                res_out[s, e, p, 0] = -Mx
                 res_out[s, e, p, 1] = Vx
                 res_out[s, e, p, 2] = Nx
                 res_out[s, e, p, 3] = cx * ux_loc - cy * uy_loc
@@ -1049,7 +1059,8 @@ def jit_udl_segment_recovery_batch(
                         Mx += F_part * (x - d_c)
                         Nx += (q_a + q_a) / 2.0 * x
 
-                res_out[s, e, p, 0] = Mx
+                # Sagging-positive sign convention (see jit_internal_forces).
+                res_out[s, e, p, 0] = -Mx
                 res_out[s, e, p, 1] = Vx
                 res_out[s, e, p, 2] = Nx
                 res_out[s, e, p, 3] = cx * ux_loc - cy * uy_loc

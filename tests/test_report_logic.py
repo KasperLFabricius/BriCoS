@@ -289,6 +289,39 @@ def test_chrome_available_uses_browser_lookup_and_env_override(monkeypatch):
     assert bricos_report._chrome_available() is True
 
 
+def test_uls_formula_shows_no_kfi_soil_without_raw_value():
+    params = _params(
+        KFI=1.1,
+        gamma_g=1.0,
+        gamma_j=1.0 / 1.1,
+        soil=[{"wall_idx": 0, "face": "L", "h": 6.0, "q_top": 0.0, "q_bot": 20.0}],
+    )
+    params["soil"] = [{"wall_idx": 0, "face": "L", "h": 6.0, "q_top": 0.0, "q_bot": 20.0}]
+    gen = _generator(params)
+
+    try:
+        eq = gen._build_uls_equation_text()
+    finally:
+        gen.executor.shutdown(wait=True)
+
+    assert "1.0·Soil (KFI negated)" in eq
+    assert "0.90" not in eq  # the raw 1/KFI value must never leak
+
+
+def test_uls_formula_keeps_plain_soil_factor():
+    params = _params(KFI=1.1, gamma_j=1.0)
+    params["soil"] = [{"wall_idx": 0, "face": "L", "h": 6.0, "q_top": 0.0, "q_bot": 20.0}]
+    gen = _generator(params)
+
+    try:
+        eq = gen._build_uls_equation_text()
+    finally:
+        gen.executor.shutdown(wait=True)
+
+    assert "1.1·1.0·Soil" in eq
+    assert "KFI negated" not in eq
+
+
 def test_critical_step_titles_state_lead_axle_chainage():
     import numpy as np
 

@@ -1565,8 +1565,10 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                                 # Synthesized end forces (unused by step
                                 # consumers): f_start = [N0, V0, M0] with
                                 # N(0) = -N0; f_end from element equilibrium.
-                                'f_start_local': np.array([-N_agg[0], V_agg[0], M_agg[0]]),
-                                'f_end_local': np.array([N_agg[-1], -V_agg[-1], -M_agg[-1]]),
+                                # M fields are sagging-positive; nodal end
+                                # moments stay in the nodal convention.
+                                'f_start_local': np.array([-N_agg[0], V_agg[0], -M_agg[0]]),
+                                'f_end_local': np.array([N_agg[-1], -V_agg[-1], M_agg[-1]]),
                             }
                         attach_step_udl(step_res, x_front - v_d_max, x_front - v_d_min)
                         v_steps_res_list.append({'x': x_front, 'res': step_res})
