@@ -47,3 +47,21 @@ def test_solve_annotations_separates_stacked_labels_on_long_decks():
 
 def test_solve_annotations_empty_input():
     assert viz.solve_annotations([]) == []
+
+
+def test_structure_extent_x_spans_given_sources_only():
+    # Sizing must follow the systems actually shown: a hidden comparison
+    # system with a longer deck must not inflate the extent (report
+    # critical-step plots pass both geometries with one show flag).
+    sys_a = {"S1": {"ni": (0.0, 0.0), "nj": (10.0, 0.0)}}
+    sys_b = {"S1": {"ni": (0.0, 0.0), "nj": (36.0, 0.0)},
+             "meta": {"no_geometry": True}}
+
+    assert viz.structure_extent_x([sys_a]) == pytest.approx(10.0)
+    assert viz.structure_extent_x([sys_a, sys_b]) == pytest.approx(36.0)
+    assert viz.structure_extent_x([sys_a, None, {}]) == pytest.approx(10.0)
+    assert viz.structure_extent_x([]) is None
+    # Zero horizontal extent (single wall) falls back to None -> legacy
+    # footprint constants.
+    wall = {"W1": {"ni": (5.0, 0.0), "nj": (5.0, -8.0)}}
+    assert viz.structure_extent_x([wall]) is None

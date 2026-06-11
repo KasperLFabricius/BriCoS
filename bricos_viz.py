@@ -40,6 +40,23 @@ def solve_annotations(annotations, extent_x=None, font_scale=1.0):
         ann['y'] = result_arr[i, 1]
     return annotations
 
+def structure_extent_x(sources):
+    """Horizontal extent [m] spanned by the element dicts' ni/nj global
+    coordinates, or None when no usable geometry is present."""
+    xs = []
+    for src in sources:
+        if not src:
+            continue
+        for dat in src.values():
+            if isinstance(dat, dict) and 'ni' in dat and 'nj' in dat:
+                xs.append(dat['ni'][0])
+                xs.append(dat['nj'][0])
+    if not xs:
+        return None
+    ext = max(xs) - min(xs)
+    return ext if ext > 1e-6 else None
+
+
 def _add_support_icon(fig, x, y, supp_type, size, color='black'):
     """
     Helper to draw classical boundary condition icons at (x,y).
@@ -611,16 +628,15 @@ def create_plotly_fig(
 
     # Horizontal structure extent, for sizing annotation footprints in data
     # units (labels render at fixed pixel size, so their data-unit size
-    # scales with the extent shown).
-    ext_xs = []
-    for src in (geom_A, geom_B, sysA_data, sysB_data):
-        if not src:
-            continue
-        for dat in src.values():
-            if 'ni' in dat and 'nj' in dat:
-                ext_xs.append(dat['ni'][0])
-                ext_xs.append(dat['nj'][0])
-    extent_x = (max(ext_xs) - min(ext_xs)) if ext_xs else None
+    # scales with the extent shown). Only the SHOWN systems count: callers
+    # (e.g. report critical-step plots) pass both geometries with a single
+    # show flag, and a hidden longer deck must not inflate the sizing.
+    ext_sources = []
+    if show_A:
+        ext_sources.extend((geom_A, sysA_data))
+    if show_B:
+        ext_sources.extend((geom_B, sysB_data))
+    extent_x = structure_extent_x(ext_sources)
 
     solved = solve_annotations(ann_candidates, extent_x=extent_x, font_scale=font_scale)
     for ann in solved:
