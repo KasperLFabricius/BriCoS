@@ -9,7 +9,9 @@ import pandas as pd
 import bricos_data as data_mod
 import bricos_solver as solver
 import bricos_results_ui as results_ui
-import bricos_report as report_mod
+# bricos_report (reportlab + kaleido) is imported on demand in the report
+# generation block: it is only needed when a report is actually generated
+# and costs ~0.4 s at every app start otherwise.
 
 # ==========================================
 # GLOBAL CONFIGURATION
@@ -1176,6 +1178,7 @@ if st.session_state.is_generating_report:
         current_prog.progress(val, text=f"Rendering Plots: {int(val*100)}%")
 
     try:
+        import bricos_report as report_mod
         rep_gen = report_mod.BricosReportGenerator(
             buffer, meta, st.session_state,
             raw_res_A, raw_res_B, nodes_A, nodes_B,

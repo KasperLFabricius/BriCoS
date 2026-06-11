@@ -1,5 +1,5 @@
 import streamlit.web.cli as stcli
-import os, sys
+import os, sys, shutil
 
 def resolve_path(path):
     """
@@ -12,11 +12,47 @@ def resolve_path(path):
         basedir = os.path.dirname(__file__)
     return os.path.join(basedir, path)
 
+def prepare_numba_cache():
+    """Give numba a stable source path and cache dir across EXE launches.
+
+    PyInstaller (onefile) extracts the bundle to a fresh temp dir on every
+    launch. Numba keys its disk cache by a hash of the source file's
+    DIRECTORY (numba caching.py, get_suitable_cache_subpath), so kernels
+    imported from the extraction dir can never hit a previous launch's
+    cache and every start re-JIT-compiles all kernels - tens of seconds.
+
+    Fix: copy the kernels module to a stable per-user dir and put it first
+    on sys.path, so numba sees the same source path every launch. The
+    cache freshness stamp in frozen mode is the executable's stat (numba
+    _SourceFileBackedLocatorMixin.get_source_stamp), so the cache
+    invalidates exactly when the EXE is rebuilt. NUMBA_CACHE_DIR keeps the
+    compiled artifacts in the same per-user tree.
+
+    Caching is an optimization: any failure must never block startup.
+    """
+    if not getattr(sys, 'frozen', False):
+        return None
+    try:
+        appdata = os.environ.get('APPDATA') or os.path.expanduser('~')
+        base_dir = os.path.join(appdata, 'BriCoS')
+        stable_src = os.path.join(base_dir, 'numba_src')
+        os.makedirs(stable_src, exist_ok=True)
+        shutil.copy2(resolve_path('bricos_kernels.py'), stable_src)
+        sys.path.insert(0, stable_src)
+        os.environ.setdefault('NUMBA_CACHE_DIR',
+                              os.path.join(base_dir, 'numba_cache'))
+        return stable_src
+    except Exception:
+        return None
+
 if __name__ == "__main__":
+    # 0. Persistent numba cache (frozen builds re-JIT every launch otherwise)
+    prepare_numba_cache()
+
     # 1. Resolve the path to the main application script inside the bundle
     # Note: We bundle bricos_main.py as a data file in the spec.
     app_path = resolve_path("bricos_main.py")
-    
+
     # 2. Construct the system arguments to mimic "streamlit run bricos_main.py"
     # We disable development mode to hide the "Connect to..." menu items.
     sys.argv = [
@@ -25,6 +61,6 @@ if __name__ == "__main__":
         app_path,
         "--global.developmentMode=false",
     ]
-    
+
     # 3. Execute Streamlit
     sys.exit(stcli.main())
