@@ -2,6 +2,7 @@ import contextlib
 import io
 import datetime
 import logging
+import os
 import threading
 import numpy as np
 import pandas as pd
@@ -28,6 +29,31 @@ import bricos_data as data_mod
 _logger = logging.getLogger("bricos.report")
 
 
+def _chrome_available():
+    """Best-effort check that kaleido 1.x's browser exists, done BEFORE
+    starting its sync server.
+
+    start_sync_server marks the server singleton as running and returns
+    before the browser has launched inside the server thread; if no Chrome
+    is installed, that thread dies asynchronously and every subsequent
+    export blocks forever on the unserviced queue (write_image routes
+    through any running server). A missing browser is the realistic
+    failure - kaleido 1.x does not bundle Chrome - so detect it with the
+    same lookup the server would perform and skip the server entirely:
+    the per-image fallback then fails fast with [Image Failed]
+    placeholders instead of hanging the report with the UI locked.
+    """
+    if os.environ.get("BROWSER_PATH"):
+        return True
+    try:
+        from choreographer.browsers.chromium import Chromium
+        return Chromium.find_browser(skip_local=False) is not None
+    except Exception:
+        # Unknown choreographer layout/version: don't disable the shared
+        # server (a 10x speedup) on a failed heuristic.
+        return True
+
+
 @contextlib.contextmanager
 def persistent_image_export():
     """Keep ONE kaleido export process alive for all plot exports.
@@ -47,6 +73,13 @@ def persistent_image_export():
     except Exception:
         start = stop = None
     if start is None or stop is None:
+        yield
+        return
+    if not _chrome_available():
+        _logger.error(
+            "kaleido found no Chrome/Chromium browser; skipping the shared "
+            "export server (its thread would die and hang all exports). "
+            "Install Chrome, e.g. via the `kaleido_get_chrome` command.")
         yield
         return
     try:

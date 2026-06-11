@@ -236,6 +236,7 @@ def test_persistent_image_export_starts_and_stops_sync_server(monkeypatch):
         stop_sync_server=lambda **kw: calls.append(("stop", kw)),
     )
     monkeypatch.setitem(sys.modules, "kaleido", stub)
+    monkeypatch.setattr(bricos_report, "_chrome_available", lambda: True)
 
     with bricos_report.persistent_image_export():
         assert calls == [("start", {"silence_warnings": True})]
@@ -250,6 +251,42 @@ def test_persistent_image_export_tolerates_kaleido_without_sync_server(monkeypat
     with bricos_report.persistent_image_export():
         entered = True
     assert entered
+
+
+def test_persistent_image_export_skips_server_without_chrome(monkeypatch):
+    # start_sync_server returns before the browser launches in its thread;
+    # with no Chrome that thread dies and every export hangs forever on the
+    # unserviced queue. The server must not be started at all then.
+    calls = []
+    stub = types.SimpleNamespace(
+        start_sync_server=lambda **kw: calls.append("start"),
+        stop_sync_server=lambda **kw: calls.append("stop"),
+    )
+    monkeypatch.setitem(sys.modules, "kaleido", stub)
+    monkeypatch.setattr(bricos_report, "_chrome_available", lambda: False)
+
+    with bricos_report.persistent_image_export():
+        pass
+    assert calls == []
+
+
+def test_chrome_available_uses_browser_lookup_and_env_override(monkeypatch):
+    from choreographer.browsers.chromium import Chromium
+
+    monkeypatch.delenv("BROWSER_PATH", raising=False)
+    monkeypatch.setattr(Chromium, "find_browser",
+                        classmethod(lambda cls, **kw: None))
+    assert bricos_report._chrome_available() is False
+
+    monkeypatch.setattr(Chromium, "find_browser",
+                        classmethod(lambda cls, **kw: r"C:\chrome.exe"))
+    assert bricos_report._chrome_available() is True
+
+    # Explicit user override wins without consulting the lookup.
+    monkeypatch.setattr(Chromium, "find_browser",
+                        classmethod(lambda cls, **kw: None))
+    monkeypatch.setenv("BROWSER_PATH", r"C:\custom\chrome.exe")
+    assert bricos_report._chrome_available() is True
 
 
 def test_critical_step_titles_state_lead_axle_chainage():
