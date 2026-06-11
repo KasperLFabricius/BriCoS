@@ -1020,24 +1020,57 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
     st.markdown("**Traffic UDL**")
     help_udl_q = (
         "Uniformly distributed traffic load, defined as a LINE load on the analysis strip "
-        "like selfweight - account for the effective width manually. DS/EN 1991-2 DK NA:2017, "
-        "Annex A.2.3.2: 2.5 kN/m2 (including the dynamic increment, so the dynamic factor Phi is NOT "
-        "applied) times the considered width. Set 0 to deactivate. Applied only in the "
-        "unfavourable parts of the influence surface per EN 1991-2:2003, 4.3.2(1)(b). "
+        "like selfweight - account for the loaded width manually. The intensity is taken as "
+        "including any dynamic increment, so the dynamic factor Phi is not applied to it "
+        "(cf. DS/EN 1991-2 DK NA:2017, Annex A.2.3.2). Set 0 to deactivate. Applied only in "
+        "the unfavourable parts of the influence surface per EN 1991-2:2003, 4.3.2(1)(b). "
         "Partial factors are set under Design Factors & Type."
     )
     p['udl_q'] = st.number_input("q [kN/m]", value=float(p.get('udl_q', 0.0)), min_value=0.0, step=0.5, format="%.2f", key=f"{curr}_udlq", disabled=ui_locked, help=help_udl_q)
 
     udl_line = data_mod.udl_line_load(p)
     if udl_line > 0.0:
+        help_udl_mode = (
+            "How the UDL accompanies the vehicle in the STEP results (step viewer and "
+            "critical-step plots). Moving: the UDL fills the deck except a window around "
+            "the vehicle defined by the clear distance below. Static: full deck at every "
+            "step. The Total Envelope always combines the vehicle envelope with the full "
+            "adverse UDL envelope by independent superposition, which bounds every window "
+            "arrangement including the vehicle-absent situation."
+        )
+        mode_opts = ["Moving with vehicle", "Static (full deck)"]
+        idx_mode = 1 if p.get('udl_mode') == 'Static' else 0
+        mode_sel = st.radio("Application in step results:", mode_opts, index=idx_mode, horizontal=True, key=f"{curr}_udlmode", disabled=ui_locked, help=help_udl_mode)
+        p['udl_mode'] = 'Static' if "Static" in mode_sel else 'Moving'
+
+        if p['udl_mode'] == 'Moving':
+            gap_presets = {"10.0 m (DK NA Fig. A.2.2-2)": 10.0, "0.0 m (adjacent to vehicle)": 0.0}
+            curr_gap = float(p.get('udl_gap', 10.0))
+            preset_label = next((k for k, v in gap_presets.items() if abs(v - curr_gap) < 1e-9), "Custom")
+            gap_opts = list(gap_presets.keys()) + ["Custom"]
+            help_gap = (
+                "Clear distance from the outermost axles to the start of the UDL, applied "
+                "in front of and behind the vehicle."
+            )
+            c_g1, c_g2 = st.columns(2)
+            gap_sel = c_g1.selectbox("Distance vehicle to UDL", gap_opts, index=gap_opts.index(preset_label), key=f"{curr}_udlgap_sel", disabled=ui_locked, help=help_gap)
+            if gap_sel == "Custom":
+                p['udl_gap'] = c_g2.number_input("Custom distance [m]", value=curr_gap, min_value=0.0, step=0.5, format="%.2f", key=f"{curr}_udlgap_cust", disabled=ui_locked)
+            else:
+                p['udl_gap'] = gap_presets[gap_sel]
+            p['udl_footprint'] = st.checkbox(
+                "Apply UDL also within the vehicle window",
+                value=bool(p.get('udl_footprint', False)), key=f"{curr}_udlfoot", disabled=ui_locked,
+                help="When enabled the UDL coexists with the vehicle over its full footprint (no window is excluded in the step results).",
+            )
+
         st.success(f"Traffic UDL active: {udl_line:.2f} kN/m on the strip")
         st.caption(
-            "Application: static, full deck, adverse-only (EN 1991-2 4.3.2(1)(b)) - equals the "
-            "large-bridge model and is conservative for the companion case. The moving window "
-            "with the Fig. A.2.2-2 gap (10 m) ships in the next release."
+            "Adverse-only application per EN 1991-2 4.3.2(1)(b). Use the step viewer's "
+            "step-effects selector to inspect vehicle and UDL effects separately or combined."
         )
     else:
-        st.caption("No Traffic UDL (q = 0). DK NA value: 2.5 kN/m2 x considered width.")
+        st.caption("No Traffic UDL (q = 0).")
 
 # ==========================================
 # SOLVER EXECUTION

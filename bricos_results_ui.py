@@ -148,6 +148,69 @@ def get_reaction_envelope(res_dict, nodes_dict, mode, restrained_nodes=None):
              
     return reacts
 
+# Envelope components selectable for critical-step navigation. Values are
+# (base result key, side); 'def' resolves per member (def_x for walls,
+# def_y for spans). Note the sign convention: sagging is negative, so
+# "Bending (Min)" navigates to the governing sagging step.
+STEP_COMPONENT_OPTIONS = {
+    "Bending (Max)": ("M", "max"), "Bending (Min)": ("M", "min"),
+    "Shear (Max)": ("V", "max"), "Shear (Min)": ("V", "min"),
+    "Normal force (Max)": ("N", "max"), "Normal force (Min)": ("N", "min"),
+    "Deformation (Max)": ("def", "max"), "Deformation (Min)": ("def", "min"),
+}
+
+STEP_EFFECTS_VEHICLE = "Vehicle"
+STEP_EFFECTS_COMBINED = "Vehicle + Traffic UDL"
+STEP_EFFECTS_UDL = "Traffic UDL"
+
+
+def resolve_component_key(eid, base_key):
+    """Map the generic 'def' component to the member-specific deflection key."""
+    if base_key == "def":
+        return "def_x" if str(eid).startswith("W") else "def_y"
+    return base_key
+
+
+def step_combined_field(res_el, base_key, side, f_veh, f_udl, effects_mode):
+    """Factored per-step field for one component and adverse side.
+
+    The UDL part uses the per-step adverse field for the requested side;
+    missing UDL data degrades to the vehicle-only field.
+    """
+    key = base_key
+    veh = res_el[key] * f_veh
+    if effects_mode == STEP_EFFECTS_VEHICLE:
+        return veh
+    udl = res_el.get(f"{key}_udl_{side}")
+    if udl is None:
+        return veh if effects_mode == STEP_EFFECTS_COMBINED else np.zeros_like(veh)
+    if effects_mode == STEP_EFFECTS_UDL:
+        return udl * f_udl
+    return veh + udl * f_udl
+
+
+def find_critical_step(steps, eid, base_key, side, f_map, f_default, f_udl, effects_mode):
+    """Index of the step producing the extreme factored value of a component.
+
+    Returns (index, value) or (None, None) when the member never appears.
+    """
+    best_idx, best_val = None, None
+    f_v = f_map.get(eid, f_default)
+    for i, step in enumerate(steps):
+        res_el = step.get("res", {}).get(eid)
+        if res_el is None:
+            continue
+        key = resolve_component_key(eid, base_key)
+        field = step_combined_field(res_el, key, side, f_v, f_udl, effects_mode)
+        val = float(np.max(field)) if side == "max" else float(np.min(field))
+        better = (best_val is None or
+                  (side == "max" and val > best_val) or
+                  (side == "min" and val < best_val))
+        if better:
+            best_idx, best_val = i, val
+    return best_idx, best_val
+
+
 # ==========================================
 # MAIN RENDERER
 # ==========================================
@@ -292,12 +355,78 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
         if (show_A_step and valid_A_dat) or (show_B_step and valid_B_dat):
             max_steps = max(1, len(list_A), len(list_B))
             step_idx = c_step_slide.slider("Step Index", 0, max_steps-1, 0, key="veh_step_slider_persistent", disabled=ui_locked)
-            
+
+            if active_veh_step == "Vehicle A":
+                f_A = res_A['f_vehA'] if has_res_A else 1.0
+                f_B = res_B['f_vehA'] if valid_B and has_res_B else 1.0
+                f_map_A = res_A.get('f_vehA_map', {}) if has_res_A else {}
+                f_map_B = res_B.get('f_vehA_map', {}) if valid_B and has_res_B else {}
+            else:
+                f_A = res_A['f_vehB'] if has_res_A else 1.0
+                f_B = res_B['f_vehB'] if valid_B and has_res_B else 1.0
+                f_map_A = res_A.get('f_vehB_map', {}) if has_res_A else {}
+                f_map_B = res_B.get('f_vehB_map', {}) if valid_B and has_res_B else {}
+            f_udl_A = res_A.get('f_udl', 1.0) if has_res_A else 1.0
+            f_udl_B = res_B.get('f_udl', 1.0) if valid_B and has_res_B else 1.0
+
+            def _steps_have_udl(s_list):
+                return bool(s_list) and any('M_udl_max' in v for v in s_list[0].get('res', {}).values())
+
+            udl_in_steps = _steps_have_udl(list_A) or _steps_have_udl(list_B)
+            if udl_in_steps:
+                help_effects = (
+                    "Which load effects the step results show: the vehicle alone, the "
+                    "accompanying Traffic UDL alone, or both combined. With the UDL "
+                    "included, the charts show a band between the adverse-minimum and "
+                    "adverse-maximum UDL application for this step's window; values use "
+                    "the factors of the selected Result Type."
+                )
+                effects_mode = st.radio(
+                    "Step effects:",
+                    [STEP_EFFECTS_VEHICLE, STEP_EFFECTS_COMBINED, STEP_EFFECTS_UDL],
+                    horizontal=True, key="step_effects_radio", disabled=ui_locked, help=help_effects)
+            else:
+                effects_mode = STEP_EFFECTS_VEHICLE
+
+            # --- CRITICAL-STEP NAVIGATION ---
+            if show_A_step and valid_A_dat:
+                nav_steps, nav_fmap, nav_fdef, nav_fudl = list_A, f_map_A, f_A, f_udl_A
+            else:
+                nav_steps, nav_fmap, nav_fdef, nav_fudl = list_B, f_map_B, f_B, f_udl_B
+            member_ids = sorted(
+                {eid for s in nav_steps for eid in s.get('res', {}).keys()},
+                key=lambda x: (x[0], int(x[1:])))
+
+            def _jump_to_critical():
+                eid = st.session_state.get("crit_member_sel")
+                comp_label = st.session_state.get("crit_comp_sel")
+                if not eid or comp_label not in STEP_COMPONENT_OPTIONS:
+                    return
+                base_key, side = STEP_COMPONENT_OPTIONS[comp_label]
+                em = st.session_state.get("step_effects_radio", STEP_EFFECTS_VEHICLE)
+                idx, _val = find_critical_step(
+                    nav_steps, eid, base_key, side, nav_fmap, nav_fdef, nav_fudl, em)
+                if idx is not None:
+                    st.session_state["veh_step_slider_persistent"] = idx
+
+            help_nav = (
+                "Selecting a member and an envelope component moves the step slider to "
+                "the vehicle position producing that extreme (with the current step-"
+                "effects selection). E.g. S1 + Bending (Min) shows the governing "
+                "sagging step for span 1."
+            )
+            c_nav1, c_nav2, c_nav3 = st.columns([1, 1, 1])
+            c_nav1.selectbox("Member:", member_ids, key="crit_member_sel",
+                             on_change=_jump_to_critical, disabled=ui_locked, help=help_nav)
+            c_nav2.selectbox("Envelope component:", list(STEP_COMPONENT_OPTIONS.keys()),
+                             key="crit_comp_sel", on_change=_jump_to_critical, disabled=ui_locked)
+            c_nav3.button("Go to critical step", on_click=_jump_to_critical, disabled=ui_locked)
+
             st.markdown("---")
-            def get_step(res, idx, k_res, f_default, f_map):
-                # f_map holds per-member factors (eid -> factor incl. phi) so
-                # step results scale consistently with the envelopes when phi
-                # varies per member; f_default covers any missing eid.
+            def get_step(res, idx, k_res, f_default, f_map, f_udl):
+                # f_map holds per-member vehicle factors (eid -> factor incl.
+                # phi); f_udl factors the per-step adverse UDL fields. The
+                # step-effects selection decides what the charts show.
                 s_list = res.get(k_res, [])
                 if idx < len(s_list):
                     step_data = s_list[idx]['res']
@@ -313,32 +442,32 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                                     new_l['params'][0] *= f_factor
                                 scaled_loads.append(new_l)
 
-                        out[k] = {**v,
-                            'loads': scaled_loads,
-                            'M':v['M']*f_factor, 'V':v['V']*f_factor, 'N':v['N']*f_factor,
-                            'M_max':v['M']*f_factor, 'M_min':v['M']*f_factor,
-                            'V_max':v['V']*f_factor, 'V_min':v['V']*f_factor,
-                            'N_max':v['N']*f_factor, 'N_min':v['N']*f_factor,
-                            'def_x':v['def_x']*f_factor, 'def_y':v['def_y']*f_factor,
-                            'def_x_max':v['def_x']*f_factor, 'def_x_min':v['def_x']*f_factor,
-                            'def_y_max':v['def_y']*f_factor, 'def_y_min':v['def_y']*f_factor
-                        }
+                        out_el = {**v, 'loads': scaled_loads}
+                        for base in ('M', 'V', 'N', 'def_x', 'def_y'):
+                            veh = v[base] * f_factor
+                            u_max = v.get(f'{base}_udl_max')
+                            u_min = v.get(f'{base}_udl_min')
+                            if effects_mode == STEP_EFFECTS_VEHICLE or u_max is None:
+                                out_el[base] = veh
+                                out_el[f'{base}_max'] = veh
+                                out_el[f'{base}_min'] = veh
+                            elif effects_mode == STEP_EFFECTS_COMBINED:
+                                out_el[base] = veh
+                                out_el[f'{base}_max'] = veh + u_max * f_udl
+                                out_el[f'{base}_min'] = veh + u_min * f_udl
+                            else:  # Traffic UDL alone
+                                z = np.zeros_like(veh)
+                                out_el[base] = z
+                                out_el[f'{base}_max'] = u_max * f_udl
+                                out_el[f'{base}_min'] = u_min * f_udl
+                        if effects_mode == STEP_EFFECTS_VEHICLE:
+                            out_el.pop('udl_loaded_ranges', None)
+                        out[k] = out_el
                     return out
                 return {}
 
-            if active_veh_step == "Vehicle A":
-                f_A = res_A['f_vehA'] if has_res_A else 1.0
-                f_B = res_B['f_vehA'] if valid_B and has_res_B else 1.0
-                f_map_A = res_A.get('f_vehA_map', {}) if has_res_A else {}
-                f_map_B = res_B.get('f_vehA_map', {}) if valid_B and has_res_B else {}
-            else:
-                f_A = res_A['f_vehB'] if has_res_A else 1.0
-                f_B = res_B['f_vehB'] if valid_B and has_res_B else 1.0
-                f_map_A = res_A.get('f_vehB_map', {}) if has_res_A else {}
-                f_map_B = res_B.get('f_vehB_map', {}) if valid_B and has_res_B else {}
-
-            rA = get_step(res_A, step_idx, veh_key_res, f_A, f_map_A)
-            rB = get_step(res_B, step_idx, veh_key_res, f_B, f_map_B) if valid_B else {}
+            rA = get_step(res_A, step_idx, veh_key_res, f_A, f_map_A, f_udl_A)
+            rB = get_step(res_B, step_idx, veh_key_res, f_B, f_map_B, f_udl_B) if valid_B else {}
     else:
         key_map = {"Total Envelope": "Total Envelope", "Selfweight": "Selfweight", "Soil": "Soil", "Surcharge": "Surcharge", "Vehicle Envelope": "Vehicle Envelope", "Traffic UDL": "Traffic UDL"}
         target_key = key_map.get(view_case, "Total Envelope")

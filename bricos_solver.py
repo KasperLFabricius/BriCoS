@@ -1249,12 +1249,20 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     # 4.3.2(1)(b). The point-wise patterned nature means the UDL has no
     # single applied total, so it is excluded from the equilibrium table.
     udl_env = {}
-    if n_udl:
-        udl_env = get_empty_env()
-        comp_keys = (('M', 'M_max', 'M_min'), ('V', 'V_max', 'V_min'),
+    udl_comp_keys = (('M', 'M_max', 'M_min'), ('V', 'V_max', 'V_min'),
                      ('N', 'N_max', 'N_min'),
                      ('def_x', 'def_x_max', 'def_x_min'),
                      ('def_y', 'def_y_max', 'def_y_min'))
+    # Per-parent adverse prefix sums over the deck segments (ordered along
+    # the deck). For a contiguous excluded window the adverse sum of the
+    # remaining segments is prefix[first_inside] + (total - prefix[last_
+    # inside+1]) per side - O(1) numpy adds per step for the step coupling.
+    udl_prefix = {}     # pid -> {(comp, 'max'|'min'): (n_seg+1, n_pts) array}
+    udl_seg_bounds = [] # (deck_start, deck_end) per segment
+    if n_udl:
+        udl_env = get_empty_env()
+        udl_seg_bounds = [(s, s + L) for (s, L, _k) in sp_elems_info]
+        seg_parent_fields = {}  # pid -> comp -> list of per-segment arrays
         for i, seg_map in enumerate(udl_seg_maps):
             detailed = get_detailed_results_optimized(
                 elem_objects, elems_base, nodes, D_udl[:, i], seg_map,
@@ -1264,10 +1272,93 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                 target = udl_env.get(pid)
                 if target is None:
                     continue
-                for base_key, max_key, min_key in comp_keys:
+                store = seg_parent_fields.setdefault(pid, {c[0]: [] for c in udl_comp_keys})
+                for base_key, max_key, min_key in udl_comp_keys:
                     arr = dat[base_key]
                     target[max_key] = target[max_key] + np.maximum(arr, 0.0)
                     target[min_key] = target[min_key] + np.minimum(arr, 0.0)
+                    store[base_key].append(arr)
+
+        for pid, comps in seg_parent_fields.items():
+            udl_prefix[pid] = {}
+            for base_key, arrs in comps.items():
+                stack = np.stack(arrs)  # (n_seg, n_pts)
+                pos = np.maximum(stack, 0.0)
+                neg = np.minimum(stack, 0.0)
+                n_pts_p = stack.shape[1]
+                pre_max = np.zeros((stack.shape[0] + 1, n_pts_p))
+                pre_min = np.zeros((stack.shape[0] + 1, n_pts_p))
+                np.cumsum(pos, axis=0, out=pre_max[1:])
+                np.cumsum(neg, axis=0, out=pre_min[1:])
+                udl_prefix[pid][(base_key, 'max')] = pre_max
+                udl_prefix[pid][(base_key, 'min')] = pre_min
+
+    # Per-step coupling data for the step viewer: adverse UDL fields with
+    # the moving window excluded, plus the loaded ranges for visualization.
+    udl_gap = max(0.0, float(params.get('udl_gap', 10.0) or 0.0))
+    udl_moving = params.get('udl_mode', 'Moving') != 'Static'
+    udl_footprint = bool(params.get('udl_footprint', False))
+    seg_starts_arr = np.array([b[0] for b in udl_seg_bounds]) if n_udl else np.zeros(0)
+    seg_ends_arr = np.array([b[1] for b in udl_seg_bounds]) if n_udl else np.zeros(0)
+
+    # Deck extent per span parent (global deck coordinates), for converting
+    # loaded ranges to parent-local coordinates for visualization.
+    parent_deck_extent = {}
+    for (seg_s, seg_L, el_k) in sp_elems_info:
+        pid = elems_base[el_k]['parent']
+        lo, hi = parent_deck_extent.get(pid, (seg_s, seg_s + seg_L))
+        parent_deck_extent[pid] = (min(lo, seg_s), max(hi, seg_s + seg_L))
+
+    def attach_step_udl(step_res, axle_positions):
+        """Attach per-step adverse UDL fields and loaded ranges to a step.
+
+        The window [min axle - gap, max axle + gap] is excluded, snapped
+        inward to segment boundaries: a segment is excluded only when it
+        lies fully inside the window, which is conservative for the load
+        effects. With the footprint option, or in static application, no
+        window is excluded.
+        """
+        if not n_udl:
+            return
+        if udl_moving and not udl_footprint and len(axle_positions):
+            w_lo = min(axle_positions) - udl_gap
+            w_hi = max(axle_positions) + udl_gap
+            # Segments fully inside the window: start >= w_lo and end <= w_hi.
+            i0 = int(np.searchsorted(seg_starts_arr, w_lo, side='left'))
+            i1 = int(np.searchsorted(seg_ends_arr, w_hi, side='right'))
+            if i1 <= i0:
+                i0 = i1 = 0  # window narrower than any segment: nothing excluded
+        else:
+            i0 = i1 = 0
+
+        # Loaded deck ranges (global coordinates).
+        ranges = []
+        if i1 > i0:
+            if i0 > 0:
+                ranges.append((float(seg_starts_arr[0]), float(seg_ends_arr[i0 - 1])))
+            if i1 < len(seg_starts_arr):
+                ranges.append((float(seg_starts_arr[i1]), float(seg_ends_arr[-1])))
+        elif len(seg_starts_arr):
+            ranges = [(float(seg_starts_arr[0]), float(seg_ends_arr[-1]))]
+
+        for pid, prefixes in udl_prefix.items():
+            res_p = step_res.get(pid)
+            if res_p is None:
+                continue
+            for base_key, _mx, _mn in udl_comp_keys:
+                pre_max = prefixes[(base_key, 'max')]
+                pre_min = prefixes[(base_key, 'min')]
+                res_p[f'{base_key}_udl_max'] = pre_max[i0] + (pre_max[-1] - pre_max[i1])
+                res_p[f'{base_key}_udl_min'] = pre_min[i0] + (pre_min[-1] - pre_min[i1])
+            extent = parent_deck_extent.get(pid)
+            if extent is not None:
+                p_lo, p_hi = extent
+                local = []
+                for r_lo, r_hi in ranges:
+                    a = max(r_lo, p_lo); b = min(r_hi, p_hi)
+                    if b > a + 1e-9:
+                        local.append((a - p_lo, b - p_lo))
+                res_p['udl_loaded_ranges'] = local
 
     def process_vehicle_runs(runs, env_to_fill):
         steps_out = {'Forward': [], 'Reverse': []}
@@ -1338,6 +1429,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     x_front = x_chunk[i_local]
                     step_loads_map = {}
                     parent_loads = {}
+                    axle_deck_xs = []
                     has_loads = False
                     for ax_i, d in enumerate(v_dists_run):
                         ax_x = x_front - d
@@ -1355,6 +1447,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                             if point_load_belongs_to_sub_element(ax_x, start_x, start_x + L_span, is_last, 1e-9):
                                 local_x = min(max(ax_x - start_x, 0.0), L_span)
                                 P_val = v_loads_raw[ax_i]
+                                axle_deck_xs.append(ax_x)
                                 if use_batch_recovery:
                                     pid = elems_base[el_idx]['parent']
                                     parent_x = elems_base[el_idx]['local_offset'] + local_x
@@ -1398,11 +1491,13 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                                 'f_start_local': np.array([-N_agg[0], V_agg[0], M_agg[0]]),
                                 'f_end_local': np.array([N_agg[-1], -V_agg[-1], -M_agg[-1]]),
                             }
+                        attach_step_udl(step_res, axle_deck_xs)
                         v_steps_res_list.append({'x': x_front, 'res': step_res})
                     else:
                         D_step = D_chunk[:, i_local]
                         raw_step = get_detailed_results_optimized(elem_objects, elems_base, nodes, D_step, step_loads_map, params.get('mesh_size', 0.5), node_map)
                         agg_step = aggregate_member_results(raw_step)
+                        attach_step_udl(agg_step, axle_deck_xs)
                         v_steps_res_list.append({'x': x_front, 'res': agg_step})
             
             steps_out[current_dir] = v_steps_res_list
