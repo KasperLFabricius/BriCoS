@@ -151,25 +151,40 @@ class BricosReportGenerator:
         sls_mode = params.get('phi_sls_mode', 'Same')
         phi_sym = "Phi_SLS" if sls_mode in ('Reduced', 'Manual') else "Phi"
 
+        sls_g = params.get('sls_g', 1.0)
+        sls_j = params.get('sls_j', 1.0)
+        sls_veh = params.get('sls_veh', 1.0)
+        sls_vehB = params.get('sls_vehB', 1.0)
+        has_A = bool(params.get('vehicle', {}).get('loads'))
+        has_B = bool(params.get('vehicleB', {}).get('loads'))
+
+        veh_terms = []
+        if has_A: veh_terms.append(f"{sls_veh} · {phi_sym} · VehA")
+        if has_B: veh_terms.append(f"{sls_vehB} · {phi_sym} · VehB")
+        veh_txt = " + ".join(veh_terms)
+        surch_txt = f"{sls_veh} · Surcharge"
+
         if has_vehicle and has_surcharge:
             if params.get('combine_surcharge_vehicle', False):
-                variable = f"1.0 · {phi_sym} · Vehicle traffic + 1.0 · Surcharge"
+                variable = f"{veh_txt} + {surch_txt}"
             else:
-                variable = f"Envelope(1.0 · {phi_sym} · Vehicle traffic, 1.0 · Surcharge)"
+                variable = f"Envelope({veh_txt}, {surch_txt})"
         elif has_vehicle:
-            variable = f"1.0 · {phi_sym} · Vehicle traffic"
+            variable = veh_txt
         elif has_surcharge:
-            variable = "1.0 · Surcharge"
+            variable = surch_txt
         else:
             variable = ""
 
         if data_mod.udl_line_load(params) > 0.0:
-            udl_term = f"{params.get('udl_sls_factor', 0.40)} · Traffic UDL (no Phi)"
+            udl_term = f"{params.get('sls_udl', 0.40)} · Traffic UDL (no Phi)"
             variable = f"{variable} + {udl_term}" if variable else udl_term
 
+        perm = f"{sls_g} · SW"
+        if params.get('soil'): perm += f" + {sls_j} · Soil"
         if not variable:
-            return "1.0 · Permanent"
-        eq = f"1.0 · Permanent + {variable}"
+            return perm
+        eq = f"{perm} + {variable}"
         if has_vehicle and sls_mode == 'Reduced':
             eq += (" , where Phi_SLS = 1 + (Phi_ULS - 1)/2 per Vejledning til "
                    "belastnings- og beregningsgrundlag for broer, 5.4.2")
@@ -266,23 +281,43 @@ class BricosReportGenerator:
         
         self._update_progress(0.15)
         
-        # 5. Total Envelope (ULS)
-        self.elements.append(Paragraph(f"{self.chapter_count}. Design Results (ULS) - Total Envelope", self.styles['SwecoSubHeader']))
-        eq_txt = self._build_uls_equation_text()
-        self.elements.append(Paragraph(f"<b>Formula:</b> {eq_txt}", self.styles['SwecoSmall']))
-        self.elements.append(Spacer(1, 0.2*cm))
-        self._add_results_section("Design (ULS)", prog_range=(0.15, 0.35)) 
-        self.elements.append(PageBreak())
-        self.chapter_count += 1
-        
-        # 6. Total Envelope (SLS)
-        self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results, including dynamic factor Phi where applicable", self.styles['SwecoSubHeader']))
-        self.elements.append(Paragraph(f"<b>Formula:</b> {self._build_characteristic_formula_text()}", self.styles['SwecoSmall']))
-        self.elements.append(Paragraph('Characteristic static results excluding dynamic factor Phi are available in the interactive UI as "Characteristic (No Dynamic Factor)".', self.styles['SwecoSmall']))
-        self.elements.append(Spacer(1, 0.2*cm))
-        self._add_results_section("Characteristic (SLS)", prog_range=(0.35, 0.50))
-        self.elements.append(PageBreak())
-        self.chapter_count += 1
+        # 5./6. Total envelopes per the selected limit states. The unfactored
+        # combination chapter appears when neither limit state is analyzed.
+        analyze_uls = bool(self.params_A.get('analyze_uls', True))
+        analyze_sls = bool(self.params_A.get('analyze_sls', True))
+
+        if analyze_uls:
+            self.elements.append(Paragraph(f"{self.chapter_count}. Design Results (ULS) - Total Envelope", self.styles['SwecoSubHeader']))
+            eq_txt = self._build_uls_equation_text()
+            self.elements.append(Paragraph(f"<b>Formula:</b> {eq_txt}", self.styles['SwecoSmall']))
+            self.elements.append(Spacer(1, 0.2*cm))
+            self._add_results_section("Design (ULS)", prog_range=(0.15, 0.35))
+            self.elements.append(PageBreak())
+            self.chapter_count += 1
+        else:
+            self._update_progress(0.35)
+
+        if analyze_sls:
+            self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results (SLS), including dynamic factor Phi where applicable", self.styles['SwecoSubHeader']))
+            self.elements.append(Paragraph(f"<b>Formula:</b> {self._build_characteristic_formula_text()}", self.styles['SwecoSmall']))
+            self.elements.append(Paragraph('Unfactored results (all loads at factor 1.0, no dynamic factor) are available in the interactive UI as "Unfactored".', self.styles['SwecoSmall']))
+            self.elements.append(Spacer(1, 0.2*cm))
+            self._add_results_section("Characteristic (SLS)", prog_range=(0.35, 0.50))
+            self.elements.append(PageBreak())
+            self.chapter_count += 1
+        else:
+            self._update_progress(0.50)
+
+        if not analyze_uls and not analyze_sls:
+            self.elements.append(Paragraph(f"{self.chapter_count}. Total Results (Unfactored)", self.styles['SwecoSubHeader']))
+            self.elements.append(Paragraph(
+                "<b>Formula:</b> all load cases combined with factor 1.0 and no dynamic factor "
+                "(no limit state selected under Analysis & Result Settings).",
+                self.styles['SwecoSmall']))
+            self.elements.append(Spacer(1, 0.2*cm))
+            self._add_results_section("Unfactored", prog_range=(0.15, 0.50))
+            self.elements.append(PageBreak())
+            self.chapter_count += 1
         
         # 7. Load Components (Unfactored)
         # Check active components across BOTH systems if valid_B, else just A
@@ -326,9 +361,9 @@ class BricosReportGenerator:
         if has_udl:
             self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Traffic UDL (Unfactored)", self.styles['SwecoSubHeader']))
             self.elements.append(Paragraph(
-                "Adverse-only envelope of the uniformly distributed traffic load (fladelast), applied "
+                "Adverse-only envelope of the uniformly distributed traffic load (traffic UDL), applied "
                 "only in the unfavourable parts of the influence surface per EN 1991-2:2003, 4.3.2(1)(b). "
-                "The load intensity includes the stoedtillaeg (DS/EN 1991-2 DK NA:2017, A.2.3.2), so the "
+                "The load intensity includes the dynamic increment (DS/EN 1991-2 DK NA:2017, A.2.3.2), so the "
                 "dynamic factor Phi is not applied. Being point-wise patterned, this case has no single "
                 "applied load total and is therefore not part of the global equilibrium check.",
                 self.styles['SwecoSmall']))
@@ -636,25 +671,42 @@ class BricosReportGenerator:
         elif sls_mode == 'Manual':
             phi_txt += f" | SLS manual = {p.get('phi_sls', 1.0):.3f}"
 
-        gamma_str = f"G={p.get('gamma_g', 1.0)} | Soil={p.get('gamma_j', 1.0)}"
-        has_A = bool(p.get('vehicle', {}).get('loads'))
-        has_B = bool(p.get('vehicleB', {}).get('loads'))
-        
-        if has_A and not has_B: gamma_str += f" | Q_A={p.get('gamma_veh', 1.0)}"
-        elif has_B and not has_A: gamma_str += f" | Q_B={p.get('gamma_vehB', 1.0)}"
-        elif has_A and has_B: gamma_str += f" | Q_A={p.get('gamma_veh', 1.0)} | Q_B={p.get('gamma_vehB', 1.0)}"
-        
-        txt_settings = (f"<b>KFI:</b> {p.get('KFI', 1.0)} | <b>Gammas:</b> {gamma_str} | <b>Phi:</b> {phi_txt}")
-        self.elements.append(Paragraph(txt_settings, self.styles['SwecoBody']))
+        analyze_uls = bool(p.get('analyze_uls', True))
+        analyze_sls = bool(p.get('analyze_sls', True))
+        ls_txt = ("ULS and SLS" if analyze_uls and analyze_sls else
+                  "ULS only" if analyze_uls else
+                  "SLS only" if analyze_sls else
+                  "none (unfactored combination only)")
+        self.elements.append(Paragraph(
+            f"<b>Limit states analyzed:</b> {ls_txt} | <b>Phi:</b> {phi_txt}",
+            self.styles['SwecoBody']))
 
+        # Combination factor table: one row per load component, the ULS
+        # partial factor (multiplied by KFI) and the SLS combination factor.
+        kfi = p.get('KFI', 1.0)
+        uls_col = f"ULS factor (x KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
+        sls_col = "SLS factor" if analyze_sls else "SLS factor (not analyzed)"
+        fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
+        fact_rows.append(["Selfweight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
+        if p.get('soil'):
+            fact_rows.append(["Soil", f"{p.get('gamma_j', 1.0)}", f"{p.get('sls_j', 1.0)}", "-"])
+        if bool(p.get('vehicle', {}).get('loads')):
+            fact_rows.append(["Vehicle A", f"{p.get('gamma_veh', 1.0)}", f"{p.get('sls_veh', 1.0)}", "Phi applied"])
+        if bool(p.get('vehicleB', {}).get('loads')):
+            fact_rows.append(["Vehicle B", f"{p.get('gamma_vehB', 1.0)}", f"{p.get('sls_vehB', 1.0)}", "Phi applied"])
         udl_line = data_mod.udl_line_load(p)
         if udl_line > 0.0:
+            fact_rows.append(["Traffic UDL", f"{p.get('gamma_udl', 0.56)}", f"{p.get('sls_udl', 0.40)}",
+                              "not applied (intensity includes the dynamic increment, DK NA A.2.3.2)"])
+        if p.get('surcharge'):
+            fact_rows.append(["Surcharge", f"{p.get('gamma_veh', 1.0)} (= Vehicle A)", f"{p.get('sls_veh', 1.0)} (= Vehicle A)", "not applied (static)"])
+        t = self._make_std_table(fact_rows, [3.2*cm, 4.4*cm, 4.0*cm, 5.6*cm], font_size=8)
+        self.elements.append(KeepTogether([t]))
+
+        if udl_line > 0.0:
             self.elements.append(Paragraph(
-                f"<b>Traffic UDL (fladelast):</b> q = {udl_line:.2f} kN/m "
+                f"<b>Traffic UDL:</b> q = {udl_line:.2f} kN/m "
                 "(line load on the analysis strip; effective width considered in the input) | "
-                f"&gamma;<sub>UDL</sub> = {p.get('gamma_udl', 0.56)} (ULS), "
-                f"{p.get('udl_sls_factor', 0.40)} (SLS char.) | "
-                "intensity incl. stoedtillaeg - <i>&Phi;</i> not applied | "
                 "application: static full deck, adverse-only (EN 1991-2, 4.3.2(1)(b))",
                 self.styles['SwecoBody']))
         self.elements.append(Spacer(1, 0.2*cm))
@@ -845,13 +897,13 @@ class BricosReportGenerator:
                    else "governing (max) value applied to all members")
             method_txt = (
                 "<i>L<sub>inf</sub></i> = actual span per DS/EN 1991-2 DK NA:2017, "
-                f"Anneks A, A.2.3.5(2); {app}."
+                f"Annex A, A.2.3.5(2); {app}."
             )
         else:
             method_txt = (
                 "<i>L<sub>inf</sub></i> = determinant length of the combined system per "
                 "DS/EN 1991-2:2003, Table 6.2, Case 5.1/5.2/5.3 (renumbered Table 8.2 in the "
-                "2023 edition); <i>Φ</i> per DS/EN 1991-2 DK NA:2017, Anneks A, A.2.3.5(2)."
+                "2023 edition); <i>Φ</i> per DS/EN 1991-2 DK NA:2017, Annex A, A.2.3.5(2)."
             )
         self.elements.append(Paragraph(method_txt, self.styles['SwecoSmall']))
 
@@ -1013,10 +1065,10 @@ class BricosReportGenerator:
         self._add_reaction_table(res_A, self.params_A, res_B, self.params_B)
 
     def _add_component_section(self, load_key, prog_range=(0.0, 0.0)):
-        res_A = solver.combine_results(self.raw_A, self.params_A, "Characteristic (No Dynamic Factor)")
+        res_A = solver.combine_results(self.raw_A, self.params_A, "Unfactored")
         res_B = {}
         if self.valid_B:
-             res_B = solver.combine_results(self.raw_B, self.params_B, "Characteristic (No Dynamic Factor)")
+             res_B = solver.combine_results(self.raw_B, self.params_B, "Unfactored")
         
         tasks = []
         types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'), 

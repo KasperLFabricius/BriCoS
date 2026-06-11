@@ -205,10 +205,18 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             else:
                 c_res_tool2.info("Comparison Disabled (Sys B Empty)")
 
+        # Result modes follow the limit-state toggles; the unfactored
+        # combination is always available (and the only one when both
+        # toggles are off).
         curr_res_mode = st.session_state.get('result_mode', "Design (ULS)")
-        res_opts = ["Design (ULS)", "Characteristic (SLS)", "Characteristic (No Dynamic Factor)"]
+        if curr_res_mode == "Characteristic (No Dynamic Factor)":
+            curr_res_mode = "Unfactored"  # legacy name from saved sessions
+        res_opts = []
+        if sysA.get('analyze_uls', True): res_opts.append("Design (ULS)")
+        if sysA.get('analyze_sls', True): res_opts.append("Characteristic (SLS)")
+        res_opts.append("Unfactored")
         try: res_idx = res_opts.index(curr_res_mode)
-        except: res_idx = 0
+        except ValueError: res_idx = 0
         st.session_state['result_mode'] = c_res_tool3.radio("Result Type", res_opts, index=res_idx, horizontal=True, key="result_mode_main_ui", disabled=ui_locked)
         result_mode_val = st.session_state['result_mode']
 

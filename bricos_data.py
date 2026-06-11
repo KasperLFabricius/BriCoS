@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.51"
+APP_VERSION = "0.52"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -203,6 +203,11 @@ def sanitize_input_data(data):
     if data.get('phi_sls_reduction') is True and data.get('phi_sls_mode', 'Same') == 'Same':
         data['phi_sls_mode'] = 'Reduced'
     data.pop('phi_sls_reduction', None)
+
+    # Migration: v0.51 stored the SLS factor for the traffic UDL as
+    # udl_sls_factor; it is now part of the SLS factor set (sls_udl).
+    if 'udl_sls_factor' in data:
+        data['sls_udl'] = data.pop('udl_sls_factor')
 
     return data
 
@@ -669,7 +674,16 @@ def get_def():
                                  # used by the moving-window mode (next release)
         'udl_mode': 'Static',    # 'Static' (full deck, adverse) for now
         'gamma_udl': 0.56,       # ULS partial factor (Vejledning Fig. B3.1, LC1)
-        'udl_sls_factor': 0.40,  # SLS characteristic factor (Fig. B3.2)
+
+        # SLS combination factors (Vejledning Fig. B3.2, characteristic
+        # combination): permanent 1.0, vehicle A 1.00, vehicle B 0.75,
+        # traffic UDL 0.40. KFI is not applied in SLS.
+        'sls_g': 1.0, 'sls_j': 1.0,
+        'sls_veh': 1.0, 'sls_vehB': 0.75,
+        'sls_udl': 0.40,
+        # Independent analysis toggles. Both off -> only the unfactored
+        # combination is available.
+        'analyze_uls': True, 'analyze_sls': True,
 
         # 0.5 m mesh keeps the (undocumented before v0.48) deflection
         # interpolation error negligible; affordable since the v0.47
@@ -724,7 +738,10 @@ def get_clear(name_suffix, current_mode):
         'udl_gap': 10.0,
         'udl_mode': 'Static',
         'gamma_udl': 1.0,
-        'udl_sls_factor': 1.0,
+        'sls_g': 1.0, 'sls_j': 1.0,
+        'sls_veh': 1.0, 'sls_vehB': 1.0,
+        'sls_udl': 1.0,
+        'analyze_uls': True, 'analyze_sls': True,
 
         'scale_manual': 2.0, 
         'mesh_size': 0.5, 'step_size': 0.5,
@@ -781,7 +798,16 @@ def force_ui_update(sys_key, data):
     st.session_state[f"{sys_key}_udlq"] = data.get('udl_q', 0.0)
     st.session_state[f"{sys_key}_udlgap"] = data.get('udl_gap', 10.0)
     st.session_state[f"{sys_key}_gudl_cust"] = data.get('gamma_udl', 0.56)
-    st.session_state[f"{sys_key}_udlsls"] = data.get('udl_sls_factor', 0.40)
+
+    # SLS factor set
+    st.session_state[f"{sys_key}_slsg_cust"] = data.get('sls_g', 1.0)
+    st.session_state[f"{sys_key}_slsj_cust"] = data.get('sls_j', 1.0)
+    st.session_state[f"{sys_key}_slsA_cust"] = data.get('sls_veh', 1.0)
+    st.session_state[f"{sys_key}_slsB_cust"] = data.get('sls_vehB', 0.75)
+    st.session_state[f"{sys_key}_slsudl_cust"] = data.get('sls_udl', 0.40)
+    if sys_key == "sysA":
+        st.session_state["uls_toggle_sidebar"] = bool(data.get('analyze_uls', True))
+        st.session_state["sls_toggle_sidebar"] = bool(data.get('analyze_sls', True))
     st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
     
     # 2. Shear Deformation Keys & Analysis Settings
