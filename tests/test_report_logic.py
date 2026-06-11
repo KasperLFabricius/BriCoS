@@ -116,6 +116,94 @@ def test_characteristic_formula_simultaneous_mode_reports_vehicle_plus_surcharge
     assert "Other variable actions" not in formula
 
 
+def _eq_case(ax=0.0, ay=0.0, rx=0.0, ry=0.0, has_loads=None):
+    case = {
+        "applied_x": ax, "applied_y": ay,
+        "reactions_x": rx, "reactions_y": ry,
+        "residual_x": ax + rx, "residual_y": ay + ry,
+    }
+    if has_loads is not None:
+        case["has_loads"] = has_loads
+    return case
+
+
+def test_equilibrium_rows_distinguish_cancelling_loads_from_no_loads():
+    # Mirrored earth pressure on both walls cancels in the global sums; the
+    # row must still PASS instead of claiming "(no loads)".
+    rows = BricosReportGenerator._equilibrium_rows({
+        "Selfweight": _eq_case(ay=-200.0, ry=200.0, has_loads=True),
+        "Soil": _eq_case(has_loads=True),
+        "Surcharge": _eq_case(has_loads=False),
+    })
+
+    by_case = {r[0]: r for r in rows[1:]}
+    assert by_case["Selfweight"][-1] == "PASS"
+    assert by_case["Soil"][-1] == "PASS"
+    assert by_case["Surcharge"][-1] == "(no loads)"
+
+
+def test_equilibrium_rows_flag_residual_failures():
+    rows = BricosReportGenerator._equilibrium_rows({
+        "Soil": _eq_case(ax=60.0, rx=-50.0, has_loads=True),
+    })
+
+    assert rows[1][-1] == "CHECK FAILED"
+
+
+def test_equilibrium_rows_legacy_results_fall_back_to_magnitudes():
+    # Raw results generated before the has_loads flag existed: all-zero
+    # sums still read as "(no loads)", non-zero sums get the check.
+    rows = BricosReportGenerator._equilibrium_rows({
+        "Selfweight": _eq_case(ay=-100.0, ry=100.0),
+        "Soil": _eq_case(),
+    })
+
+    by_case = {r[0]: r for r in rows[1:]}
+    assert by_case["Selfweight"][-1] == "PASS"
+    assert by_case["Soil"][-1] == "(no loads)"
+
+
+def test_std_table_wraps_only_overflowing_string_cells():
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph
+
+    gen = _generator(_params())
+    long_text = ("not applied (intensity includes the dynamic increment, "
+                 "DK NA A.2.3.2)")
+    try:
+        t = gen._make_std_table(
+            [["Header", "Dynamic factor"], ["a", long_text]],
+            [2 * cm, 3 * cm], font_size=8)
+    finally:
+        gen.executor.shutdown(wait=True)
+
+    cells = t._cellvalues
+    assert isinstance(cells[1][1], Paragraph)  # overflowing body cell wraps
+    assert isinstance(cells[0][0], str)        # short cells stay plain
+    assert isinstance(cells[1][0], str)
+
+
+def test_udl_application_text_modes():
+    static = _params(udl_mode="Static")
+    assert BricosReportGenerator._udl_application_text(static, True) == (
+        "static full deck at every step"
+    )
+
+    moving = _params(udl_mode="Moving", udl_gap=5.0, udl_footprint=False)
+    txt = BricosReportGenerator._udl_application_text(moving, True)
+    assert "5.00 m" in txt  # custom distances must be reported verbatim
+    assert "conservative" in txt
+
+    footprint = _params(udl_mode="Moving", udl_footprint=True)
+    assert "within the vehicle window" in (
+        BricosReportGenerator._udl_application_text(footprint, True)
+    )
+
+    no_vehicle = BricosReportGenerator._udl_application_text(moving, False)
+    assert "no vehicle load model" in no_vehicle
+    assert "clear distance" not in no_vehicle
+
+
 def test_has_any_vehicle_false_when_all_vehicle_lists_are_empty():
     gen = _generator(_params())
 

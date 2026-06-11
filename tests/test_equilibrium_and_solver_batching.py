@@ -101,6 +101,29 @@ def test_equilibrium_soil_and_surcharge_on_frame():
     assert abs(eq_sw["residual_y"]) < 1e-6
 
 
+def test_equilibrium_symmetric_soil_cancels_but_reports_has_loads():
+    # Mirrored earth pressure on both walls cancels in the global x-sum.
+    # The has_loads flag must still mark the case as loaded so the report
+    # shows a PASS row instead of "(no loads)".
+    params = _frame_params(
+        soil=[
+            {"wall_idx": 0, "face": "L", "h": 6.0, "q_top": 0.0, "q_bot": 20.0},
+            {"wall_idx": 1, "face": "R", "h": 6.0, "q_top": 0.0, "q_bot": 20.0},
+        ],
+        surcharge=[],
+    )
+    raw = _run(params)
+
+    eq_soil = raw["Equilibrium"]["Soil"]
+    assert eq_soil["has_loads"] is True
+    assert abs(eq_soil["applied_x"]) < 1e-9
+    assert abs(eq_soil["residual_x"]) < 1e-6
+    assert abs(eq_soil["residual_y"]) < 1e-6
+
+    assert raw["Equilibrium"]["Surcharge"]["has_loads"] is False
+    assert raw["Equilibrium"]["Selfweight"]["has_loads"] is True
+
+
 def test_equilibrium_inclined_span_selfweight():
     # Inclined span: gravity totals must still balance vertically.
     params = _beam_params()

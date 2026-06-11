@@ -91,6 +91,37 @@ def test_app_version_is_centralized_from_data_module():
     assert all(part.isdigit() for part in parts)
 
 
+def test_force_ui_update_restores_udl_gap_preset_selector():
+    # The gap selectbox key must follow the stored value on load/copy/reset:
+    # left stale, the selectbox re-applies its old preset on the next rerun
+    # and silently overwrites a loaded custom clear distance.
+    st = data.st
+    st.session_state.clear()
+    params = data.get_def()
+
+    params["udl_gap"] = 5.0
+    st.session_state["sysA_udlgap_sel"] = "10.0 m (DK NA Fig. A.2.2-2)"  # stale
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_udlgap_sel"] == "Custom"
+    assert st.session_state["sysA_udlgap_cust"] == 5.0
+
+    params["udl_gap"] = 0.0
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_udlgap_sel"] == "0.0 m (adjacent to vehicle)"
+
+    params["udl_gap"] = 10.0
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_udlgap_sel"] == "10.0 m (DK NA Fig. A.2.2-2)"
+
+
+def test_udl_gap_preset_label_matches_presets_and_custom():
+    for label, val in data.UDL_GAP_PRESETS.items():
+        assert data.udl_gap_preset_label(val) == label
+    assert data.udl_gap_preset_label(7.5) == "Custom"
+    # Invalid input falls back to the 10.0 m default preset.
+    assert data.udl_gap_preset_label(None) == "10.0 m (DK NA Fig. A.2.2-2)"
+
+
 def test_get_clear_initializes_empty_vehicle_and_surcharge_state():
     params = data.get_clear("A", "Beam")
 

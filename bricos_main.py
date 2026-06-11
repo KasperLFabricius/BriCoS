@@ -1044,9 +1044,9 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         p['udl_mode'] = 'Static' if "Static" in mode_sel else 'Moving'
 
         if p['udl_mode'] == 'Moving':
-            gap_presets = {"10.0 m (DK NA Fig. A.2.2-2)": 10.0, "0.0 m (adjacent to vehicle)": 0.0}
+            gap_presets = data_mod.UDL_GAP_PRESETS
             curr_gap = float(p.get('udl_gap', 10.0))
-            preset_label = next((k for k, v in gap_presets.items() if abs(v - curr_gap) < 1e-9), "Custom")
+            preset_label = data_mod.udl_gap_preset_label(curr_gap)
             gap_opts = list(gap_presets.keys()) + ["Custom"]
             help_gap = (
                 "Clear distance from the outermost axles to the start of the UDL, applied "
