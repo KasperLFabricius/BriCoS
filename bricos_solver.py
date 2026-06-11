@@ -1266,7 +1266,72 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     # inside+1]) per side - O(1) numpy adds per step for the step coupling.
     udl_prefix = {}     # pid -> {(comp, 'max'|'min'): (n_seg+1, n_pts) array}
     udl_seg_bounds = [] # (deck_start, deck_end) per segment
-    if n_udl:
+    if n_udl and use_batch_recovery:
+        # --- BATCHED UDL SEGMENT RECOVERY (fast path) ---
+        # One kernel call per chunk replaces the per-segment Python
+        # detailed recovery below, which dominated large fine-mesh
+        # analyses (one full element loop per deck sub-element). Gated by
+        # the same grid-match condition as the batched step recovery: the
+        # envelope skeleton and prefix arrays are sized on the legacy
+        # per-element grids.
+        udl_env = get_empty_env()
+        udl_seg_bounds = [(s, s + L) for (s, L, _k) in sp_elems_info]
+        seg_el_idx_arr = np.array([info[2] for info in sp_elems_info], dtype=np.int64)
+        seg_fef = np.zeros((n_udl, 6))
+        seg_q_t = np.zeros(n_udl)
+        seg_q_a = np.zeros(n_udl)
+        for i in range(n_udl):
+            el_k = int(seg_el_idx_arr[i])
+            el_obj = elem_objects[el_k]
+            # Same decomposition + FEF as the legacy path uses per segment.
+            seg_fef[i] = get_local_fixed_end_forces_for_load(
+                el_obj, udl_seg_maps[i][el_k][0])
+            seg_q_t[i] = udl_q_line * el_obj.cx
+            seg_q_a[i] = udl_q_line * el_obj.cy
+
+        comp_col = {'M': 0, 'V': 1, 'N': 2, 'def_x': 3, 'def_y': 4}
+        parent_stacks = {
+            pa['pid']: {c[0]: np.empty((n_udl, len(pa['indices']) * n_pts_kernel))
+                        for c in udl_comp_keys}
+            for pa in parent_assembly
+        }
+        # Chunked: the raw kernel output is n_segs x n_elems x n_pts x 5,
+        # which at viaduct scale would rival the dense K in memory.
+        UDL_CHUNK = 256
+        for c0 in range(0, n_udl, UDL_CHUNK):
+            c1 = min(c0 + UDL_CHUNK, n_udl)
+            seg_out = np.empty((c1 - c0, n_elems, n_pts_kernel, 5))
+            kernels.jit_udl_segment_recovery_batch(
+                c1 - c0, n_elems, n_pts_kernel,
+                seg_el_idx_arr[c0:c1], seg_fef[c0:c1],
+                seg_q_t[c0:c1], seg_q_a[c0:c1],
+                D_udl[:, c0:c1], el_dof_indices, el_T, el_L,
+                S_matrices, seg_out)
+            for pa in parent_assembly:
+                block = seg_out[:, pa['indices'], :, :]
+                stacks = parent_stacks[pa['pid']]
+                for base_key, col in comp_col.items():
+                    stacks[base_key][c0:c1] = block[:, :, :, col].reshape(c1 - c0, -1)
+
+        for pa in parent_assembly:
+            pid = pa['pid']
+            target = udl_env.get(pid)
+            udl_prefix[pid] = {}
+            for base_key, max_key, min_key in udl_comp_keys:
+                stack = parent_stacks[pid][base_key]
+                pos = np.maximum(stack, 0.0)
+                neg = np.minimum(stack, 0.0)
+                if target is not None:
+                    target[max_key] = target[max_key] + pos.sum(axis=0)
+                    target[min_key] = target[min_key] + neg.sum(axis=0)
+                pre_max = np.zeros((n_udl + 1, stack.shape[1]))
+                pre_min = np.zeros((n_udl + 1, stack.shape[1]))
+                np.cumsum(pos, axis=0, out=pre_max[1:])
+                np.cumsum(neg, axis=0, out=pre_min[1:])
+                udl_prefix[pid][(base_key, 'max')] = pre_max
+                udl_prefix[pid][(base_key, 'min')] = pre_min
+    elif n_udl:
+        # --- LEGACY PER-SEGMENT RECOVERY (uneven element grids) ---
         udl_env = get_empty_env()
         udl_seg_bounds = [(s, s + L) for (s, L, _k) in sp_elems_info]
         seg_parent_fields = {}  # pid -> comp -> list of per-segment arrays

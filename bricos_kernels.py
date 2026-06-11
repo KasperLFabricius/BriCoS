@@ -963,3 +963,94 @@ def jit_step_recovery_batch(
                 res_out[s, e, p, 2] = Nx
                 res_out[s, e, p, 3] = cx * ux_loc - cy * uy_loc
                 res_out[s, e, p, 4] = cy * ux_loc + cx * uy_loc
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def jit_udl_segment_recovery_batch(
+    n_segs, n_elems, n_pts,
+    seg_el_indices, seg_fef, seg_q_trans, seg_q_axial,
+    D_all, el_dof_indices, el_T, el_L,
+    S_matrices,
+    res_out,
+):
+    """Per-UDL-segment internal force/deflection recovery for all elements.
+
+    One case per deck sub-element carrying the uniform traffic UDL over its
+    whole length (local x in [0, L]). Identical math to the legacy
+    per-segment path (k_local recovery folded with the segment FEF, plus
+    jit_internal_forces' full-cover trapezoid terms, replicated verbatim),
+    stored as res_out[s, e, p, :] = [M, V, N, def_x_glob, def_y_glob].
+    Replaces the Python loop running one full detailed recovery per
+    segment, which dominated large fine-mesh analyses (~2/3 of runtime on
+    a 10-span deck at 0.1 m mesh).
+    """
+    for e in prange(n_elems):
+        L_el = el_L[e]
+        T = el_T[e]
+        cx, cy = T[0, 0], T[0, 1]
+        dofs = el_dof_indices[e]
+        dx_step = L_el / (n_pts - 1)
+
+        d_glob = np.zeros(6)
+        d_loc = np.zeros(6)
+
+        for s in range(n_segs):
+            for k in range(6):
+                d_glob[k] = D_all[dofs[k], s]
+            for r in range(6):
+                val = 0.0
+                for c in range(6):
+                    val += T[r, c] * d_glob[c]
+                d_loc[r] = val
+
+            is_loaded = seg_el_indices[s] == e
+            FEF_N = 0.0
+            FEF_V = 0.0
+            FEF_M = 0.0
+            q_t = 0.0
+            q_a = 0.0
+            if is_loaded:
+                FEF_N = seg_fef[s, 0]
+                FEF_V = seg_fef[s, 1]
+                FEF_M = seg_fef[s, 2]
+                q_t = seg_q_trans[s]
+                q_a = seg_q_axial[s]
+
+            for p in range(n_pts):
+                x = p * dx_step
+                M_hom = 0.0; V_hom = 0.0; N_hom = 0.0; ux_loc = 0.0; uy_loc = 0.0
+                for j in range(6):
+                    dj = d_loc[j]
+                    M_hom += S_matrices[e, p, 0, j] * dj
+                    V_hom += S_matrices[e, p, 1, j] * dj
+                    N_hom += S_matrices[e, p, 2, j] * dj
+                    ux_loc += S_matrices[e, p, 3, j] * dj
+                    uy_loc += S_matrices[e, p, 4, j] * dj
+
+                Mx = M_hom
+                Vx = V_hom
+                Nx = N_hom
+                if is_loaded:
+                    Mx += FEF_M - FEF_V * x
+                    Vx += FEF_V
+                    Nx -= FEF_N
+                    if x > 0.0:
+                        # jit_internal_forces trapezoid terms for the
+                        # full-cover uniform load (q_s = q_e = q, h_s = 0,
+                        # h_e = L => lim = x), kept verbatim so the batch
+                        # reproduces the legacy floats.
+                        F_part = (q_t + q_t) / 2.0 * x
+                        Vx -= F_part
+                        denom = q_t + q_t
+                        if abs(denom) > 1e-9:
+                            d_c = (x / 3.0) * (2.0 * q_t + q_t) / denom
+                        else:
+                            d_c = 0.0
+                        Mx += F_part * (x - d_c)
+                        Nx += (q_a + q_a) / 2.0 * x
+
+                res_out[s, e, p, 0] = Mx
+                res_out[s, e, p, 1] = Vx
+                res_out[s, e, p, 2] = Nx
+                res_out[s, e, p, 3] = cx * ux_loc - cy * uy_loc
+                res_out[s, e, p, 4] = cy * ux_loc + cx * uy_loc
