@@ -1046,12 +1046,14 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
     udl_line = data_mod.udl_line_load(p)
     if udl_line > 0.0:
         help_udl_mode = (
-            "How the UDL accompanies the vehicle in the STEP results (step viewer and "
-            "critical-step plots). Moving: the UDL fills the deck except a window around "
-            "the vehicle defined by the clear distance below. Static: full deck at every "
-            "step. The Total Envelope always combines the vehicle envelope with the full "
-            "adverse UDL envelope by independent superposition, which bounds every window "
-            "arrangement including the vehicle-absent situation."
+            "How the UDL accompanies the vehicle. Moving: the UDL fills the deck except a "
+            "window around the vehicle defined by the clear distance below. Static: full "
+            "deck at every step. The Total Envelope couples the UDL exactly with the "
+            "vehicle steps: each position combines the vehicle with the adverse UDL "
+            "outside its window, enveloped together with the vehicle-absent situation "
+            "(full adverse UDL alone). With the Static application (or the footprint "
+            "option) the per-step UDL equals the full adverse envelope, which reproduces "
+            "the conservative vehicle + full UDL superposition."
         )
         mode_opts = ["Moving with vehicle", "Static (full deck)"]
         idx_mode = 1 if p.get('udl_mode') == 'Static' else 0
@@ -1076,7 +1078,11 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
             p['udl_footprint'] = st.checkbox(
                 "Apply UDL also within the vehicle window",
                 value=bool(p.get('udl_footprint', False)), key=f"{curr}_udlfoot", disabled=ui_locked,
-                help="When enabled the UDL coexists with the vehicle over its full footprint (no window is excluded in the step results).",
+                help=(
+                    "When enabled the UDL coexists with the vehicle over its full "
+                    "footprint (no window is excluded). The Total Envelope then equals "
+                    "the conservative vehicle + full adverse UDL superposition."
+                ),
             )
 
         st.success(f"Traffic UDL active: {udl_line:.2f} kN/m on the strip")
