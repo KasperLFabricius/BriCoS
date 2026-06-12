@@ -655,6 +655,10 @@ class BricosReportGenerator:
             "Design values (<i>E<sub>d</sub></i>) are computed by superposition of factored envelopes: "
             "<i>E<sub>d</sub></i> = <i>K<sub>FI</sub></i> &middot; (<i>&gamma;<sub>G</sub>E<sub>SW</sub></i> + <i>&gamma;<sub>Soil</sub>E<sub>Soil</sub></i> + <i>&gamma;<sub>Q</sub>&Phi;E<sub>Veh</sub></i> + <i>&gamma;<sub>Q</sub>E<sub>Surch</sub></i>). "
             "Partial factors (<i>&gamma;</i>) and Consequence Class factor (<i>K<sub>FI</sub></i>) are applied as defined in settings. "
+            "Where a Traffic UDL is defined, the vehicle term is the exact coupled traffic envelope: "
+            "per vehicle position, the factored vehicle effect plus the factored adverse UDL outside "
+            "that position's clear-distance window, enveloped together with the vehicle-absent "
+            "situation (full adverse UDL alone). "
             "Traffic surcharge interaction is applied according to user selection (Exclusive or Simultaneous with vehicle load). "
             "Note that a single partial factor per permanent action is applied to both the maximum and minimum "
             "envelope values; favorable/unfavorable permanent-load combinations "
@@ -884,14 +888,35 @@ class BricosReportGenerator:
         if p.get('udl_mode') == 'Static':
             return "static full deck at every step"
         if not sys_has_vehicle:
-            return ("no vehicle load model in this system, so no step results exist; "
-                    "the UDL enters the Total Envelope as the full adverse envelope")
+            return "no vehicle load model in this system, so no step results exist"
         if p.get('udl_footprint', False):
             return "moving with the vehicle, also applied within the vehicle window"
         return (f"moving with the vehicle, clear distance "
                 f"{p.get('udl_gap', 10.0):.2f} m in front of and behind the axles "
                 "(the excluded window snaps inward to whole mesh segments, "
                 "erring on the loaded side - conservative)")
+
+    @staticmethod
+    def _udl_total_envelope_text(p, sys_has_vehicle):
+        """How the Traffic UDL enters the Total Envelope (v0.59: exact
+        coupling with the vehicle steps; static/footprint applications
+        reproduce the former conservative superposition)."""
+        if not sys_has_vehicle:
+            return ("Without a vehicle, the Total Envelope applies the full "
+                    "adverse UDL envelope.")
+        if p.get('udl_mode') == 'Static' or p.get('udl_footprint', False):
+            return ("With this application the per-step UDL equals the full "
+                    "adverse envelope, so the Total Envelope equals the "
+                    "conservative vehicle + full adverse UDL superposition.")
+        txt = ("The Total Envelope couples the UDL exactly with the vehicle "
+               "steps: each position combines the vehicle with the adverse "
+               "UDL outside its clear-distance window, enveloped together "
+               "with the vehicle-absent situation (full adverse UDL alone).")
+        if bool(p.get('vehicle', {}).get('loads')) and bool(p.get('vehicleB', {}).get('loads')):
+            txt += (" With both Vehicle A and B defined, the UDL couples with "
+                    "each vehicle's own steps; the cross-vehicle combination "
+                    "remains an independent superposition.")
+        return txt
 
     def _add_system_input_summary(self, sys_label, p, raw_res, props, sys_key_id):
         self.elements.append(Paragraph(f"<b>{sys_label} ({p.get('name', '')})</b> - {p['mode']}", self.styles['Heading3']))
@@ -949,13 +974,12 @@ class BricosReportGenerator:
 
         if udl_line > 0.0:
             app_txt = self._udl_application_text(p, sys_has_vehicle)
+            total_txt = self._udl_total_envelope_text(p, sys_has_vehicle)
             self.elements.append(Paragraph(
                 f"<b>Traffic UDL:</b> q = {udl_line:.2f} kN/m "
                 "(line load on the analysis strip; loaded width considered in the input) | "
                 "adverse-only application (EN 1991-2, 4.3.2(1)(b)) | "
-                f"step results: {app_txt}. The Total Envelope combines the vehicle envelope "
-                "with the full adverse UDL envelope by independent superposition, which "
-                "bounds every window arrangement including the vehicle-absent situation.",
+                f"step results: {app_txt}. {total_txt}",
                 self.styles['SwecoBody']))
         self.elements.append(Spacer(1, 0.2*cm))
         

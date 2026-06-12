@@ -1656,6 +1656,46 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         'Reactions': calculate_reactions(nodes, res_sw)
     }, nodes, model_props, 0
 
+def coupled_vehicle_udl_envelope(steps, f_veh_map, f_veh_default, f_udl):
+    """Exact coupled traffic envelope: vehicle steps + accompanying UDL.
+
+    Each step carries the adverse min/max application of the UDL over the
+    deck MINUS that position's clear-distance window (attach_step_udl).
+    Enveloping the factored sum over all steps therefore gives the exact
+    coupled traffic term per EN 1991-2 - the vehicle replaces the UDL
+    locally - instead of the former independent-superposition bound
+    (vehicle envelope + full adverse UDL), which added the UDL share of
+    the window region that a physical vehicle displaces. With the static
+    or footprint application the per-step UDL fields equal the full
+    adverse envelope, so the coupling reduces to the former bound.
+
+    The factors enter per step, so the governing position follows the
+    selected result mode's vehicle/UDL factor ratio (incl. per-member phi).
+    Returns {eid: {10 envelope keys}}; empty when there are no steps.
+    """
+    out = {}
+    if not steps:
+        return out
+    eids = set()
+    for s in steps:
+        eids.update(s['res'].keys())
+    for eid in eids:
+        rows = [s['res'][eid] for s in steps if eid in s['res']]
+        if not rows:
+            continue
+        f_v = f_veh_map.get(eid, f_veh_default)
+        entry = {}
+        for base in ('M', 'V', 'N', 'def_x', 'def_y'):
+            veh_stack = np.stack([r[base] for r in rows])
+            zero = np.zeros_like(rows[0][base])
+            u_max = np.stack([r.get(f'{base}_udl_max', zero) for r in rows])
+            u_min = np.stack([r.get(f'{base}_udl_min', zero) for r in rows])
+            entry[f'{base}_max'] = (veh_stack * f_v + u_max * f_udl).max(axis=0)
+            entry[f'{base}_min'] = (veh_stack * f_v + u_min * f_udl).min(axis=0)
+        out[eid] = entry
+    return out
+
+
 def combine_results(raw_res, params, result_mode="Design (ULS)"):
     KFI = params.get('KFI', 1.0)
     gamma_g = params.get('gamma_g', 1.0)
@@ -1761,7 +1801,13 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
     raw_env_A = raw_res['Vehicle Envelope A']
     raw_env_B = raw_res['Vehicle Envelope B']
     out_veh_env = {}
-    
+    env_keys_10 = ('M_max', 'M_min', 'V_max', 'V_min', 'N_max', 'N_min',
+                   'def_x_max', 'def_x_min', 'def_y_max', 'def_y_min')
+    # Per-vehicle factored envelopes, kept separate for the coupled traffic
+    # term (cross terms coupledA + envB / envA + coupledB).
+    out_envA_fac = {}
+    out_envB_fac = {}
+
     if raw_env_A:
         for eid in raw_env_A:
             dA = raw_env_A[eid]
@@ -1780,32 +1826,45 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
             fB_e = f_vehB_base * phi_e
             f_vehA_map[eid] = fA_e
             f_vehB_map[eid] = fB_e
+            envA_f = {k: dA[k] * fA_e for k in env_keys_10}
+            envB_f = {k: dB[k] * fB_e for k in env_keys_10}
+            out_envA_fac[eid] = envA_f
+            out_envB_fac[eid] = envB_f
             out_veh_env[eid] = {
                 **base,
-                'M_max': dA['M_max']*fA_e + dB['M_max']*fB_e,
-                'M_min': dA['M_min']*fA_e + dB['M_min']*fB_e,
-                'V_max': dA['V_max']*fA_e + dB['V_max']*fB_e,
-                'V_min': dA['V_min']*fA_e + dB['V_min']*fB_e,
-                'N_max': dA['N_max']*fA_e + dB['N_max']*fB_e,
-                'N_min': dA['N_min']*fA_e + dB['N_min']*fB_e,
-                'def_x_max': dA['def_x_max']*fA_e + dB['def_x_max']*fB_e,
-                'def_x_min': dA['def_x_min']*fA_e + dB['def_x_min']*fB_e,
-                'def_y_max': dA['def_y_max']*fA_e + dB['def_y_max']*fB_e,
-                'def_y_min': dA['def_y_min']*fA_e + dB['def_y_min']*fB_e
+                **{k: envA_f[k] + envB_f[k] for k in env_keys_10},
             }
 
-    # Traffic UDL: factored adverse envelope. Per Vejledning Fig. B3.1 the
-    # fladelast acts in the same combination as the vehicles (additive with
-    # the vehicle term), independent of the surcharge interaction setting.
+    # Traffic UDL: factored full adverse envelope. Per Vejledning Fig. B3.1
+    # the fladelast acts in the same combination as the vehicles; in the
+    # Total Envelope it enters through the exact coupling below (and as the
+    # vehicle-absent alternative), not as a blanket additive term.
     out_udl = {}
     raw_udl = raw_res.get('Traffic UDL') or {}
-    env_keys_10 = ('M_max', 'M_min', 'V_max', 'V_min', 'N_max', 'N_min',
-                   'def_x_max', 'def_x_min', 'def_y_max', 'def_y_min')
     for eid, dat in raw_udl.items():
         out_udl[eid] = {
             **dat['base'],
             **{k: dat[k] * f_udl for k in env_keys_10},
         }
+
+    # Exact coupled traffic term: each vehicle's steps combined with the
+    # adverse UDL outside that step's window (factored per result mode),
+    # enveloped per point. The vehicle-absent situation (full adverse UDL
+    # alone) is added as an explicit alternative in the total assembly -
+    # the step set never contains it (the window clips the deck even with
+    # the vehicle off-deck). With both vehicles defined, the UDL couples
+    # with each vehicle's own steps and the cross-vehicle combination
+    # remains an independent superposition (slightly conservative).
+    use_coupled = bool(raw_udl)
+    coupled_A = {}
+    coupled_B = {}
+    if use_coupled:
+        steps_A_all = ((raw_res.get('Vehicle Steps A') or [])
+                       + (raw_res.get('Vehicle Steps A_Rev') or []))
+        steps_B_all = ((raw_res.get('Vehicle Steps B') or [])
+                       + (raw_res.get('Vehicle Steps B_Rev') or []))
+        coupled_A = coupled_vehicle_udl_envelope(steps_A_all, f_vehA_map, f_vehA, f_udl)
+        coupled_B = coupled_vehicle_udl_envelope(steps_B_all, f_vehB_map, f_vehB, f_udl)
 
     out_total = {}
     all_ids = set(out_sw.keys()) | set(out_veh_env.keys()) | set(out_soil.keys()) | set(out_surch.keys()) | set(out_udl.keys())
@@ -1833,31 +1892,54 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
         def_y_perm_max = sw['def_y_max'] + sl['def_y_max']
         def_y_perm_min = sw['def_y_min'] + sl['def_y_min']
 
-        # The traffic term is vehicle + UDL (same load combination per
-        # Vejledning Fig. B3.1); the surcharge interaction setting governs
-        # only the surcharge.
+        # The traffic term is vehicle + accompanying UDL (same load
+        # combination per Vejledning Fig. B3.1). With the UDL active it is
+        # the EXACT coupled envelope: per point the worst of (each
+        # vehicle's coupled steps + the other vehicle's envelope) and the
+        # vehicle-absent full adverse UDL. Without UDL it reduces to the
+        # plain vehicle envelope. The surcharge interaction setting
+        # governs only the surcharge.
+        cA = coupled_A.get(eid)
+        cB = coupled_B.get(eid)
+        eAf = out_envA_fac.get(eid)
+        eBf = out_envB_fac.get(eid)
+        traf = {}
+        for k in env_keys_10:
+            if use_coupled and (cA is not None or cB is not None):
+                cands = [ud[k]]
+                if cA is not None:
+                    cands.append(cA[k] + (eBf[k] if eBf is not None else 0.0))
+                if cB is not None:
+                    cands.append((eAf[k] if eAf is not None else 0.0) + cB[k])
+                if k.endswith('_max'):
+                    traf[k] = np.maximum.reduce(cands)
+                else:
+                    traf[k] = np.minimum.reduce(cands)
+            else:
+                traf[k] = ve[k] + ud[k]
+
         if combine_surcharge_vehicle:
-            M_tot_max = M_perm_max + su['M_max'] + ve['M_max'] + ud['M_max']
-            M_tot_min = M_perm_min + su['M_min'] + ve['M_min'] + ud['M_min']
-            V_tot_max = V_perm_max + su['V_max'] + ve['V_max'] + ud['V_max']
-            V_tot_min = V_perm_min + su['V_min'] + ve['V_min'] + ud['V_min']
-            N_tot_max = N_perm_max + su['N_max'] + ve['N_max'] + ud['N_max']
-            N_tot_min = N_perm_min + su['N_min'] + ve['N_min'] + ud['N_min']
-            def_x_tot_max = def_x_perm_max + su['def_x_max'] + ve['def_x_max'] + ud['def_x_max']
-            def_x_tot_min = def_x_perm_min + su['def_x_min'] + ve['def_x_min'] + ud['def_x_min']
-            def_y_tot_max = def_y_perm_max + su['def_y_max'] + ve['def_y_max'] + ud['def_y_max']
-            def_y_tot_min = def_y_perm_min + su['def_y_min'] + ve['def_y_min'] + ud['def_y_min']
+            M_tot_max = M_perm_max + su['M_max'] + traf['M_max']
+            M_tot_min = M_perm_min + su['M_min'] + traf['M_min']
+            V_tot_max = V_perm_max + su['V_max'] + traf['V_max']
+            V_tot_min = V_perm_min + su['V_min'] + traf['V_min']
+            N_tot_max = N_perm_max + su['N_max'] + traf['N_max']
+            N_tot_min = N_perm_min + su['N_min'] + traf['N_min']
+            def_x_tot_max = def_x_perm_max + su['def_x_max'] + traf['def_x_max']
+            def_x_tot_min = def_x_perm_min + su['def_x_min'] + traf['def_x_min']
+            def_y_tot_max = def_y_perm_max + su['def_y_max'] + traf['def_y_max']
+            def_y_tot_min = def_y_perm_min + su['def_y_min'] + traf['def_y_min']
         else:
-            M_tot_max = np.maximum(M_perm_max + ve['M_max'] + ud['M_max'], M_perm_max + su['M_max'])
-            M_tot_min = np.minimum(M_perm_min + ve['M_min'] + ud['M_min'], M_perm_min + su['M_min'])
-            V_tot_max = np.maximum(V_perm_max + ve['V_max'] + ud['V_max'], V_perm_max + su['V_max'])
-            V_tot_min = np.minimum(V_perm_min + ve['V_min'] + ud['V_min'], V_perm_min + su['V_min'])
-            N_tot_max = np.maximum(N_perm_max + ve['N_max'] + ud['N_max'], N_perm_max + su['N_max'])
-            N_tot_min = np.minimum(N_perm_min + ve['N_min'] + ud['N_min'], N_perm_min + su['N_min'])
-            def_x_tot_max = np.maximum(def_x_perm_max + ve['def_x_max'] + ud['def_x_max'], def_x_perm_max + su['def_x_max'])
-            def_x_tot_min = np.minimum(def_x_perm_min + ve['def_x_min'] + ud['def_x_min'], def_x_perm_min + su['def_x_min'])
-            def_y_tot_max = np.maximum(def_y_perm_max + ve['def_y_max'] + ud['def_y_max'], def_y_perm_max + su['def_y_max'])
-            def_y_tot_min = np.minimum(def_y_perm_min + ve['def_y_min'] + ud['def_y_min'], def_y_perm_min + su['def_y_min'])
+            M_tot_max = np.maximum(M_perm_max + traf['M_max'], M_perm_max + su['M_max'])
+            M_tot_min = np.minimum(M_perm_min + traf['M_min'], M_perm_min + su['M_min'])
+            V_tot_max = np.maximum(V_perm_max + traf['V_max'], V_perm_max + su['V_max'])
+            V_tot_min = np.minimum(V_perm_min + traf['V_min'], V_perm_min + su['V_min'])
+            N_tot_max = np.maximum(N_perm_max + traf['N_max'], N_perm_max + su['N_max'])
+            N_tot_min = np.minimum(N_perm_min + traf['N_min'], N_perm_min + su['N_min'])
+            def_x_tot_max = np.maximum(def_x_perm_max + traf['def_x_max'], def_x_perm_max + su['def_x_max'])
+            def_x_tot_min = np.minimum(def_x_perm_min + traf['def_x_min'], def_x_perm_min + su['def_x_min'])
+            def_y_tot_max = np.maximum(def_y_perm_max + traf['def_y_max'], def_y_perm_max + su['def_y_max'])
+            def_y_tot_min = np.minimum(def_y_perm_min + traf['def_y_min'], def_y_perm_min + su['def_y_min'])
 
         out_total[eid] = {
             **sw, 

@@ -401,7 +401,8 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                     "accompanying Traffic UDL alone, or both combined. With the UDL "
                     "included, the charts show a band between the adverse-minimum and "
                     "adverse-maximum UDL application for this step's window; values use "
-                    "the factors of the selected Result Type."
+                    "the factors of the selected Result Type. The combined view is the "
+                    "same per-step coupling the Total Envelope is built from."
                 )
                 effects_mode = st.radio(
                     "Step effects:",

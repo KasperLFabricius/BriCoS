@@ -145,19 +145,38 @@ def test_udl_factoring_per_result_mode_and_no_phi():
     np.testing.assert_allclose(nodyn["Traffic UDL"]["S1"]["M_max"], base)
 
 
-def test_udl_adds_to_vehicle_term_in_total_envelope():
+def test_total_envelope_couples_udl_with_vehicle_steps():
+    # v0.59: the traffic term is the EXACT coupled envelope - per step,
+    # vehicle + adverse UDL outside that step's window - enveloped with
+    # the vehicle-absent full adverse UDL. The former independent
+    # superposition (vehicle envelope + full adverse UDL) counted the
+    # UDL share of the window region the vehicle displaces.
     raw = _run(_beam_params(
         udl_q=2.5,
         vehicle={"loads": [10.0], "spacing": [0.0]},
         vehicle_direction="Forward",
     ))
-    res = _combine(raw, "Design (ULS)")
+    res = _combine(raw, "Design (ULS)", KFI=1.1, gamma_veh=1.4, gamma_udl=0.56)
 
     eid = "S1"
+    f_v = res["f_vehA_map"].get(eid, res["f_vehA"])
+    f_u = res["f_udl"]
+    steps = raw["Vehicle Steps A"]
+    cands_max = [res["Traffic UDL"][eid]["M_max"]]  # vehicle-absent
+    for s in steps:
+        r = s["res"][eid]
+        cands_max.append(r["M"] * f_v + r["M_udl_max"] * f_u)
     expected_max = (res["Selfweight"][eid]["M_max"]
-                    + res["Vehicle Envelope"][eid]["M_max"]
-                    + res["Traffic UDL"][eid]["M_max"])
-    np.testing.assert_allclose(res["Total Envelope"][eid]["M_max"], expected_max, atol=1e-9)
+                    + np.maximum.reduce(cands_max))
+    np.testing.assert_allclose(
+        res["Total Envelope"][eid]["M_max"], expected_max, atol=1e-9)
+
+    # And strictly below the former superposition where the window bites.
+    old_bound = (res["Selfweight"][eid]["M_max"]
+                 + res["Vehicle Envelope"][eid]["M_max"]
+                 + res["Traffic UDL"][eid]["M_max"])
+    assert np.all(res["Total Envelope"][eid]["M_max"] <= old_bound + 1e-9)
+    assert np.max(old_bound - res["Total Envelope"][eid]["M_max"]) > 1e-6
 
 
 def test_cache_key_excludes_udl_factors_but_includes_geometry():
