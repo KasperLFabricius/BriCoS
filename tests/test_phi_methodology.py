@@ -265,7 +265,7 @@ def test_cache_key_excludes_sls_settings_but_includes_phi_inputs():
 def test_report_phi_display_text_shows_range_for_per_member_values():
     p = {"phi_mode": "Calculate"}
     raw = {"Phi Members": {"S1": 1.25, "S2": 1.10}, "phi_calc": 1.25}
-    assert BricosReportGenerator._phi_display_text(p, raw) == "Phi[1.10-1.25]"
+    assert BricosReportGenerator._phi_display_text(p, raw) == "Φ[1.10-1.25]"
 
     raw_uniform = {"Phi Members": {}, "phi_calc": 1.18}
     assert BricosReportGenerator._phi_display_text(p, raw_uniform) == "1.18"
@@ -275,4 +275,4 @@ def test_report_phi_display_text_shows_range_for_per_member_values():
 
     # Manual per-span values flow through Phi Members like calculated ones.
     raw_manual_span = {"Phi Members": {"S1": 1.30, "S2": 1.05}, "phi_calc": 1.30}
-    assert BricosReportGenerator._phi_display_text(p_manual, raw_manual_span) == "Phi[1.05-1.30]"
+    assert BricosReportGenerator._phi_display_text(p_manual, raw_manual_span) == "Φ[1.05-1.30]"
