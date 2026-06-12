@@ -1638,10 +1638,16 @@ class BricosReportGenerator:
         img_cursor = 0
         
         for section in all_task_groups:
-            self.elements.append(Paragraph(f"<b>{section['main_header']}</b>", self.styles['Heading4']))
-            
+            # The headers carry plain text (the merged direction label
+            # contains a bare '&'); escape it before embedding in markup.
+            self.elements.append(Paragraph(
+                f"<b>{self._xml_escape(section['main_header'])}</b>",
+                self.styles['Heading4']))
+
             for group in section['groups']:
-                self.elements.append(Paragraph(f"<b>{group['header']}</b>", self.styles['SwecoBody']))
+                self.elements.append(Paragraph(
+                    f"<b>{self._xml_escape(group['header'])}</b>",
+                    self.styles['SwecoBody']))
                 for plot_req in group['plots']:
                     if img_cursor < len(rendered_images):
                         img_data = rendered_images[img_cursor]
