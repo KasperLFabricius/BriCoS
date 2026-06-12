@@ -476,7 +476,7 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
         "Applied in the Design (ULS) result mode, multiplied by KFI. Defaults follow "
         "Vejledning til belastnings- og beregningsgrundlag for broer, Fig. B3.1."
     )
-    kfi_opts = [0.9, 1.0, 1.1]
+    kfi_opts = list(data_mod.KFI_PRESETS)
     curr_kfi = p.get('KFI', 1.0)
     idx_kfi = kfi_opts.index(curr_kfi) if curr_kfi in kfi_opts else 1
     help_KFI = (
@@ -487,7 +487,7 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     )
     p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", disabled=ui_locked, help=help_KFI)
     
-    gg_opts = [0.9, 1.0, 1.10, 1.25]
+    gg_opts = list(data_mod.GAMMA_G_PRESETS)
     c_gg, c_gj = st.columns(2)
     gg_val = p.get('gamma_g', 1.0)
     idx_gg = gg_opts.index(gg_val) if gg_val in gg_opts else len(gg_opts)
@@ -524,7 +524,7 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     else:
         p['gamma_j'] = float(gj_sel)
 
-    gam_opts = [0.56, 1.0, 1.05, 1.20, 1.25, 1.40]
+    gam_opts = list(data_mod.GAMMA_VEH_PRESETS)
     c_ga, c_gb = st.columns(2)
     gam_valA = p.get('gamma_veh', 1.0)
     idx_gamA = gam_opts.index(gam_valA) if gam_valA in gam_opts else len(gam_opts)
@@ -542,7 +542,7 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     if gam_selB == "Custom": p['gamma_vehB'] = c_gb.number_input(r"Custom $\gamma_{B}$", value=float(gam_valB), key=f"{curr}_gamB_cust", disabled=ui_locked)
     else: p['gamma_vehB'] = float(gam_selB)
 
-    gudl_opts = [0.40, 0.56, 1.0, 1.40]
+    gudl_opts = list(data_mod.GAMMA_UDL_PRESETS)
     c_gu, _c_spare = st.columns(2)
     gudl_val = p.get('gamma_udl', 0.56)
     idx_gudl = gudl_opts.index(gudl_val) if gudl_val in gudl_opts else len(gudl_opts)
@@ -577,17 +577,17 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
             p[param_key] = float(sel)
 
     c_s1, c_s2 = st.columns(2)
-    _sls_factor_input(c_s1, "Self-weight (SLS)", 'sls_g', [1.0, 0.9], 1.0,
+    _sls_factor_input(c_s1, "Self-weight (SLS)", 'sls_g', list(data_mod.SLS_G_PRESETS), 1.0,
                       "SLS factor on the Selfweight load case. Fig. B3.2: 1.0.", "slsg")
-    _sls_factor_input(c_s2, "Soil (SLS)", 'sls_j', [1.0, 0.9], 1.0,
+    _sls_factor_input(c_s2, "Soil (SLS)", 'sls_j', list(data_mod.SLS_J_PRESETS), 1.0,
                       "SLS factor on the Soil load case. Fig. B3.2: 1.0.", "slsj")
     c_s3, c_s4 = st.columns(2)
-    _sls_factor_input(c_s3, "Vehicle A (SLS)", 'sls_veh', [1.0, 0.75], 1.0,
+    _sls_factor_input(c_s3, "Vehicle A (SLS)", 'sls_veh', list(data_mod.SLS_VEH_PRESETS), 1.0,
                       "SLS factor on Vehicle A (with the SLS Phi treatment) and the Surcharge. Fig. B3.2: 1.00.", "slsA")
-    _sls_factor_input(c_s4, "Vehicle B (SLS)", 'sls_vehB', [0.75, 1.0], 0.75,
+    _sls_factor_input(c_s4, "Vehicle B (SLS)", 'sls_vehB', list(data_mod.SLS_VEHB_PRESETS), 0.75,
                       "SLS factor on Vehicle B (with the SLS Phi treatment). Fig. B3.2: 0.75.", "slsB")
     c_s5, _c_s6 = st.columns(2)
-    _sls_factor_input(c_s5, "Traffic UDL (SLS)", 'sls_udl', [0.40, 1.0], 0.40,
+    _sls_factor_input(c_s5, "Traffic UDL (SLS)", 'sls_udl', list(data_mod.SLS_UDL_PRESETS), 0.40,
                       "SLS factor on the Traffic UDL (Phi never applies to it). Fig. B3.2: 0.40.", "slsudl")
 
     st.markdown("---")
@@ -944,11 +944,11 @@ with st.sidebar.expander("Boundary Conditions", expanded=False):
                     else: new_list.append({'type': 'Roller (X-Free)', 'k': [0.0, 1e14, 0.0]})
         p['supports'] = new_list
     
-    presets = {
-        "Fixed": [1e14, 1e14, 1e14], "Pinned": [1e14, 1e14, 0.0],
-        "Roller (X-Free)": [0.0, 1e14, 0.0], "Roller (Y-Free)": [1e14, 0.0, 0.0],
-        "Custom Spring": None
-    }
+    # Single source in the data module (force_ui_update restores the type
+    # selectors from the same names); copy the vectors - the presets are
+    # module-level constants and the support dicts are mutated downstream.
+    presets = {name: (list(k) if k is not None else None)
+               for name, k in data_mod.SUPPORT_TYPE_PRESETS.items()}
     
     for i in range(num_supports):
         supp_name = f"Wall {i+1} Base" if p['mode'] == 'Frame' else f"Support {i+1}"
