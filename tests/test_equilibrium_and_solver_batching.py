@@ -119,6 +119,11 @@ def test_equilibrium_symmetric_soil_cancels_but_reports_has_loads():
     assert abs(eq_soil["applied_x"]) < 1e-9
     assert abs(eq_soil["residual_x"]) < 1e-6
     assert abs(eq_soil["residual_y"]) < 1e-6
+    # v0.60: the opposing parts are reported separately so the report can
+    # show the applied loading despite the zero net sum: each wall carries
+    # (20+0)/2 * 6 = 60 kN, in opposite directions.
+    assert eq_soil["applied_x_pos"] == pytest.approx(60.0, rel=1e-9)
+    assert eq_soil["applied_x_neg"] == pytest.approx(-60.0, rel=1e-9)
 
     assert raw["Equilibrium"]["Surcharge"]["has_loads"] is False
     assert raw["Equilibrium"]["Selfweight"]["has_loads"] is True

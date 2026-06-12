@@ -14,7 +14,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
 # Graphics Imports for Vehicle Diagram
@@ -242,7 +241,7 @@ class BricosReportGenerator:
         has_surcharge = BricosReportGenerator._has_surcharge_loads(params)
 
         sls_mode = params.get('phi_sls_mode', 'Same')
-        phi_sym = "Phi_SLS" if sls_mode in ('Reduced', 'Manual') else "Phi"
+        phi_sym = "Φ_SLS" if sls_mode in ('Reduced', 'Manual') else "Φ"
 
         sls_g = params.get('sls_g', 1.0)
         sls_j = params.get('sls_j', 1.0)
@@ -270,7 +269,7 @@ class BricosReportGenerator:
             variable = ""
 
         if data_mod.udl_line_load(params) > 0.0:
-            udl_term = f"{params.get('sls_udl', 0.40)} · Traffic UDL (no Phi)"
+            udl_term = f"{params.get('sls_udl', 0.40)} · Traffic UDL (no Φ)"
             variable = f"{variable} + {udl_term}" if variable else udl_term
 
         perm = f"{sls_g} · SW"
@@ -279,10 +278,10 @@ class BricosReportGenerator:
             return perm
         eq = f"{perm} + {variable}"
         if has_vehicle and sls_mode == 'Reduced':
-            eq += (" , where Phi_SLS = 1 + (Phi_ULS - 1)/2 per Vejledning til "
+            eq += (" , where Φ_SLS = 1 + (Φ_ULS - 1)/2 per Vejledning til "
                    "belastnings- og beregningsgrundlag for broer, 5.4.2")
         elif has_vehicle and sls_mode == 'Manual':
-            eq += f" , where Phi_SLS = {params.get('phi_sls', 1.0):.3f} (user-defined)"
+            eq += f" , where Φ_SLS = {params.get('phi_sls', 1.0):.3f} (user-defined)"
         return eq
 
     @staticmethod
@@ -295,7 +294,7 @@ class BricosReportGenerator:
         members = (raw.get('Phi Members') or {}) if raw else {}
         vals = sorted(set(round(v, 4) for v in members.values()))
         if len(vals) > 1:
-            return f"Phi[{vals[0]:.2f}-{vals[-1]:.2f}]"
+            return f"Φ[{vals[0]:.2f}-{vals[-1]:.2f}]"
         if vals:
             return f"{vals[0]:.2f}"
         if p.get('phi_mode') == 'Calculate' and raw:
@@ -321,6 +320,12 @@ class BricosReportGenerator:
         return [(base_key, "Forward")]
 
     def _iter_vehicle_step_sources(self):
+        """Yields one entry per (system, vehicle) with the step lists of all
+        analyzed travel directions merged: (params, raw, sys_label, nodes,
+        veh_label, dir_steps) where dir_steps = [(direction_label, steps)].
+        The directions are scanned together so each reported extreme states
+        its governing direction instead of splitting the reporting by
+        direction."""
         combos = [
             (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps A', "Vehicle A", 'vehicle'),
             (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps B', "Vehicle B", 'vehicleB')
@@ -335,9 +340,12 @@ class BricosReportGenerator:
         for params, raw, sys_label, nodes, base_key, veh_label, veh_param_key in combos:
             if not self._vehicle_has_loads(params, veh_param_key):
                 continue
+            dir_steps = []
             for step_key, direction_label in self._vehicle_step_keys_for_direction(params, base_key):
                 if raw and raw.get(step_key):
-                    yield params, raw, sys_label, nodes, step_key, veh_label, direction_label
+                    dir_steps.append((direction_label, raw[step_key]))
+            if dir_steps:
+                yield params, raw, sys_label, nodes, veh_label, dir_steps
 
     def generate(self):
         # All plot exports share one persistent kaleido process; see
@@ -397,7 +405,7 @@ class BricosReportGenerator:
             self._update_progress(0.35)
 
         if analyze_sls:
-            self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results (SLS), including dynamic factor Phi where applicable", self.styles['SwecoSubHeader']))
+            self.elements.append(Paragraph(f"{self.chapter_count}. Characteristic Results (SLS), including dynamic factor Φ where applicable", self.styles['SwecoSubHeader']))
             self.elements.append(Paragraph(f"<b>Formula:</b> {self._build_characteristic_formula_text()}", self.styles['SwecoSmall']))
             self.elements.append(Paragraph('Unfactored results (all loads at factor 1.0, no dynamic factor) are available in the interactive UI as "Unfactored".', self.styles['SwecoSmall']))
             self.elements.append(Spacer(1, 0.2*cm))
@@ -463,7 +471,7 @@ class BricosReportGenerator:
                 "Adverse-only envelope of the uniformly distributed traffic load (traffic UDL), applied "
                 "only in the unfavourable parts of the influence surface per EN 1991-2:2003, 4.3.2(1)(b). "
                 "The load intensity includes the dynamic increment (DS/EN 1991-2 DK NA:2017, A.2.3.2), so the "
-                "dynamic factor Phi is not applied. Being point-wise patterned, this case has no single "
+                "dynamic factor Φ is not applied. Being point-wise patterned, this case has no single "
                 "applied load total and is therefore not part of the global equilibrium check.",
                 self.styles['SwecoSmall']))
             self._add_component_section("Traffic UDL", prog_range=(prog_start, prog_start + prog_step))
@@ -476,7 +484,7 @@ class BricosReportGenerator:
             self.elements.append(Paragraph(f"{self.chapter_count}. Critical Vehicle Steps (Unfactored)", self.styles['SwecoSubHeader']))
 
             self.elements.append(Paragraph(f"<b>Table {self.chapter_count}.1: Critical Vehicle Effects (Raw Step Values)</b>", self.styles['SwecoSmall']))
-            self.elements.append(Paragraph("Values represent raw forward and/or reverse moving-load step effects before application of Partial Factors (Gamma, KFI) and Dynamic Factor (Phi). Vehicle A and Vehicle B are combined by independent moving-load envelope superposition.", self.styles['SwecoCell']))
+            self.elements.append(Paragraph("Values represent raw moving-load step effects before application of partial factors (γ, KFI) and the dynamic factor (Φ). For each extreme the governing travel direction is reported. Vehicle A and Vehicle B are combined by independent moving-load envelope superposition.", self.styles['SwecoCell']))
             self._add_unfactored_vehicle_table()
             self.elements.append(Spacer(1, 0.4*cm))
 
@@ -512,7 +520,6 @@ class BricosReportGenerator:
         conventions_text = f"""
         <b>Model Assumptions & Conventions:</b><br/>
         • <b>Coordinate System:</b> 2D Plane Frame (X: Horizontal, Y: Vertical). Nodal loads and support reactions: counter-clockwise moments positive.<br/>
-        • <b>Result Sign Conventions (engineering convention):</b> Bending <i>M</i>: sagging positive, hogging negative; moment diagrams are drawn on the tension side. Normal force <i>N</i>: tension positive, compression negative. Shear <i>V</i>: classical beam convention (at the left support of a simply supported span under gravity, <i>V</i> = +<i>R</i>). Deflections: global axes - upwards/rightwards positive, downwards/leftwards negative.<br/>
         • <b>Effective Width:</b> Analysis properties are calculated based on the effective width <i>b<sub>eff</sub></i>. Area <i>A = b<sub>eff</sub> · h</i>. Inertia <i>I = b<sub>eff</sub> · h<sup>3</sup> / 12</i>.<br/>
         • <b>Shear Area:</b> The shear area <i>A<sub>s</sub></i> is assumed to be <i>5/6 · A</i> (Rectangular section).<br/>
         • <b>Material Stiffness:</b> Shear Modulus <i>G = E / (2·(1+&nu;))</i>. <br/>
@@ -524,7 +531,7 @@ class BricosReportGenerator:
         self.elements.append(Paragraph(conventions_text, self.styles['SwecoSmall']))
         self.elements.append(Spacer(1, 0.2*cm))
         self.elements.append(KeepTogether([
-            Paragraph("<b>Sign convention reference:</b>", self.styles['SwecoSmall']),
+            Paragraph("<b>Result sign conventions (engineering convention):</b>", self.styles['SwecoSmall']),
             self._draw_sign_convention_diagram(),
         ]))
 
@@ -556,55 +563,68 @@ class BricosReportGenerator:
         blue = colors.blue
         grey = colors.grey
 
-        # --- Panel 1: Bending M (sagging positive, drawn on tension side) ---
-        title(60, "Bending M")
-        d.add(String(60, 80, "-M (hogging) over supports", textAnchor='middle',
-                     fontSize=6, fillColor=grey))
-        d.add(Line(15, 70, 105, 70, strokeColor=colors.black, strokeWidth=1.5))
-        for sx in (20, 100):
-            d.add(Polygon(points=[sx, 70, sx - 4, 63, sx + 4, 63],
+        # --- Panel 1: Bending M (two-span continuous beam, moment drawn on
+        # the tension side: sagging below the spans, hogging above the
+        # middle support) ---
+        title(80, "Bending M")
+        beam_y = 62.0
+        d.add(Line(20, beam_y, 140, beam_y, strokeColor=colors.black, strokeWidth=1.5))
+        for sx in (20, 80, 140):
+            d.add(Polygon(points=[sx, beam_y, sx - 4, beam_y - 7, sx + 4, beam_y - 7],
                           fillColor=colors.white, strokeColor=colors.black, strokeWidth=1))
+        # Moment diagram of two equal spans under uniform load:
+        # M(xi) = 0.375*xi - 0.5*xi^2 (per unit qL^2), mirrored for span 2.
         pts = []
-        for i in range(21):
-            t = i / 20.0
-            pts.extend([20.0 + 80.0 * t, 70.0 - 88.0 * t * (1.0 - t)])
+        for i in range(41):
+            xi = i / 40.0 * 2.0
+            xi_s = xi if xi <= 1.0 else 2.0 - xi
+            m = 0.375 * xi_s - 0.5 * xi_s * xi_s
+            pts.extend([20.0 + 60.0 * xi, beam_y - 150.0 * m])
         d.add(PolyLine(points=pts, strokeColor=red, strokeWidth=1.2))
-        d.add(String(60, 36, "+M (sagging)", textAnchor='middle', fontSize=7, fillColor=red))
+        d.add(String(46, 42, "+M (sagging)", textAnchor='middle', fontSize=7, fillColor=red))
+        d.add(String(80, 86, "-M (hogging)", textAnchor='middle', fontSize=7, fillColor=red))
 
-        # --- Panel 2: Shear V (classical beam convention) ---
-        title(180, "Shear V")
-        d.add(PolyLine(points=[165, 50, 195, 50, 195, 80, 165, 80, 165, 50],
+        # --- Panel 2: Shear V (classical beam convention, both signs) ---
+        title(215, "Shear V")
+        d.add(PolyLine(points=[175, 52, 200, 52, 200, 78, 175, 78, 175, 52],
                        strokeColor=colors.black, strokeWidth=1.2))
-        arrow(157, 54, 157, 76, red)
-        arrow(203, 76, 203, 54, red)
-        d.add(String(180, 36, "+V", textAnchor='middle', fontSize=7, fillColor=red))
+        arrow(168, 56, 168, 74, red)
+        arrow(207, 74, 207, 56, red)
+        d.add(String(187.5, 40, "+V", textAnchor='middle', fontSize=7, fillColor=red))
+        d.add(PolyLine(points=[230, 52, 255, 52, 255, 78, 230, 78, 230, 52],
+                       strokeColor=colors.black, strokeWidth=1.2))
+        arrow(223, 74, 223, 56, blue)
+        arrow(262, 56, 262, 74, blue)
+        d.add(String(242.5, 40, "-V", textAnchor='middle', fontSize=7, fillColor=blue))
+        d.add(String(215, 26, "+V: left face up, right face down",
+                     textAnchor='middle', fontSize=6, fillColor=grey))
 
         # --- Panel 3: Normal force N (tension positive) ---
-        title(300, "Normal force N")
-        d.add(Polygon(points=[270, 68, 330, 68, 330, 76, 270, 76],
+        title(325, "Normal force N")
+        d.add(Polygon(points=[295, 68, 355, 68, 355, 76, 295, 76],
                       fillColor=colors.lightgrey, strokeColor=colors.black, strokeWidth=0.8))
-        arrow(270, 72, 252, 72, red)
-        arrow(330, 72, 348, 72, red)
-        d.add(String(300, 56, "+N (tension)", textAnchor='middle', fontSize=7, fillColor=red))
-        d.add(Polygon(points=[270, 34, 330, 34, 330, 42, 270, 42],
+        arrow(295, 72, 277, 72, red)
+        arrow(355, 72, 373, 72, red)
+        d.add(String(325, 56, "+N (tension)", textAnchor='middle', fontSize=7, fillColor=red))
+        d.add(Polygon(points=[295, 34, 355, 34, 355, 42, 295, 42],
                       fillColor=colors.lightgrey, strokeColor=colors.black, strokeWidth=0.8))
-        arrow(252, 38, 270, 38, blue)
-        arrow(348, 38, 330, 38, blue)
-        d.add(String(300, 22, "-N (compression)", textAnchor='middle', fontSize=7, fillColor=blue))
+        arrow(277, 38, 295, 38, blue)
+        arrow(373, 38, 355, 38, blue)
+        d.add(String(325, 22, "-N (compression)", textAnchor='middle', fontSize=7, fillColor=blue))
 
         # --- Panel 4: Deflection (global axes) ---
-        title(425, "Deflection")
-        arrow(425, 58, 425, 86, colors.Color(0.13, 0.4, 0.25))
-        d.add(String(431, 82, "+", textAnchor='start', fontSize=8,
+        title(435, "Deflection")
+        arrow(435, 58, 435, 86, colors.Color(0.13, 0.4, 0.25))
+        d.add(String(441, 82, "+", textAnchor='start', fontSize=8,
                      fillColor=colors.Color(0.13, 0.4, 0.25)))
-        arrow(425, 58, 455, 58, colors.Color(0.13, 0.4, 0.25))
-        d.add(String(452, 64, "+", textAnchor='start', fontSize=8,
+        arrow(435, 58, 465, 58, colors.Color(0.13, 0.4, 0.25))
+        d.add(String(462, 64, "+", textAnchor='start', fontSize=8,
                      fillColor=colors.Color(0.13, 0.4, 0.25)))
-        arrow(425, 58, 425, 30, grey)
-        d.add(String(431, 30, "-", textAnchor='start', fontSize=8, fillColor=grey))
-        arrow(425, 58, 395, 58, grey)
-        d.add(String(398, 64, "-", textAnchor='end', fontSize=8, fillColor=grey))
-        d.add(String(425, 14, "upwards / rightwards positive", textAnchor='middle',
+        arrow(435, 58, 435, 30, grey)
+        d.add(String(441, 30, "-", textAnchor='start', fontSize=8, fillColor=grey))
+        arrow(435, 58, 405, 58, grey)
+        d.add(String(408, 64, "-", textAnchor='end', fontSize=8, fillColor=grey))
+        d.add(String(435, 14, "upwards / rightwards positive", textAnchor='middle',
                      fontSize=6.5, fillColor=grey))
 
         return d
@@ -631,13 +651,12 @@ class BricosReportGenerator:
             "(fixed-end corrections and load discontinuities). For prismatic members they are "
             "independent of the mesh size. For non-prismatic members the section variation is "
             "represented per mesh sub-element with cubic displacement interpolation, so internal "
-            "forces converge with mesh refinement rather than being mesh-independent; the default "
-            "0.5 m mesh keeps this discretization effect small. "
+            "forces converge with mesh refinement rather than being mesh-independent. "
             "Deflections are interpolated between nodes from the nodal displacements using Hermite "
             "shape functions; the local deflection of loads acting between nodes is not added. The "
             "resulting underestimate is bounded by approximately <i>P&middot;L<sub>mesh</sub></i><sup>3</sup>/(192<i>EI</i>) "
-            "per point load, vanishes with mesh refinement, and is negligible at the default mesh "
-            "size of 0.5 m.")
+            "per point load and vanishes with mesh refinement. The mesh size applied in this "
+            "analysis is stated under Global Analysis Settings.")
 
         # Condensed 1.3
         add_sub("1.2 Boundary Conditions", 
@@ -700,10 +719,10 @@ class BricosReportGenerator:
             if has_A: var += f" + {kfi}·{g_veh}·{phi_txt}·VehA"
             if has_B: var += f" + {kfi}·{g_vehB}·{phi_txt}·VehB"
             if data_mod.udl_line_load(p) > 0.0:
-                var += f" + {kfi}·{p.get('gamma_udl', 0.56)}·UDL (no Phi)"
+                var += f" + {kfi}·{p.get('gamma_udl', 0.56)}·UDL (no Φ)"
             if p.get('surcharge'): var += f" + {kfi}·{g_veh}·Surch"
             if (has_A or has_B) and "[" in phi_txt:
-                var += " (Phi per member, see Dynamic Factor table)"
+                var += " (Φ per member, see Dynamic Factor table)"
             return perm + var
             
         eqA = get_eq(self.params_A, self.raw_A)
@@ -811,20 +830,20 @@ class BricosReportGenerator:
         d.add(Line(margin_x - 10, y_axle_line, width - margin_x + 10, y_axle_line, strokeColor=colors.black, strokeWidth=1))
 
         if udl_gap is not None:
-            # Schematic of the accompanying UDL fore and aft of the vehicle
-            # with the clear-distance dimension (not to scale).
+            # Schematic of the accompanying UDL fore and aft of the vehicle.
+            # The clear distance is dimensioned as part of the axle-spacing
+            # dimension chain further below; bands are not to scale.
             band_col = colors.Color(0.18, 0.55, 0.34, alpha=0.5)
+            band_txt = colors.Color(0.13, 0.4, 0.25)
             band_h = 7
             for x0, x1 in ((2, margin_x - 28), (width - margin_x + 28, width - 2)):
                 if x1 > x0:
                     d.add(Polygon(points=[x0, y_axle_line, x1, y_axle_line,
                                           x1, y_axle_line + band_h, x0, y_axle_line + band_h],
                                   fillColor=band_col, strokeWidth=0))
-            d.add(String(margin_x - 19, y_axle_line + 10, f"{udl_gap:g} m",
-                         textAnchor='middle', fontSize=7, fillColor=colors.Color(0.13, 0.4, 0.25)))
-            d.add(String(width - margin_x + 19, y_axle_line + 10, f"{udl_gap:g} m",
-                         textAnchor='middle', fontSize=7, fillColor=colors.Color(0.13, 0.4, 0.25)))
-            d.add(String(width / 2, 2, "UDL accompanies the vehicle with the shown clear distance (not to scale)",
+                    d.add(String((x0 + x1) / 2, y_axle_line + band_h + 3, "UDL",
+                                 textAnchor='middle', fontSize=6, fillColor=band_txt))
+            d.add(String(width / 2, 2, "Accompanying Traffic UDL fore and aft of the vehicle (not to scale)",
                          textAnchor='middle', fontSize=6, fillColor=colors.gray))
         
         for i, load_val in enumerate(loads):
@@ -849,6 +868,18 @@ class BricosReportGenerator:
             mid_x = (x_prev + x_curr) / 2
             d.add(String(mid_x, dim_y - 10, f"{dist}m", textAnchor='middle', fontSize=7, fillColor=colors.blue))
 
+        if udl_gap is not None:
+            # The clear distance to the accompanying UDL continues the same
+            # dimension chain, from the outer axles to the band inner edges.
+            x_first = offset_x if total_len > 0.1 else width / 2
+            x_last = x_first + (total_len if total_len > 0.1 else 0) * scale_x
+            for xa, xb in ((margin_x - 28, x_first), (x_last, width - margin_x + 28)):
+                d.add(Line(xa, dim_y, xb, dim_y, strokeColor=colors.blue, strokeWidth=0.5))
+                d.add(Line(xa, dim_y-2, xa, dim_y+2, strokeColor=colors.blue, strokeWidth=0.5))
+                d.add(Line(xb, dim_y-2, xb, dim_y+2, strokeColor=colors.blue, strokeWidth=0.5))
+                d.add(String((xa + xb) / 2, dim_y - 10, f"{udl_gap:g}m",
+                             textAnchor='middle', fontSize=7, fillColor=colors.blue))
+
         return d
 
     def _get_geometry_description(self, p, prefix, idx, simple_list_key):
@@ -871,8 +902,8 @@ class BricosReportGenerator:
             v3 = fmt.format(safe_vals[2])
             
             if shape == 0: desc = f"{lbl} = {v1}"
-            elif shape == 1: desc = f"{lbl}: {v1} -> {v3} (Taper)"
-            elif shape == 2: desc = f"{lbl}: {v1} -> {v2} -> {v3} (3-Pt)"
+            elif shape == 1: desc = f"{lbl}: {v1} → {v3} (Taper)"
+            elif shape == 2: desc = f"{lbl}: {v1} → {v2} → {v3} (3-Pt)"
                 
             if prefix == 'span' and g.get('align_type') == 1:
                 mode = g.get('incline_mode', 0)
@@ -944,13 +975,13 @@ class BricosReportGenerator:
                   "SLS only" if analyze_sls else
                   "none (unfactored combination only)")
         self.elements.append(Paragraph(
-            f"<b>Limit states analyzed:</b> {ls_txt} | <b>Phi:</b> {phi_txt}",
+            f"<b>Limit states analyzed:</b> {ls_txt} | <b>Φ:</b> {phi_txt}",
             self.styles['SwecoBody']))
 
         # Combination factor table: one row per load component, the ULS
         # partial factor (multiplied by KFI) and the SLS combination factor.
         kfi = p.get('KFI', 1.0)
-        uls_col = f"ULS factor (x KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
+        uls_col = f"ULS factor (× KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
         sls_col = "SLS factor" if analyze_sls else "SLS factor (not analyzed)"
         fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
         fact_rows.append(["Selfweight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
@@ -960,9 +991,9 @@ class BricosReportGenerator:
             gj_txt = data_mod.soil_gamma_display(p.get('gamma_j', 1.0), kfi)
             fact_rows.append(["Soil", gj_txt, f"{p.get('sls_j', 1.0)}", "-"])
         if bool(p.get('vehicle', {}).get('loads')):
-            fact_rows.append(["Vehicle A", f"{p.get('gamma_veh', 1.0)}", f"{p.get('sls_veh', 1.0)}", "Phi applied"])
+            fact_rows.append(["Vehicle A", f"{p.get('gamma_veh', 1.0)}", f"{p.get('sls_veh', 1.0)}", "Φ applied"])
         if bool(p.get('vehicleB', {}).get('loads')):
-            fact_rows.append(["Vehicle B", f"{p.get('gamma_vehB', 1.0)}", f"{p.get('sls_vehB', 1.0)}", "Phi applied"])
+            fact_rows.append(["Vehicle B", f"{p.get('gamma_vehB', 1.0)}", f"{p.get('sls_vehB', 1.0)}", "Φ applied"])
         udl_line = data_mod.udl_line_load(p)
         if udl_line > 0.0:
             fact_rows.append(["Traffic UDL", f"{p.get('gamma_udl', 0.56)}", f"{p.get('sls_udl', 0.40)}",
@@ -975,12 +1006,16 @@ class BricosReportGenerator:
         if udl_line > 0.0:
             app_txt = self._udl_application_text(p, sys_has_vehicle)
             total_txt = self._udl_total_envelope_text(p, sys_has_vehicle)
-            self.elements.append(Paragraph(
-                f"<b>Traffic UDL:</b> q = {udl_line:.2f} kN/m "
-                "(line load on the analysis strip; loaded width considered in the input) | "
-                "adverse-only application (EN 1991-2, 4.3.2(1)(b)) | "
-                f"step results: {app_txt}. {total_txt}",
-                self.styles['SwecoBody']))
+            self.elements.append(Spacer(1, 0.1*cm))
+            self.elements.append(Paragraph("<b>Traffic UDL</b>", self.styles['SwecoBody']))
+            for line in (
+                f"<b>Intensity:</b> q = {udl_line:.2f} kN/m, as a line load on the "
+                "analysis strip (the loaded width is considered in the input). "
+                "Applied adverse-only per EN 1991-2, 4.3.2(1)(b).",
+                f"<b>Step results:</b> {app_txt}.",
+                f"<b>Total Envelope:</b> {total_txt}",
+            ):
+                self.elements.append(Paragraph(f"• {line}", self.styles['SwecoBody']))
         self.elements.append(Spacer(1, 0.2*cm))
         
         # Widened Material Column
@@ -999,10 +1034,10 @@ class BricosReportGenerator:
                 if p['e_mode'] == 'Eurocode':
                     fck = p['fck_span_list'][i]
                 else:
-                    fck = 0 
-                    
+                    fck = 0
+
                 if p['e_mode'] == 'Eurocode':
-                    mat_str = f"fck = {fck:.0f} MPa / E = {e_real:.0f} GPa"
+                    mat_str = f"f<sub>ck</sub> = {fck:.0f} MPa / E = {e_real:.0f} GPa"
                 else:
                     mat_str = f"Custom (E = {e_real:.0f} GPa)"
                 
@@ -1031,7 +1066,7 @@ class BricosReportGenerator:
                     
                     if p['e_mode'] == 'Eurocode':
                         fck = p['fck_wall_list'][i]
-                        mat_str = f"fck = {fck:.0f} MPa / E = {e_real:.0f} GPa"
+                        mat_str = f"f<sub>ck</sub> = {fck:.0f} MPa / E = {e_real:.0f} GPa"
                     else:
                         mat_str = f"Custom (E = {e_real:.0f} GPa)"
 
@@ -1075,7 +1110,7 @@ class BricosReportGenerator:
         soil_list = p.get('soil', [])
         if soil_list:
             self.elements.append(Spacer(1, 0.2*cm))
-            soil_table = [["Wall", "Face", "Height [m]", "q_top [kN/m]", "q_bot [kN/m]"]]
+            soil_table = [["Wall", "Face", "Height [m]", "q<sub>top</sub> [kN/m]", "q<sub>bot</sub> [kN/m]"]]
             for s in soil_list:
                 soil_table.append([
                     f"W{s['wall_idx']+1}", s['face'], f"{s['h']:.2f}", f"{s['q_top']:.1f}", f"{s['q_bot']:.1f}"
@@ -1145,10 +1180,11 @@ class BricosReportGenerator:
     def _equilibrium_rows(equilibrium):
         """Table rows for the global equilibrium check.
 
-        Cases without any load definition show "(no loads)". Cases whose
-        loads cancel in the global sums (e.g. mirrored earth pressure on
-        both walls) still get the residual check: the reactions must cancel
-        too, so PASS/FAIL remains meaningful at zero sums.
+        Only load cases with applied loads are listed. Where opposing
+        definitions cancel an axis to (near) zero in the net global sums
+        (e.g. mirrored earth pressure on both walls), the positive and
+        negative parts are shown so the applied loading stays visible;
+        the residual check remains meaningful at zero sums.
         """
         rows = [["Load case", "Sum applied Fx / Fy [kN]", "Sum reactions Rx / Ry [kN]", "Residual Fx / Fy [kN]", "Status"]]
         for case in ('Selfweight', 'Soil', 'Surcharge'):
@@ -1163,14 +1199,26 @@ class BricosReportGenerator:
                 # Legacy raw results without the flag: infer from magnitudes.
                 has_loads = max(abs(a_x), abs(a_y), abs(r_x), abs(r_y)) >= 1e-9
             if not has_loads:
-                rows.append([case, "0.00 / 0.00", "0.00 / 0.00", "-", "(no loads)"])
                 continue
             scale = max(abs(a_x), abs(a_y), abs(r_x), abs(r_y), 1.0)
             tol = max(1e-3, 1e-6 * scale)
             ok = abs(res_x) <= tol and abs(res_y) <= tol
+            applied_txt = f"{a_x:.2f} / {a_y:.2f}"
+            cancel_parts = []
+            for axis, net, pos_key, neg_key in (
+                    ("Fx", a_x, 'applied_x_pos', 'applied_x_neg'),
+                    ("Fy", a_y, 'applied_y_pos', 'applied_y_neg')):
+                pos, neg = eq.get(pos_key), eq.get(neg_key)
+                if pos is None or neg is None:
+                    continue
+                if abs(net) <= tol and (pos > tol or -neg > tol):
+                    cancel_parts.append(f"{axis}: {pos:+.2f} / {neg:+.2f}")
+            if cancel_parts:
+                applied_txt += ("<br/><font size=6>opposing parts cancel ("
+                                + "; ".join(cancel_parts) + ")</font>")
             rows.append([
                 case,
-                f"{a_x:.2f} / {a_y:.2f}",
+                applied_txt,
                 f"{r_x:.2f} / {r_y:.2f}",
                 f"{res_x:.2e} / {res_y:.2e}",
                 "PASS" if ok else "CHECK FAILED",
@@ -1180,13 +1228,17 @@ class BricosReportGenerator:
     def _add_equilibrium_section(self, equilibrium):
         """Applied loads vs support reactions per unfactored static case."""
         rows = self._equilibrium_rows(equilibrium)
+        if len(rows) <= 1:
+            # No static load case carries any loads - nothing to check.
+            return
         heading = Paragraph("Global Equilibrium Check:", self.styles['SwecoSmall'])
         explanation = Paragraph(
             "Sum of applied loads (computed from the load definitions by simple statics) compared "
             "with the sum of support reactions (boundary-spring forces) for each unfactored static "
             "load case, in global axes. A vanishing residual verifies load assembly, load splitting "
-            "across the mesh and the solution itself. Opposing load definitions (e.g. symmetric "
-            "earth pressure on both walls) may cancel to zero sums; the residual comparison "
+            "across the mesh and the solution itself. Only load cases with applied loads are listed. "
+            "Where opposing load definitions (e.g. symmetric earth pressure on both walls) cancel "
+            "to a zero net sum, the positive and negative parts are stated; the residual comparison "
             "remains valid.",
             self.styles['SwecoCell'])
         t = self._make_std_table(rows, [2.8*cm, 4.3*cm, 4.3*cm, 4.0*cm, 2.6*cm], font_size=8)
@@ -1252,7 +1304,7 @@ class BricosReportGenerator:
                 sls_note = f"{val:.3f} (no reduction)"
             return [label, f"{val:.3f}", sls_note]
 
-        phi_table = [["Member", "Phi (ULS)", "Phi (SLS)"]]
+        phi_table = [["Member", "Φ (ULS)", "Φ (SLS)"]]
         if members:
             for eid in sorted(members.keys(), key=lambda x: (x[0], int(x[1:]))):
                 phi_table.append(fmt_row(eid, members[eid]))
@@ -1393,33 +1445,52 @@ class BricosReportGenerator:
         self.elements.append(Spacer(1, 0.3*cm))
         self._add_reaction_table(res_A, self.params_A, res_B, self.params_B)
 
+    @staticmethod
+    def _system_has_component(params, load_key):
+        """Whether a static load component is defined for the given system."""
+        if load_key == "Selfweight":
+            return any(v > 0 for v in params.get('sw_list', []))
+        if load_key == "Soil":
+            return bool(params.get('soil'))
+        if load_key == "Surcharge":
+            return bool(params.get('surcharge'))
+        if load_key == "Traffic UDL":
+            return data_mod.udl_line_load(params) > 0.0
+        return True
+
     def _add_component_section(self, load_key, prog_range=(0.0, 0.0)):
         res_A = self._combined('A', "Unfactored")
         res_B = {}
         if self.valid_B:
              res_B = self._combined('B', "Unfactored")
-        
+
+        # The chapter exists because at least one system carries this load;
+        # a system without it gets a note instead of empty plot grids.
+        has_A = self._system_has_component(self.params_A, load_key)
+        has_B = self.valid_B and self._system_has_component(self.params_B, load_key)
+
         tasks = []
-        types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'), 
+        types = [('M', 'Bending Moment [kNm]'), ('V', 'Shear Force [kN]'),
                  ('N', 'Normal Force [kN]'), ('Def', 'Deformation [mm]')]
-        
-        for t_code, t_title in types:
-            tasks.append({
-                'nodes': self.nodes_A, 'sysA_data': res_A.get(load_key, {}), 'sysB_data': {},
-                'type_base': t_code, 'title': f"{t_title} - {self.params_A['name']}", 
-                'load_case_name': load_key,
-                'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                'geom_A': self.raw_A.get('Selfweight'), 'geom_B': None,
-                'params_A': self.params_A, 'params_B': self.params_B,
-                'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5,
-                'export_scale': 1.0
-            })
-        
-        if self.valid_B:
+
+        if has_A:
+            for t_code, t_title in types:
+                tasks.append({
+                    'nodes': self.nodes_A, 'sysA_data': res_A.get(load_key, {}), 'sysB_data': {},
+                    'type_base': t_code, 'title': f"{t_title} - {self.params_A['name']}",
+                    'load_case_name': load_key,
+                    'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
+                    'geom_A': self.raw_A.get('Selfweight'), 'geom_B': None,
+                    'params_A': self.params_A, 'params_B': self.params_B,
+                    'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5,
+                    'export_scale': 1.0
+                })
+
+        if has_B:
             for t_code, t_title in types:
                 tasks.append({
                     'nodes': self.nodes_B, 'sysA_data': {}, 'sysB_data': res_B.get(load_key, {}),
-                    'type_base': t_code, 'title': f"{t_title} - {self.params_B['name']}", 
+                    'type_base': t_code, 'title': f"{t_title} - {self.params_B['name']}",
                     'load_case_name': load_key,
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
                     'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
@@ -1430,18 +1501,32 @@ class BricosReportGenerator:
 
         images = self._submit_parallel_plots(tasks, prog_range)
 
-        self._append_image_grid(images[0:4], heading="System A")
+        def absent_note(sys_label, name):
+            return Paragraph(
+                f"{load_key} is not defined for {sys_label} ({name}); "
+                "this load case has no effect on that system.",
+                self.styles['SwecoBody'])
+
+        if has_A:
+            self._append_image_grid(images[0:4], heading="System A")
+        else:
+            self.elements.append(absent_note("System A", self.params_A.get('name', '')))
 
         if self.valid_B:
             self.elements.append(Spacer(1, 0.3*cm))
-            self._append_image_grid(images[4:8], heading="System B")
+            if has_B:
+                self._append_image_grid(images[4:8] if has_A else images[0:4], heading="System B")
+            else:
+                self.elements.append(absent_note("System B", self.params_B.get('name', '')))
 
         self.elements.append(Spacer(1, 0.5*cm))
-        self._add_force_summary_table(res_A.get(load_key, {}), res_B.get(load_key, {}))
+        self._add_force_summary_table(res_A.get(load_key, {}) if has_A else {},
+                                      res_B.get(load_key, {}) if has_B else {})
         self.elements.append(Spacer(1, 0.3*cm))
-        
-        wrap_A = {'Total Envelope': res_A.get(load_key, {})}
-        wrap_B = {'Total Envelope': res_B.get(load_key, {})} if self.valid_B else {}
+
+        wrap_A = {'Total Envelope': res_A.get(load_key, {}) if has_A else {}}
+        wrap_B = ({'Total Envelope': res_B.get(load_key, {}) if has_B else {}}
+                  if self.valid_B else {})
         self._add_reaction_table(wrap_A, self.params_A, wrap_B, self.params_B)
 
     def _append_image_grid(self, img_bytes_list, heading=None):
@@ -1472,51 +1557,69 @@ class BricosReportGenerator:
                 parts.insert(0, Paragraph(heading, self.styles['SwecoSmall']))
             self.elements.append(KeepTogether(parts))
 
-    def _add_unfactored_vehicle_table(self):
-        """Adds table showing raw vehicle effects (Unfactored) for validation."""
-        data = [["Elem", "Direction", "M_max", "M_min", "V_max", "V_min", "System"]]
+    @staticmethod
+    def _direction_short(direction_label):
+        return "Fwd" if direction_label == "Forward" else "Rev"
 
-        def process_steps(steps, sys_name, direction_label):
-            if not steps:
-                return
+    def _add_unfactored_vehicle_table(self):
+        """Adds table showing raw vehicle effects (Unfactored) for validation.
+
+        One row per element and vehicle; each extreme states its governing
+        travel direction when both directions were analyzed."""
+        data = [["Elem", "M_max [kNm]", "M_min [kNm]", "V_max [kN]", "V_min [kN]", "System"]]
+
+        def process_sources(dir_steps, sys_name):
+            multi_dir = len(dir_steps) > 1
             all_ids = set()
-            for step in steps:
-                all_ids.update(step.get('res', {}).keys())
+            for _, steps in dir_steps:
+                for step in steps:
+                    all_ids.update(step.get('res', {}).keys())
             all_ids = sorted(all_ids, key=lambda x: (x[0], int(x[1:])))
 
-            for eid in all_ids:
-                max_M, min_M = -1e15, 1e15
-                max_V, min_V = -1e15, 1e15
-                found = False
-                for step in steps:
-                    elem_res = step.get('res', {}).get(eid)
-                    if not elem_res:
-                        continue
-                    found = True
-                    max_M = max(max_M, float(np.max(elem_res['M'])))
-                    min_M = min(min_M, float(np.min(elem_res['M'])))
-                    max_V = max(max_V, float(np.max(elem_res['V'])))
-                    min_V = min(min_V, float(np.min(elem_res['V'])))
-                if found:
-                    data.append([eid, direction_label, f"{max_M:.1f}", f"{min_M:.1f}", f"{max_V:.1f}", f"{min_V:.1f}", sys_name])
+            def fmt(val, d_lbl):
+                txt = f"{val:.1f}"
+                if multi_dir and d_lbl:
+                    txt += f" ({self._direction_short(d_lbl)})"
+                return txt
 
-        for _, raw, sys_label, _, step_key, veh_label, direction_label in self._iter_vehicle_step_sources():
-            process_steps(raw.get(step_key, []), f"{sys_label} ({veh_label})", direction_label)
+            for eid in all_ids:
+                max_M = (-1e15, None); min_M = (1e15, None)
+                max_V = (-1e15, None); min_V = (1e15, None)
+                found = False
+                for d_lbl, steps in dir_steps:
+                    for step in steps:
+                        elem_res = step.get('res', {}).get(eid)
+                        if not elem_res:
+                            continue
+                        found = True
+                        mx_m = float(np.max(elem_res['M'])); mn_m = float(np.min(elem_res['M']))
+                        mx_v = float(np.max(elem_res['V'])); mn_v = float(np.min(elem_res['V']))
+                        if mx_m > max_M[0]: max_M = (mx_m, d_lbl)
+                        if mn_m < min_M[0]: min_M = (mn_m, d_lbl)
+                        if mx_v > max_V[0]: max_V = (mx_v, d_lbl)
+                        if mn_v < min_V[0]: min_V = (mn_v, d_lbl)
+                if found:
+                    data.append([eid, fmt(*max_M), fmt(*min_M),
+                                 fmt(*max_V), fmt(*min_V), sys_name])
+
+        for _, _, sys_label, _, veh_label, dir_steps in self._iter_vehicle_step_sources():
+            process_sources(dir_steps, f"{sys_label} ({veh_label})")
 
         if len(data) > 1:
-            t = self._make_std_table(data, [1.8*cm, 2.2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 3.0*cm])
+            t = self._make_std_table(data, [1.8*cm, 2.9*cm, 2.9*cm, 2.9*cm, 2.9*cm, 3.6*cm])
             self.elements.append(KeepTogether([t]))
         else:
             self.elements.append(Paragraph("No vehicle step results found for the active vehicle load models.", self.styles['SwecoSmall']))
 
     def _add_smart_vehicle_steps(self, prog_range=(0.0, 0.0)):
         all_task_groups = []
-        
-        for p, r, s_lbl, n, step_key, veh_lbl, direction_label in self._iter_vehicle_step_sources():
-            g = self._identify_critical_steps(p, r, s_lbl, n, step_key, veh_lbl, direction_label)
+
+        for p, r, s_lbl, n, veh_lbl, dir_steps in self._iter_vehicle_step_sources():
+            g = self._identify_critical_steps(p, s_lbl, n, dir_steps, veh_lbl)
             if g:
+                directions = " & ".join(d for d, _ in dir_steps)
                 all_task_groups.append({
-                    'main_header': f"{s_lbl} - {veh_lbl} ({direction_label})",
+                    'main_header': f"{s_lbl} - {veh_lbl} ({directions})",
                     'groups': g
                 })
 
@@ -1535,10 +1638,16 @@ class BricosReportGenerator:
         img_cursor = 0
         
         for section in all_task_groups:
-            self.elements.append(Paragraph(f"<b>{section['main_header']}</b>", self.styles['Heading4']))
-            
+            # The headers carry plain text (the merged direction label
+            # contains a bare '&'); escape it before embedding in markup.
+            self.elements.append(Paragraph(
+                f"<b>{self._xml_escape(section['main_header'])}</b>",
+                self.styles['Heading4']))
+
             for group in section['groups']:
-                self.elements.append(Paragraph(f"<b>{group['header']}</b>", self.styles['SwecoBody']))
+                self.elements.append(Paragraph(
+                    f"<b>{self._xml_escape(group['header'])}</b>",
+                    self.styles['SwecoBody']))
                 for plot_req in group['plots']:
                     if img_cursor < len(rendered_images):
                         img_data = rendered_images[img_cursor]
@@ -1553,64 +1662,75 @@ class BricosReportGenerator:
             
             self.elements.append(Spacer(1, 0.5*cm))
 
-    def _identify_critical_steps(self, params, raw_data, sys_label, sys_nodes, step_key, veh_label, direction_label="Forward"):
-        steps = raw_data.get(step_key, [])
-        if not steps: return []
+    def _identify_critical_steps(self, params, sys_label, sys_nodes, dir_steps, veh_label):
+        """Governing vehicle positions per span element.
+
+        All analyzed travel directions are scanned together; each of the
+        four extremes (Min/Max M, Min/Max V) is attributed to its governing
+        direction and step. Extremes of the same force type governed by the
+        same step share one plot with a combined label (e.g. "Min M & Max
+        M") - previously the duplicate was dropped and its label silently
+        lost."""
+        if not dir_steps: return []
 
         output_groups = []
         num_spans = params['num_spans']
-        
+        steps_by_dir = dict(dir_steps)
+        multi_dir = len(dir_steps) > 1
+
         for i in range(num_spans):
             eid = f"S{i+1}"
-            
-            max_M, idx_max_M = -1e15, -1
-            min_M, idx_min_M = 1e15, -1
-            max_V, idx_max_V = -1e15, -1
-            min_V, idx_min_V = 1e15, -1
-            
+
+            # label -> [value, direction_label, step_idx]
+            best = {"Min M": [1e15, None, -1], "Max M": [-1e15, None, -1],
+                    "Min V": [1e15, None, -1], "Max V": [-1e15, None, -1]}
             found_data = False
-            for idx, step in enumerate(steps):
-                res = step['res']
-                if eid in res:
+            for d_lbl, steps in dir_steps:
+                for idx, step in enumerate(steps):
+                    res = step['res']
+                    if eid not in res:
+                        continue
                     found_data = True
                     m_arr = res[eid]['M']; v_arr = res[eid]['V']
-                    mx_m = np.max(m_arr); mn_m = np.min(m_arr)
-                    mx_v = np.max(v_arr); mn_v = np.min(v_arr)
-                    
-                    if mx_m > max_M: max_M = mx_m; idx_max_M = idx
-                    if mn_m < min_M: min_M = mn_m; idx_min_M = idx
-                    if mx_v > max_V: max_V = mx_v; idx_max_V = idx
-                    if mn_v < min_V: min_V = mn_v; idx_min_V = idx
-            
+                    for label, val, better in (
+                            ("Min M", np.min(m_arr), lambda v, b: v < b),
+                            ("Max M", np.max(m_arr), lambda v, b: v > b),
+                            ("Min V", np.min(v_arr), lambda v, b: v < b),
+                            ("Max V", np.max(v_arr), lambda v, b: v > b)):
+                        if better(val, best[label][0]):
+                            best[label] = [val, d_lbl, idx]
+
             if not found_data: continue
-            
-            group = {'header': f"Element {eid} ({direction_label} critical steps)", 'plots': []}
-            
-            critical_cases = [
-                (idx_min_M, "Min M", 'M'),
-                (idx_max_M, "Max M", 'M'),
-                (idx_min_V, "Min V", 'V'),
-                (idx_max_V, "Max V", 'V')
-            ]
-            
-            processed = set() 
-            
-            for idx, label, type_code in critical_cases:
+
+            group = {'header': f"Element {eid} - governing vehicle positions", 'plots': []}
+
+            # One plot per governing (direction, step, force type); extremes
+            # sharing it get a combined label.
+            plot_labels = {}
+            plot_order = []
+            for label, type_code in (("Min M", 'M'), ("Max M", 'M'),
+                                     ("Min V", 'V'), ("Max V", 'V')):
+                _, d_lbl, idx = best[label]
                 if idx == -1: continue
-                if (idx, type_code) in processed: continue
-                processed.add((idx, type_code))
-                
-                step = steps[idx]
+                key = (d_lbl, idx, type_code)
+                if key not in plot_labels:
+                    plot_labels[key] = []
+                    plot_order.append(key)
+                plot_labels[key].append(label)
+
+            for d_lbl, idx, type_code in plot_order:
+                step = steps_by_dir[d_lbl][idx]
                 x_loc = step['x']
-                
-                # UPDATED: Construct unified plot title with System and Vehicle Info
+                label = " & ".join(plot_labels[(d_lbl, idx, type_code)])
+
                 s_short = "Sys A" if "A" in sys_label else "Sys B"
                 v_short = "Veh A" if "A" in veh_label else "Veh B"
-                title = (f"{s_short} - {v_short} - {direction_label} - Step {idx}: "
-                         f"{label} | lead axle at x = {x_loc:.2f} m")
-                
+                dir_txt = f"{d_lbl}, " if multi_dir else ""
+                title = (f"{s_short} - {v_short} - {label} | "
+                         f"{dir_txt}lead axle at x = {x_loc:.2f} m")
+
                 is_A = (sys_label == "System A")
-                
+
                 config = {
                     'nodes': sys_nodes,
                     'sysA_data': step['res'] if is_A else {},
@@ -1624,11 +1744,11 @@ class BricosReportGenerator:
                     'params_A': self.params_A, 'params_B': self.params_B,
                     'show_supports': True, 'font_scale': 1.5
                 }
-                
+
                 group['plots'].append({'title': title, 'config': config})
-            
+
             output_groups.append(group)
-            
+
         return output_groups
 
     def _calculate_reaction_envelope(self, res_dict):
@@ -1793,26 +1913,46 @@ class BricosReportGenerator:
         t = self._make_std_table(table_data, col_widths, font_size=7, header_rows=2)
         self.elements.append(KeepTogether([t]))
 
+    @staticmethod
+    def _xml_escape(text):
+        return (text.replace('&', '&amp;').replace('<', '&lt;')
+                    .replace('>', '&gt;'))
+
     def _make_std_table(self, data, col_widths, font_size=9, header_rows=1):
-        # ReportLab does not wrap plain-string cells: any text wider than its
-        # column runs over the table edge or into the neighbour cell. Wrap
-        # cells that would overflow into Paragraphs (which do wrap); short
-        # strings stay plain so the table's CENTER alignment applies.
-        body_style = ParagraphStyle(
-            f'_cell{font_size}', parent=self.styles['Normal'],
-            fontSize=font_size, leading=font_size + 2)
-        head_style = ParagraphStyle(
-            f'_cellh{font_size}', parent=body_style, fontName='Helvetica-Bold')
-        pad = 12.0  # default LEFTPADDING + RIGHTPADDING
+        # Every string cell is rendered as a Paragraph: ReportLab does not
+        # wrap plain-string cells (text wider than the column runs over the
+        # table edge), plain cells cannot show non-WinAnsi glyphs (Greek
+        # letters, arrows), and mixing wrapped and plain cells gave
+        # inconsistent alignment. One rule everywhere: the first column is
+        # left-aligned, every other column is centered, for header and body
+        # alike. Caller-provided flowables pass through unchanged.
+        style_cache = {}
+
+        def cell_style(is_head, is_first_col):
+            key = (is_head, is_first_col)
+            if key not in style_cache:
+                style_cache[key] = ParagraphStyle(
+                    f'_cell{font_size}_{is_head}_{is_first_col}',
+                    parent=self.styles['Normal'],
+                    fontSize=font_size, leading=font_size + 2,
+                    fontName='Helvetica-Bold' if is_head else 'Helvetica',
+                    alignment=TA_LEFT if is_first_col else TA_CENTER)
+            return style_cache[key]
+
+        def cell_paragraph(text, style):
+            # Cells may carry inline markup (<sub>, <b>); plain text with
+            # bare '&' or '<' fails the XML parse and is escaped instead.
+            try:
+                return Paragraph(text, style)
+            except Exception:
+                return Paragraph(self._xml_escape(text), style)
+
         rows = []
         for r, row in enumerate(data):
             cells = []
             for ci, cell in enumerate(row):
-                if isinstance(cell, str) and ci < len(col_widths) and col_widths[ci]:
-                    is_head = r < header_rows
-                    font = 'Helvetica-Bold' if is_head else 'Helvetica'
-                    if stringWidth(cell, font, font_size) > col_widths[ci] - pad:
-                        cell = Paragraph(cell, head_style if is_head else body_style)
+                if isinstance(cell, str):
+                    cell = cell_paragraph(cell, cell_style(r < header_rows, ci == 0))
                 cells.append(cell)
             rows.append(cells)
 
@@ -1825,6 +1965,7 @@ class BricosReportGenerator:
             ('BACKGROUND', (0,0), (-1, header_rows-1), colors.lightgrey),
             ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('ALIGN', (0,0), (0,-1), 'LEFT'),
             ('ALIGN', (1,0), (-1,-1), 'CENTER'),
         ]))
         return t

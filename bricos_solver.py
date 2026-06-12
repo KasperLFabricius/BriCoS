@@ -1198,7 +1198,12 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
             parent_orient[pid] = (elem_objects[k].cx, elem_objects[k].cy)
 
     def case_applied_totals(global_loads_map):
+        # Besides the net sums, accumulate the positive and negative
+        # contributions per axis separately so consumers can show that
+        # loads were applied even when opposing definitions (e.g. mirrored
+        # earth pressure on both walls) cancel in the net.
         ax = ay = 0.0
+        ax_pos = ax_neg = ay_pos = ay_neg = 0.0
         for pid, loads in global_loads_map.items():
             cx_p, cy_p = parent_orient.get(pid, (1.0, 0.0))
             for ld in loads:
@@ -1214,13 +1219,18 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     continue
                 if ld.get('is_gravity'):
                     # Positive gravity load values act vertically downward.
-                    ay -= Q
+                    dx, dy = 0.0, -Q
                 else:
                     # Positive transverse load values act in local -y
                     # (the same sense gravity takes on a horizontal member).
-                    ax += Q * cy_p
-                    ay += Q * (-cx_p)
-        return ax, ay
+                    dx, dy = Q * cy_p, Q * (-cx_p)
+                ax += dx
+                ay += dy
+                if dx >= 0.0: ax_pos += dx
+                else: ax_neg += dx
+                if dy >= 0.0: ay_pos += dy
+                else: ay_neg += dy
+        return ax, ay, ax_pos, ax_neg, ay_pos, ay_neg
 
     def case_spring_reactions(D_col):
         # Force exerted by the supports on the structure: -k * d.
@@ -1237,10 +1247,12 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         ('Soil', soil_global_loads, 1),
         ('Surcharge', surch_global_loads, 2),
     ):
-        a_x, a_y = case_applied_totals(loads_map_g)
+        a_x, a_y, a_x_pos, a_x_neg, a_y_pos, a_y_neg = case_applied_totals(loads_map_g)
         r_x, r_y = case_spring_reactions(D_static[:, col])
         equilibrium[case_name] = {
             'applied_x': a_x, 'applied_y': a_y,
+            'applied_x_pos': a_x_pos, 'applied_x_neg': a_x_neg,
+            'applied_y_pos': a_y_pos, 'applied_y_neg': a_y_neg,
             'reactions_x': r_x, 'reactions_y': r_y,
             'residual_x': a_x + r_x, 'residual_y': a_y + r_y,
             # Opposing definitions (e.g. mirrored earth pressure on both

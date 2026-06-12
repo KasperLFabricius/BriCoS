@@ -73,7 +73,7 @@ def test_characteristic_formula_reports_vehicle_only_without_surcharge():
         _params(vehicle={"loads": [10.0], "spacing": [0.0]}, sls_veh=1.0)
     )
 
-    assert formula == "1.0 · SW + 1.0 · Phi · VehA"
+    assert formula == "1.0 · SW + 1.0 · Φ · VehA"
     assert "Surcharge" not in formula
     assert "Other variable actions" not in formula
 
@@ -87,7 +87,7 @@ def test_characteristic_formula_uses_sls_factor_set():
         )
     )
 
-    assert formula == "0.9 · SW + 1.0 · Phi · VehA + 0.75 · Phi · VehB"
+    assert formula == "0.9 · SW + 1.0 · Φ · VehA + 0.75 · Φ · VehB"
 
 
 def test_characteristic_formula_exclusive_mode_reports_vehicle_surcharge_envelope():
@@ -100,7 +100,7 @@ def test_characteristic_formula_exclusive_mode_reports_vehicle_surcharge_envelop
         )
     )
 
-    assert formula == "1.0 · SW + Envelope(1.0 · Phi · VehA, 1.0 · Surcharge)"
+    assert formula == "1.0 · SW + Envelope(1.0 · Φ · VehA, 1.0 · Surcharge)"
     assert "Other variable actions" not in formula
 
 
@@ -114,12 +114,12 @@ def test_characteristic_formula_simultaneous_mode_reports_vehicle_plus_surcharge
         )
     )
 
-    assert formula == "1.0 · SW + 1.0 · Phi · VehA + 1.0 · Surcharge"
+    assert formula == "1.0 · SW + 1.0 · Φ · VehA + 1.0 · Surcharge"
     assert "Envelope" not in formula
     assert "Other variable actions" not in formula
 
 
-def _eq_case(ax=0.0, ay=0.0, rx=0.0, ry=0.0, has_loads=None):
+def _eq_case(ax=0.0, ay=0.0, rx=0.0, ry=0.0, has_loads=None, parts=None):
     case = {
         "applied_x": ax, "applied_y": ay,
         "reactions_x": rx, "reactions_y": ry,
@@ -127,12 +127,16 @@ def _eq_case(ax=0.0, ay=0.0, rx=0.0, ry=0.0, has_loads=None):
     }
     if has_loads is not None:
         case["has_loads"] = has_loads
+    if parts is not None:
+        # (x_pos, x_neg, y_pos, y_neg) per the v0.60 solver keys.
+        case["applied_x_pos"], case["applied_x_neg"] = parts[0], parts[1]
+        case["applied_y_pos"], case["applied_y_neg"] = parts[2], parts[3]
     return case
 
 
-def test_equilibrium_rows_distinguish_cancelling_loads_from_no_loads():
-    # Mirrored earth pressure on both walls cancels in the global sums; the
-    # row must still PASS instead of claiming "(no loads)".
+def test_equilibrium_rows_drop_cases_without_loads():
+    # Cases without any load definition are no longer listed at all;
+    # cancelling loads (zero sums, has_loads=True) still get a PASS row.
     rows = BricosReportGenerator._equilibrium_rows({
         "Selfweight": _eq_case(ay=-200.0, ry=200.0, has_loads=True),
         "Soil": _eq_case(has_loads=True),
@@ -142,7 +146,28 @@ def test_equilibrium_rows_distinguish_cancelling_loads_from_no_loads():
     by_case = {r[0]: r for r in rows[1:]}
     assert by_case["Selfweight"][-1] == "PASS"
     assert by_case["Soil"][-1] == "PASS"
-    assert by_case["Surcharge"][-1] == "(no loads)"
+    assert "Surcharge" not in by_case
+
+
+def test_equilibrium_rows_show_cancelling_parts_when_net_is_zero():
+    # Mirrored earth pressure on both walls cancels the net x-sum; the
+    # applied cell must surface the opposing parts so the soil application
+    # stays visible in the report.
+    rows = BricosReportGenerator._equilibrium_rows({
+        "Soil": _eq_case(has_loads=True, parts=(60.0, -60.0, 0.0, 0.0)),
+    })
+
+    applied = rows[1][1]
+    assert "0.00 / 0.00" in applied
+    assert "+60.00" in applied and "-60.00" in applied
+    assert "cancel" in applied
+
+    # A non-cancelling case must NOT carry the breakdown noise.
+    rows = BricosReportGenerator._equilibrium_rows({
+        "Soil": _eq_case(ax=60.0, rx=-60.0, has_loads=True,
+                         parts=(60.0, 0.0, 0.0, 0.0)),
+    })
+    assert "cancel" not in rows[1][1]
 
 
 def test_equilibrium_rows_flag_residual_failures():
@@ -155,7 +180,8 @@ def test_equilibrium_rows_flag_residual_failures():
 
 def test_equilibrium_rows_legacy_results_fall_back_to_magnitudes():
     # Raw results generated before the has_loads flag existed: all-zero
-    # sums still read as "(no loads)", non-zero sums get the check.
+    # sums are treated as unloaded (dropped), non-zero sums get the check
+    # and tolerate the missing pos/neg keys.
     rows = BricosReportGenerator._equilibrium_rows({
         "Selfweight": _eq_case(ay=-100.0, ry=100.0),
         "Soil": _eq_case(),
@@ -163,27 +189,54 @@ def test_equilibrium_rows_legacy_results_fall_back_to_magnitudes():
 
     by_case = {r[0]: r for r in rows[1:]}
     assert by_case["Selfweight"][-1] == "PASS"
-    assert by_case["Soil"][-1] == "(no loads)"
+    assert "Soil" not in by_case
 
 
-def test_std_table_wraps_only_overflowing_string_cells():
+def test_std_table_renders_all_string_cells_as_aligned_paragraphs():
+    # v0.60: every string cell becomes a Paragraph (consistent alignment,
+    # wrapping, and non-WinAnsi glyphs like Φ in any cell). First column
+    # left, all other columns centered, header and body alike.
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
     from reportlab.lib.units import cm
     from reportlab.platypus import Paragraph
 
     gen = _generator(_params())
-    long_text = ("not applied (intensity includes the dynamic increment, "
-                 "DK NA A.2.3.2)")
     try:
         t = gen._make_std_table(
-            [["Header", "Dynamic factor"], ["a", long_text]],
+            [["Header", "Dynamic factor"], ["a", "Φ applied"]],
             [2 * cm, 3 * cm], font_size=8)
     finally:
         gen.executor.shutdown(wait=True)
 
     cells = t._cellvalues
-    assert isinstance(cells[1][1], Paragraph)  # overflowing body cell wraps
-    assert isinstance(cells[0][0], str)        # short cells stay plain
-    assert isinstance(cells[1][0], str)
+    assert all(isinstance(c, Paragraph) for row in cells for c in row)
+    assert cells[0][0].style.alignment == TA_LEFT
+    assert cells[1][0].style.alignment == TA_LEFT
+    assert cells[0][1].style.alignment == TA_CENTER
+    assert cells[1][1].style.alignment == TA_CENTER
+    assert cells[0][0].style.fontName == "Helvetica-Bold"  # header row
+    assert cells[1][1].style.fontName == "Helvetica"
+
+
+def test_std_table_tolerates_plain_text_alongside_markup():
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph
+
+    gen = _generator(_params())
+    try:
+        t = gen._make_std_table(
+            [["Header", "Value"],
+             ["Forwards & Backwards", "q<sub>top</sub>"]],
+            [3 * cm, 3 * cm], font_size=8)
+    finally:
+        gen.executor.shutdown(wait=True)
+
+    cells = t._cellvalues
+    # Bare '&' must not break the cell (escaped if the parse rejects it);
+    # inline markup like subscripts parses as markup.
+    assert isinstance(cells[1][0], Paragraph)
+    assert "Forwards" in cells[1][0].text
+    assert isinstance(cells[1][1], Paragraph)
 
 
 def test_udl_application_text_modes():
@@ -336,8 +389,8 @@ def test_critical_step_titles_state_lead_axle_chainage():
 
     try:
         groups = gen._identify_critical_steps(
-            params, {"Vehicle Steps A": steps}, "System A",
-            {200: (0.0, 0.0)}, "Vehicle Steps A", "Vehicle A", "Forward")
+            params, "System A", {200: (0.0, 0.0)},
+            [("Forward", steps)], "Vehicle A")
     finally:
         gen.executor.shutdown(wait=True)
 
@@ -347,6 +400,63 @@ def test_critical_step_titles_state_lead_axle_chainage():
     # the lead-axle position instead of a bare "X=-4.00m".
     assert any("lead axle at x = -4.00 m" in t for t in titles)
     assert all("lead axle at x =" in t for t in titles)
+    # Single analyzed direction: titles stay free of direction noise.
+    assert all("Forward" not in t for t in titles)
+
+
+def test_critical_steps_combine_labels_sharing_one_governing_step():
+    import numpy as np
+
+    # Min M and Max M govern at the SAME step: one plot with the combined
+    # label instead of silently dropping the second extreme (the plot for
+    # e.g. "Max M" used to vanish without a trace).
+    params = _params(vehicle={"loads": [10.0], "spacing": [0.0]},
+                     num_spans=1)
+    steps = [
+        {"x": 2.0, "res": {"S1": {"M": np.array([30.0, -30.0]),
+                                  "V": np.array([5.0, -5.0])}}},
+        {"x": 4.0, "res": {"S1": {"M": np.array([10.0, -10.0]),
+                                  "V": np.array([2.0, -2.0])}}},
+    ]
+    gen = _generator(params, {"Vehicle Steps A": steps})
+
+    try:
+        groups = gen._identify_critical_steps(
+            params, "System A", {200: (0.0, 0.0)},
+            [("Forward", steps)], "Vehicle A")
+    finally:
+        gen.executor.shutdown(wait=True)
+
+    titles = [p["title"] for g in groups for p in g["plots"]]
+    assert len(titles) == 2
+    assert any("Min M & Max M" in t for t in titles)
+    assert any("Min V & Max V" in t for t in titles)
+
+
+def test_critical_steps_attribute_extremes_to_governing_direction():
+    import numpy as np
+
+    params = _params(vehicle={"loads": [10.0], "spacing": [0.0]},
+                     direction="Both", num_spans=1)
+    fwd = [{"x": 2.0, "res": {"S1": {"M": np.array([40.0, 0.0]),
+                                     "V": np.array([8.0, -1.0])}}}]
+    rev = [{"x": 7.0, "res": {"S1": {"M": np.array([5.0, -40.0]),
+                                     "V": np.array([1.0, -8.0])}}}]
+    gen = _generator(params, {"Vehicle Steps A": fwd, "Vehicle Steps A_Rev": rev})
+
+    try:
+        groups = gen._identify_critical_steps(
+            params, "System A", {200: (0.0, 0.0)},
+            [("Forward", fwd), ("Reverse", rev)], "Vehicle A")
+    finally:
+        gen.executor.shutdown(wait=True)
+
+    titles = [p["title"] for g in groups for p in g["plots"]]
+    # Max M and Max V govern forward, Min M and Min V govern reverse.
+    assert any("Max M" in t and "Forward" in t for t in titles)
+    assert any("Min M" in t and "Reverse" in t for t in titles)
+    assert any("Max V" in t and "Forward" in t for t in titles)
+    assert any("Min V" in t and "Reverse" in t for t in titles)
 
 
 def test_has_any_vehicle_false_when_all_vehicle_lists_are_empty():
@@ -358,7 +468,7 @@ def test_has_any_vehicle_false_when_all_vehicle_lists_are_empty():
         gen.executor.shutdown(wait=True)
 
 
-def test_direction_aware_vehicle_step_sources_for_both_directions():
+def test_vehicle_step_sources_merge_directions_per_vehicle():
     params = _params(
         vehicle={"loads": [10.0], "spacing": [0.0]},
         direction="Both",
@@ -374,10 +484,12 @@ def test_direction_aware_vehicle_step_sources_for_both_directions():
     finally:
         gen.executor.shutdown(wait=True)
 
-    assert [(src[4], src[6]) for src in sources] == [
-        ("Vehicle Steps A", "Forward"),
-        ("Vehicle Steps A_Rev", "Reverse"),
-    ]
+    assert len(sources) == 1
+    _, _, sys_label, _, veh_label, dir_steps = sources[0]
+    assert (sys_label, veh_label) == ("System A", "Vehicle A")
+    assert [d for d, _ in dir_steps] == ["Forward", "Reverse"]
+    assert dir_steps[0][1] is raw["Vehicle Steps A"]
+    assert dir_steps[1][1] is raw["Vehicle Steps A_Rev"]
 
 
 def test_reverse_direction_reports_only_reverse_vehicle_steps():
@@ -396,4 +508,59 @@ def test_reverse_direction_reports_only_reverse_vehicle_steps():
     finally:
         gen.executor.shutdown(wait=True)
 
-    assert [(src[4], src[6]) for src in sources] == [("Vehicle Steps A_Rev", "Reverse")]
+    assert len(sources) == 1
+    dir_steps = sources[0][5]
+    assert [d for d, _ in dir_steps] == ["Reverse"]
+    assert dir_steps[0][1] is raw["Vehicle Steps A_Rev"]
+
+
+def test_unfactored_vehicle_table_reports_governing_direction_per_extreme():
+    import numpy as np
+
+    params = _params(vehicle={"loads": [10.0], "spacing": [0.0]},
+                     direction="Both", num_spans=1)
+    fwd = [{"x": 2.0, "res": {"S1": {"M": np.array([40.0, 0.0]),
+                                     "V": np.array([8.0, -1.0])}}}]
+    rev = [{"x": 7.0, "res": {"S1": {"M": np.array([5.0, -40.0]),
+                                     "V": np.array([1.0, -8.0])}}}]
+    gen = _generator(params, {"Vehicle Steps A": fwd, "Vehicle Steps A_Rev": rev})
+
+    try:
+        gen._add_unfactored_vehicle_table()
+    finally:
+        gen.executor.shutdown(wait=True)
+
+    # One merged row per element: extremes annotated with their direction.
+    from reportlab.platypus import Paragraph, KeepTogether
+    tables = [e for e in gen.elements if isinstance(e, KeepTogether)]
+    assert tables
+    cells = tables[-1]._content[0]._cellvalues
+    body = cells[1]
+    texts = [c.text if isinstance(c, Paragraph) else c for c in body]
+    assert texts[0] == "S1"
+    assert texts[1] == "40.0 (Fwd)"   # M_max governed forward
+    assert texts[2] == "-40.0 (Rev)"  # M_min governed reverse
+    assert texts[3] == "8.0 (Fwd)"
+    assert texts[4] == "-8.0 (Rev)"
+    assert len(cells) == 2  # header + ONE row for S1 (directions merged)
+
+
+def test_system_has_component_checks_each_load_case():
+    p = _params()
+    p["sw_list"] = [0.0] * 10
+    assert not BricosReportGenerator._system_has_component(p, "Selfweight")
+    p["sw_list"][0] = 5.0
+    assert BricosReportGenerator._system_has_component(p, "Selfweight")
+
+    assert not BricosReportGenerator._system_has_component(p, "Soil")
+    p["soil"] = [{"wall_idx": 0, "face": "L", "h": 6.0, "q_top": 0.0, "q_bot": 20.0}]
+    assert BricosReportGenerator._system_has_component(p, "Soil")
+
+    assert not BricosReportGenerator._system_has_component(p, "Surcharge")
+    p["surcharge"] = [{"wall_idx": 0, "q": 5.0}]
+    assert BricosReportGenerator._system_has_component(p, "Surcharge")
+
+    p["udl_q"] = 0.0
+    assert not BricosReportGenerator._system_has_component(p, "Traffic UDL")
+    p["udl_q"] = 4.0
+    assert BricosReportGenerator._system_has_component(p, "Traffic UDL")

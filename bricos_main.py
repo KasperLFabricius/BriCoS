@@ -503,7 +503,7 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     else: p['gamma_g'] = float(gg_sel)
 
     gj_val = p.get('gamma_j', 1.0)
-    gj_opts = list(data_mod.SOIL_GAMMA_PRESETS) + [data_mod.SOIL_GAMMA_NO_KFI_LABEL, "Custom"]
+    gj_opts = [data_mod.SOIL_GAMMA_NO_KFI_LABEL] + list(data_mod.SOIL_GAMMA_PRESETS) + ["Custom"]
     gj_label = data_mod.soil_gamma_preset_label(gj_val, p['KFI'])
     idx_gj = gj_opts.index(gj_label) if gj_label in gj_opts else len(gj_opts) - 1
 
@@ -542,7 +542,7 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     if gam_selB == "Custom": p['gamma_vehB'] = c_gb.number_input(r"Custom $\gamma_{B}$", value=float(gam_valB), key=f"{curr}_gamB_cust", disabled=ui_locked)
     else: p['gamma_vehB'] = float(gam_selB)
 
-    gudl_opts = [0.56, 0.40, 1.0, 1.40]
+    gudl_opts = [0.40, 0.56, 1.0, 1.40]
     c_gu, _c_spare = st.columns(2)
     gudl_val = p.get('gamma_udl', 0.56)
     idx_gudl = gudl_opts.index(gudl_val) if gudl_val in gudl_opts else len(gudl_opts)
@@ -840,10 +840,26 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
         target_geom['shape'] = shape_map[new_shape]
         
+        # DESYNC GUARD: the geometry dict is the source of truth. Widget keys
+        # outlive the dict state they were seeded from (force_ui_update
+        # pre-seeds keys for elements that are not rendered, and switching
+        # shape attaches Mid/End inputs to whatever the keys last held), and
+        # the write-back below would push such stale values into the dict.
+        # Re-seed the value widgets whenever the dict changed through
+        # anything other than these widgets, or when the keys are missing.
+        prof_val_keys = [f"{curr}_prof_v{j}_{sel_el}" for j in (1, 2, 3)]
+        prof_sig_key = f"{curr}_prof_sig_{sel_el}"
+        prof_sig = (target_geom['type'], target_geom['shape'],
+                    tuple(float(v) for v in target_geom['vals']))
+        if (st.session_state.get(prof_sig_key) != prof_sig
+                or any(k not in st.session_state for k in prof_val_keys)):
+            for k, v in zip(prof_val_keys, target_geom['vals']):
+                st.session_state[k] = float(v)
+
         vals = target_geom['vals']
         c_v1, c_v2, c_v3 = st.columns(3)
         lbl_v = r"I [$\text{m}^4$]" if target_geom['type']==0 else "H [m]"
-        
+
         # SYNC: If unlocked and simple, ensure we see the simple input values
         if not is_currently_locked and is_simple_shape:
              st.session_state[f"{curr}_prof_v1_{sel_el}"] = vals[0]
@@ -871,7 +887,11 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             )
             
         target_geom['vals'] = [v1, v2, v3]
-        
+        # Record the state the widgets and the dict now agree on, so the
+        # guard above only fires on out-of-band changes.
+        st.session_state[prof_sig_key] = (target_geom['type'], target_geom['shape'],
+                                          tuple(float(v) for v in target_geom['vals']))
+
         # If in simple mode (just height constant), sync back to simple list for legacy logic
         if target_geom['type'] == 1:
             target_simple_list[idx] = v1
@@ -968,9 +988,16 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         # The calculation dictionary is the source of truth. If copy/reset/load
         # changed it since the last render, refresh widget keys before widgets
         # are constructed so stale Streamlit values cannot overwrite it.
+        # Streamlit garbage-collects widget keys that are not rendered in a
+        # run (e.g. while the other system's sidebar is active), so missing
+        # keys must also trigger a re-seed - otherwise the empty text inputs
+        # below would silently erase the stored vehicle.
         data_mod.normalize_vehicle_fields(p, struct_key, key_loads, key_space)
         current_sig = data_mod.vehicle_state_signature(p, struct_key, key_loads, key_space)
-        if st.session_state.get(sig_key) != current_sig:
+        if (st.session_state.get(sig_key) != current_sig
+                or input_key_l not in st.session_state
+                or input_key_s not in st.session_state
+                or sess_key not in st.session_state):
             st.session_state[input_key_l] = p.get(key_loads, "")
             st.session_state[input_key_s] = p.get(key_space, "")
             curr_vehicle = p.get(struct_key, {}) if isinstance(p.get(struct_key), dict) else {}
