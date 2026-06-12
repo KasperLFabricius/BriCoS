@@ -192,32 +192,27 @@ def test_single_axle_envelope_matches_influence_lines():
         p_kn * x[on_grid] * (L - x[on_grid]) / L, atol=1e-6)
     assert np.all(env["M_max"] <= p_kn * x * (L - x) / L + 1e-6)
 
-    # Shear: the left-side value at a loaded section is exact (carried by
-    # the left sub-element's end entry). The right-side value is only
-    # guaranteed from the previous step position - see the xfail companion
-    # test for the known gap.
+    # Shear: both one-sided values at a loaded section are exact - the
+    # unloaded side from the left sub-element's end entry, the loaded side
+    # (since the v0.63 boundary-jump fix) from the right sub-element's
+    # start entry.
     for xv in np.unique(x[on_grid]):
         at = np.isclose(x, xv)
         assert np.max(env["V_max"][at]) == pytest.approx(
             p_kn * (L - xv) / L, rel=1e-9)
-        assert np.min(env["V_min"][at]) <= -p_kn * max(xv - 0.5, 0.0) / L + 1e-9
+        assert np.min(env["V_min"][at]) == pytest.approx(
+            -p_kn * xv / L, rel=1e-9)
 
     # Peak deflection: PL^3/48EI at midspan with the load there.
     assert np.min(env["def_y_min"]) == pytest.approx(
         -p_kn * L**3 / (48.0 * E_MOD * I_SEC), rel=1e-6)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FINDING (v0.62 validation): a point load placed exactly on a result "
-    "section contributes its shear jump only strictly AFTER the section, "
-    "so the V envelope misses the loaded-side value there (V_min(5.0) = "
-    "-45 instead of -50 for P=100 stepping at 0.5 m). With the default "
-    "step == mesh alignment this systematically under-reports the shear "
-    "envelope at section points by up to P*step/L. Fix candidate: include "
-    "a point load at a sub-element's local start in that sub-element's "
-    "start-section internal forces (the left-side value already comes "
-    "from the neighbouring sub-element's end entry)."))
 def test_single_axle_shear_envelope_carries_loaded_side_value():
+    # v0.63 fix of the v0.62 validation finding: a point load placed
+    # exactly on a result section now contributes its shear jump AT the
+    # section (loaded-side value on the owning sub-element's start entry),
+    # so the V envelope no longer misses it by one step.
     p_kn = 100.0
     params = _beam(q=0.0, vehicle={"loads": [p_kn / 9.81], "spacing": [0.0]})
     raw, _, _ = _run(params)
@@ -227,6 +222,45 @@ def test_single_axle_shear_envelope_carries_loaded_side_value():
 
     mid = np.isclose(x, L / 2.0)
     assert np.min(env["V_min"][mid]) == pytest.approx(-p_kn / 2.0, rel=1e-9)
+
+
+def test_step_arrays_carry_both_sides_of_the_jump_at_shared_sections():
+    # With the axle on an interior mesh boundary, the two result entries
+    # at that section carry V(x-) and V(x+): the full jump is visible AT
+    # the load for the step viewer, report plots and tabular export.
+    p_kn = 100.0
+    params = _beam(q=0.0, vehicle={"loads": [p_kn / 9.81], "spacing": [0.0]})
+    raw, _, _ = _run(params)
+    step = next(s for s in raw["Vehicle Steps A"] if abs(s["x"] - L / 2.0) < 1e-9)
+    r = step["res"]["S1"]
+    x = np.asarray(r["x"])
+    at = np.isclose(x, L / 2.0)
+
+    assert np.max(r["V"][at]) == pytest.approx(p_kn / 2.0, rel=1e-9)   # V(x-)
+    assert np.min(r["V"][at]) == pytest.approx(-p_kn / 2.0, rel=1e-9)  # V(x+)
+    # M is continuous: both entries agree.
+    assert np.ptp(r["M"][at]) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_axle_over_support_keeps_member_end_shear_semantics():
+    # Member ENDS keep the historical convention: an axle directly over a
+    # support registers in the adjoining member-start shear (the reaction
+    # envelopes are built from member end forces), and the rest of the
+    # structure stays unloaded.
+    p_kn = 100.0
+    params = _beam(n_spans=2, q=0.0,
+                   vehicle={"loads": [p_kn / 9.81], "spacing": [0.0]})
+    raw, _, _ = _run(params)
+
+    step = next(s for s in raw["Vehicle Steps A"] if abs(s["x"] - L) < 1e-9)
+    s1, s2 = step["res"]["S1"], step["res"]["S2"]
+    # Load goes straight into the interior support: no bending anywhere,
+    # S2's start entry carries the reaction-bearing end shear.
+    assert np.max(np.abs(s1["M"])) == pytest.approx(0.0, abs=1e-6)
+    assert np.max(np.abs(s2["M"])) == pytest.approx(0.0, abs=1e-6)
+    assert s2["V"][0] == pytest.approx(p_kn, rel=1e-9)
+    assert np.max(np.abs(np.asarray(s2["V"])[1:])) == pytest.approx(0.0, abs=1e-6)
+    assert np.max(np.abs(s1["V"])) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_multi_axle_envelope_matches_brute_force_statics():

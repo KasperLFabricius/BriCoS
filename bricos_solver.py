@@ -279,8 +279,11 @@ def get_detailed_results_optimized(elem_objects, elements_source_data, nodes, D_
             load_arr[k, :] = rec
 
         num_pts = max(3, int(el.L / mesh_size) + 1)
+        # Parent-interior sub-element starts carry the loaded-side V/N of a
+        # point load sitting exactly on them (see jit_internal_forces).
+        start_jump = 1.0 if el_data.get('local_offset', 0.0) > 1e-9 else 0.0
         x_vals, M_vals, V_vals, N_vals = kernels.jit_internal_forces(
-            el.L, f_start_for_internal, num_pts, load_arr
+            el.L, f_start_for_internal, num_pts, load_arr, start_jump
         )
         ux, uy = kernels.jit_disp_shape(d_loc, el.L, num_pts)
         def_x = el.cx * ux - el.cy * uy
@@ -1028,6 +1031,12 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     el_eff_vals = np.zeros((n_elems, 3), dtype=np.float64)
     el_b_eff = np.zeros(n_elems, dtype=np.float64)
     el_As_avg = np.zeros(n_elems, dtype=np.float64)
+    # Sub-element start offset within the parent member: the recovery
+    # kernels include a point load sitting exactly at a sub-element start
+    # in that start point's V/N only when the start is parent-INTERIOR
+    # (loaded-side value at shared mesh sections; member ends keep the
+    # historical convention the reaction envelopes rely on).
+    el_loc_off = np.zeros(n_elems, dtype=np.float64)
 
     for k in range(n_elems):
         el_obj = elem_objects[k]
@@ -1041,6 +1050,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         el_eff_vals[k, :] = el_obj.eff_vals
         el_b_eff[k] = el_obj.b_eff
         el_As_avg[k] = el_obj.As_avg
+        el_loc_off[k] = elems_base[k].get('local_offset', 0.0)
         ni, nj = elems_base[k]['nodes']
         idx_i, idx_j = node_map[ni]*3, node_map[nj]*3
         el_dof_indices[k] = [idx_i, idx_i+1, idx_i+2, idx_j, idx_j+1, idx_j+2]
@@ -1495,11 +1505,12 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     sp_start_x, sp_lens, sp_el_indices,
                     D_chunk, el_dof_indices, el_T, el_L,
                     el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+                    el_loc_off,
                     S_matrices,
-                    env_results_accum, 
+                    env_results_accum,
                     is_init_chunk
                 )
-                
+
                 step_out = None
                 if use_batch_recovery:
                     step_out = np.zeros((n_chunk, n_elems, n_pts_kernel, 5))
@@ -1509,6 +1520,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                         sp_start_x, sp_lens, sp_el_indices,
                         D_chunk, el_dof_indices, el_T, el_L,
                         el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+                        el_loc_off,
                         S_matrices,
                         step_out,
                     )
