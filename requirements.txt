@@ -6,3 +6,5 @@ plotly>=5.18,<7
 numba>=0.58,<0.63
 kaleido>=0.2.1,<2
 reportlab>=4.0,<5
+# Excel writer for the tabular data export (write-only, no transitive deps)
+xlsxwriter>=3.0,<4
