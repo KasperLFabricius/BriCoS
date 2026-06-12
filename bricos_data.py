@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.61"
+APP_VERSION = "0.62"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================

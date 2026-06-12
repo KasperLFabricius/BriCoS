@@ -115,22 +115,77 @@ def test_one_sided_load_case_exports_only_the_loaded_system():
 
 
 def test_envelope_sheet_values_equal_combined_results():
+    # v0.62: the repeated section x at every mesh sub-element boundary is
+    # merged to one row (max of maxima / min of minima over the repeats),
+    # so compare each exported row against the raw arrays at its x.
     pA = _beam_params("Alpha")
     raw = _run(pA)
     _, sheets = export.total_envelope_export(pA, raw, _beam_params(), None, False)
 
     res_uls = solver.combine_results(raw, pA, "Design (ULS)")
+    te = res_uls["Total Envelope"]["S1"]
+    x_raw = np.asarray(te["x"])
     s1 = sheets["Total Envelope (ULS)"].query("Element == 'S1'")
+
+    assert s1["Location [m]"].is_unique
     np.testing.assert_allclose(
-        s1["M_max [kNm]"].to_numpy(),
-        np.asarray(res_uls["Total Envelope"]["S1"]["M_max"]), atol=1e-9)
-    np.testing.assert_allclose(
-        s1["Location [m]"].to_numpy(),
-        np.asarray(res_uls["Total Envelope"]["S1"]["x"]), atol=1e-12)
-    # Deflections are exported in mm.
-    np.testing.assert_allclose(
-        s1["Def_Y_min [mm]"].to_numpy(),
-        np.asarray(res_uls["Total Envelope"]["S1"]["def_y_min"]) * 1000, atol=1e-9)
+        s1["Location [m]"].to_numpy(), np.unique(x_raw), atol=1e-12)
+    for _, row in s1.iterrows():
+        at_x = np.isclose(x_raw, row["Location [m]"], rtol=0.0, atol=1e-9)
+        assert row["M_max [kNm]"] == pytest.approx(
+            np.max(np.asarray(te["M_max"])[at_x]), abs=1e-9)
+        assert row["M_min [kNm]"] == pytest.approx(
+            np.min(np.asarray(te["M_min"])[at_x]), abs=1e-9)
+        # Deflections are exported in mm.
+        assert row["Def_Y_min [mm]"] == pytest.approx(
+            np.min(np.asarray(te["def_y_min"])[at_x]) * 1000, abs=1e-9)
+
+
+def test_duplicate_boundary_sections_merge_conservatively():
+    # Two sub-elements sharing x=1.0 with slightly different bounds (the
+    # segment-snapped UDL window case): one row survives, carrying the
+    # max of the maxima and the min of the minima.
+    r_dict = {"S1": {
+        "x": np.array([0.0, 1.0, 1.0, 2.0]),
+        "M_max": np.array([1.0, 10.0, 10.5, 3.0]),
+        "M_min": np.array([-1.0, -8.0, -8.4, -2.0]),
+        "V_max": np.zeros(4), "V_min": np.zeros(4),
+        "N_max": np.zeros(4), "N_min": np.zeros(4),
+        "def_x_max": np.zeros(4), "def_x_min": np.zeros(4),
+        "def_y_max": np.zeros(4), "def_y_min": np.zeros(4),
+    }}
+    df = export.case_dataframe(r_dict, "Sys")
+
+    assert list(df["Location [m]"]) == [0.0, 1.0, 2.0]
+    merged = df.set_index("Location [m]").loc[1.0]
+    assert merged["M_max [kNm]"] == pytest.approx(10.5)
+    assert merged["M_min [kNm]"] == pytest.approx(-8.4)
+
+
+def test_step_mode_keeps_physical_jumps_and_drops_pure_repeats():
+    base = {
+        "x": np.array([0.0, 1.0, 1.0, 2.0, 2.0, 3.0]),
+        # Pure repeat at x=1.0; a real shear jump (axle) at x=2.0.
+        "M": np.array([0.0, 5.0, 5.0, 4.0, 4.0, 0.0]),
+        "V": np.array([2.0, 2.0, 2.0, 2.0, -8.0, -8.0]),
+        "N": np.zeros(6),
+        "def_x": np.zeros(6), "def_y": np.zeros(6),
+    }
+    df = export.case_dataframe({"S1": base}, "Sys", step_mode=True)
+
+    assert list(df["Location [m]"]) == [0.0, 1.0, 2.0, 2.0, 3.0]
+    jump = df[df["Location [m]"] == 2.0]["V [kN]"].tolist()
+    assert jump == [pytest.approx(2.0), pytest.approx(-8.0)]
+
+
+def test_exported_sheets_have_unique_locations_per_element():
+    pA = _beam_params("Alpha")
+    raw = _run(pA)
+    _, sheets = export.total_envelope_export(pA, raw, _beam_params(), None, False)
+
+    for name, df in sheets.items():
+        dup = df.duplicated(subset=["System", "Element", "Location [m]"])
+        assert not dup.any(), f"duplicated section rows in {name}"
 
 
 # --- settings sheet ---

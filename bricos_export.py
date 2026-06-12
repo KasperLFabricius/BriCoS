@@ -68,16 +68,11 @@ def case_dataframe(r_dict, sys_name, step_mode=False):
                 return np.zeros(n_pts)
             return np.asarray(arr)
 
-        block = {
-            "System": np.repeat(sys_name, n_pts),
-            "Element": np.repeat(eid, n_pts),
-            "Location [m]": x_vals,
-        }
         if step_mode:
-            block.update({
+            columns = {
                 "M [kNm]": get_arr('M'), "V [kN]": get_arr('V'), "N [kN]": get_arr('N'),
                 "Def_X [mm]": get_arr('def_x') * 1000, "Def_Y [mm]": get_arr('def_y') * 1000,
-            })
+            }
         else:
             # Static-only dictionaries (no envelope fields) fall back to
             # the single static field for both bounds.
@@ -88,17 +83,65 @@ def case_dataframe(r_dict, sys_name, step_mode=False):
                     return get_arr(key.replace('_max', '').replace('_min', ''))
                 return get_arr(key)
 
-            block.update({
+            columns = {
                 "M_max [kNm]": env_arr('M_max'), "M_min [kNm]": env_arr('M_min'),
                 "V_max [kN]": env_arr('V_max'), "V_min [kN]": env_arr('V_min'),
                 "N_max [kN]": env_arr('N_max'), "N_min [kN]": env_arr('N_min'),
                 "Def_X_max [mm]": env_arr('def_x_max') * 1000, "Def_X_min [mm]": env_arr('def_x_min') * 1000,
                 "Def_Y_max [mm]": env_arr('def_y_max') * 1000, "Def_Y_min [mm]": env_arr('def_y_min') * 1000,
-            })
+            }
+
+        x_vals, columns = _merge_duplicate_sections(x_vals, columns, step_mode)
+
+        block = {
+            "System": np.repeat(sys_name, len(x_vals)),
+            "Element": np.repeat(eid, len(x_vals)),
+            "Location [m]": x_vals,
+        }
+        block.update(columns)
         frames.append(pd.DataFrame(block))
     if not frames:
         return None
     return pd.concat(frames, ignore_index=True)
+
+
+def _merge_duplicate_sections(x_vals, columns, step_mode):
+    """Collapse the repeated section x-values at mesh sub-element
+    boundaries: every interior boundary appears twice in the solver's
+    result arrays (the end of one sub-element and the start of the next).
+
+    Envelope columns merge conservatively - max of the maxima, min of
+    the minima - since the two rows are the same section's bounds
+    evaluated on either side (they differ by float noise, and in the
+    coupled traffic envelope by the segment-snapped UDL window).
+    Step results drop only near-identical repeats: rows that genuinely
+    differ represent a physical discontinuity (e.g. the shear jump at
+    an axle) and both sides are kept.
+    """
+    n = len(x_vals)
+    if n < 2:
+        return x_vals, columns
+    same = np.isclose(x_vals[1:], x_vals[:-1], rtol=0.0, atol=1e-9)
+    if not same.any():
+        return x_vals, columns
+
+    if step_mode:
+        keep = np.ones(n, dtype=bool)
+        for i in np.flatnonzero(same):
+            identical = all(
+                np.isclose(arr[i], arr[i + 1], rtol=1e-7, atol=1e-9)
+                for arr in columns.values())
+            if identical:
+                keep[i + 1] = False
+        return x_vals[keep], {k: arr[keep] for k, arr in columns.items()}
+
+    # Group runs of equal x and aggregate each run to one row.
+    starts = np.flatnonzero(np.concatenate(([True], ~same)))
+    merged = {}
+    for name, arr in columns.items():
+        reduce = np.minimum.reduceat if "_min" in name else np.maximum.reduceat
+        merged[name] = reduce(arr, starts)
+    return x_vals[starts], merged
 
 
 def _phi_text(p, raw):
