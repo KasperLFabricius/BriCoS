@@ -511,7 +511,15 @@ def jit_fef_axial_trapezoid(qx_s, qx_e, h_s, h_e, L):
     return f
 
 @jit(nopython=True, cache=True)
-def jit_internal_forces(L, f_start, num_pts, load_data):
+def jit_internal_forces(L, f_start, num_pts, load_data, start_jump=0.0):
+    # start_jump: when > 0.5, a point load sitting exactly at the local
+    # start (a ~ 0) contributes its V/N jump already at the first result
+    # point, so the shared mesh-boundary section carries the loaded-side
+    # value (the unloaded side comes from the neighbouring sub-element's
+    # end entry). Passed as 1.0 only for sub-elements whose start is an
+    # INTERIOR point of the parent member: member ends keep the historical
+    # convention, which the support-reaction envelopes rely on (an axle
+    # directly over a support must register in the end shear).
     x_vals = np.linspace(0, L, num_pts)
     M_vals = np.zeros(num_pts)
     V_vals = np.zeros(num_pts)
@@ -552,7 +560,7 @@ def jit_internal_forces(L, f_start, num_pts, load_data):
 
             elif l_type == 1 or l_type == 3:
                 P, a = load_data[j, 1], load_data[j, 2]
-                if x > a:
+                if x > a or (start_jump > 0.5 and a <= 1e-9 and x <= 1e-9):
                     if l_type == 1:
                         Vx -= P
                         Mx += P * (x - a)
@@ -709,11 +717,12 @@ def jit_precompute_stress_recovery(n_elems, n_pts, el_L, el_k_local):
 
 @jit(nopython=True, parallel=True, cache=True)
 def jit_envelope_batch_parallel(
-    n_steps, n_elems, n_pts, 
-    x_steps, v_loads, v_dists, 
-    sp_start_x, sp_lens, sp_el_indices, 
+    n_steps, n_elems, n_pts,
+    x_steps, v_loads, v_dists,
+    sp_start_x, sp_lens, sp_el_indices,
     D_all, el_dof_indices, el_T, el_L,
     el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+    el_loc_off,
     S_matrices,
     res_accum,
     is_init
@@ -821,13 +830,21 @@ def jit_envelope_batch_parallel(
                                 a = 0.0
                             elif a > L_el:
                                 a = L_el
-                            if x > a:
+                            # A load exactly at the sub-element start also
+                            # counts AT the start point when that point is
+                            # interior to the parent (loaded-side value at
+                            # the shared section; the unloaded side comes
+                            # from the neighbour's end entry). Member ends
+                            # keep the historical convention for the
+                            # support-reaction envelopes.
+                            if x > a or (a <= tol and x <= tol
+                                         and el_loc_off[e] > tol):
                                 P_trans = v_loads[ax] * cx
                                 P_axial = v_loads[ax] * cy
                                 Vx -= P_trans
                                 Mx += P_trans * (x - a)
                                 Nx += P_axial
-                
+
                 def_x_glob = cx * ux_loc - cy * uy_loc
                 def_y_glob = cy * ux_loc + cx * uy_loc
 
@@ -853,6 +870,7 @@ def jit_step_recovery_batch(
     sp_start_x, sp_lens, sp_el_indices,
     D_all, el_dof_indices, el_T, el_L,
     el_E, el_G, el_eff_shape, el_v_type, el_eff_vals, el_b_eff, el_As_avg,
+    el_loc_off,
     S_matrices,
     res_out,
 ):
@@ -960,7 +978,10 @@ def jit_step_recovery_batch(
                                 a = 0.0
                             elif a > L_el:
                                 a = L_el
-                            if x > a:
+                            # Loaded-side value at interior shared sections;
+                            # see jit_envelope_batch_parallel.
+                            if x > a or (a <= tol and x <= tol
+                                         and el_loc_off[e] > tol):
                                 P_trans = v_loads[ax] * cx
                                 P_axial = v_loads[ax] * cy
                                 Vx -= P_trans
