@@ -1102,14 +1102,23 @@ def build_session_csv(systems, global_values):
     return df.to_csv(index=False).encode('utf-8')
 
 
+def _capture_session_payload_into(systems, global_values):
+    systems.clear()
+    for k in ('sysA', 'sysB'):
+        if k in st.session_state:
+            systems[k] = st.session_state[k]
+    global_values.clear()
+    for gk in SESSION_GLOBAL_KEYS:
+        if gk in st.session_state:
+            global_values[gk] = st.session_state[gk]
+
+
 def session_csv_payload():
     """Capture the savable session payload NOW, while the script-run
     context exists. The system dicts are live references, so a download
     serialized later still reflects the current state."""
-    systems = {k: st.session_state[k] for k in ('sysA', 'sysB')
-               if k in st.session_state}
-    global_values = {gk: st.session_state[gk] for gk in SESSION_GLOBAL_KEYS
-                     if gk in st.session_state}
+    systems, global_values = {}, {}
+    _capture_session_payload_into(systems, global_values)
     return systems, global_values
 
 
@@ -1117,9 +1126,24 @@ def session_csv_builder():
     """Deferred-download callable for st.download_button: the payload is
     captured at render time (with context), the serialization runs at
     download time (without context). Never read st.session_state inside
-    the callable itself."""
+    the callable itself.
+
+    The returned callable carries a .refresh() hook that re-captures the
+    payload in place. Call it at the END of the script run: 'result_mode'
+    is a plain session key written by the results UI AFTER the sidebar
+    rendered (its radio uses a separate widget key), so a render-time
+    snapshot alone would save the PREVIOUS result selection when the user
+    switches Result Type and downloads in the same interaction."""
     systems, global_values = session_csv_payload()
-    return lambda: build_session_csv(systems, global_values)
+
+    def _build():
+        return build_session_csv(systems, global_values)
+
+    def _refresh():
+        _capture_session_payload_into(systems, global_values)
+
+    _build.refresh = _refresh
+    return _build
 
 
 def generate_csv_data():

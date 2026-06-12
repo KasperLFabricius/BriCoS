@@ -88,6 +88,24 @@ def test_builder_reflects_in_place_changes_made_after_render():
     assert "Edited After Render" in df.loc[df["Parameter"] == "name", "Value"].iloc[0]
 
 
+def test_refresh_picks_up_globals_written_after_render():
+    # Codex review on #37: 'result_mode' is a plain session key written by
+    # the results UI AFTER the sidebar (and the download button) rendered.
+    # The render-time snapshot alone would save the PREVIOUS selection;
+    # builder.refresh() at the end of the script run re-captures it.
+    st = _populated_session()
+    builder = data.session_csv_builder()
+    st.session_state["result_mode"] = "Characteristic (SLS)"  # results UI
+
+    def saved_mode():
+        df = pd.read_csv(io.BytesIO(builder()))
+        return df.loc[df["Parameter"] == "result_mode", "Value"].iloc[0]
+
+    assert "Design (ULS)" in saved_mode()  # snapshot semantics, pre-refresh
+    builder.refresh()
+    assert "Characteristic (SLS)" in saved_mode()
+
+
 def test_build_session_csv_matches_generate_csv_data():
     _populated_session()
     assert data.build_session_csv(*data.session_csv_payload()) == data.generate_csv_data()
@@ -112,8 +130,27 @@ def test_main_passes_a_render_time_payload_to_the_config_download():
             found.append(node)
     assert len(found) == 1
     data_arg = found[0].args[1]
-    assert isinstance(data_arg, ast.Call), (
-        "the config download data must be session_csv_builder() - a bare "
-        "function reference would read the empty dummy session state on "
-        "the download thread")
-    assert getattr(data_arg.func, "attr", "") == "session_csv_builder"
+    assert isinstance(data_arg, ast.Name), (
+        "the config download data must be the session_csv_builder() result "
+        "captured at render time - a bare session-reading function "
+        "reference would read the empty dummy session state on the "
+        "download thread")
+
+    # The builder must be created from session_csv_builder() ...
+    assigns = [n for n in ast.walk(tree)
+               if isinstance(n, ast.Assign)
+               and any(isinstance(t, ast.Name) and t.id == data_arg.id
+                       for t in n.targets)
+               and isinstance(n.value, ast.Call)
+               and getattr(n.value.func, "attr", "") == "session_csv_builder"]
+    assert assigns, "config download payload must come from session_csv_builder()"
+
+    # ... and refreshed at the end of the script run, after the results UI
+    # wrote 'result_mode' (Codex review on #37).
+    refreshes = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Attribute)
+                 and n.func.attr == "refresh"
+                 and isinstance(n.func.value, ast.Name)
+                 and n.func.value.id == data_arg.id]
+    assert refreshes, "config_download.refresh() must run after the results UI"
