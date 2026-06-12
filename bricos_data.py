@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.65"
+APP_VERSION = "0.66"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -1074,27 +1074,83 @@ def clean_transient_keys():
     for k in keys_to_clear:
         del st.session_state[k]
 
-def generate_csv_data():
-    """Generates the CSV string for saving the current session state."""
-    rep_keys = ['rep_pno', 'rep_pname', 'rep_rev', 'rep_author', 'rep_check', 'rep_appr', 'rep_comm']
-    
+# Non-system session keys included in saved configurations.
+SESSION_GLOBAL_KEYS = ('rep_pno', 'rep_pname', 'rep_rev', 'rep_author',
+                       'rep_check', 'rep_appr', 'rep_comm', 'result_mode')
+
+
+def build_session_csv(systems, global_values):
+    """Serialize a session payload to the save-file CSV bytes.
+
+    Pure: no st.session_state access, so it is safe to run on Streamlit's
+    download thread, which has NO script-run context (st.session_state is
+    an empty dummy there - reading it from a deferred download callable
+    silently produced an empty save file).
+    """
     rows = []
-    for sys_name in ['sysA', 'sysB']:
-        if sys_name in st.session_state:
-            data = st.session_state[sys_name]
-            for k, v in data.items():
-                if k == 'backup': continue 
-                val_str = json.dumps(v, default=str)
-                rows.append({'System': sys_name, 'Parameter': k, 'Value': val_str})
-    
-    global_keys = rep_keys + ['result_mode']
-    for gk in global_keys:
-        if gk in st.session_state:
-            val_str = json.dumps(st.session_state[gk], default=str)
-            rows.append({'System': 'Global', 'Parameter': gk, 'Value': val_str})
+    for sys_name, data in systems.items():
+        for k, v in data.items():
+            if k == 'backup': continue
+            val_str = json.dumps(v, default=str)
+            rows.append({'System': sys_name, 'Parameter': k, 'Value': val_str})
+
+    for gk, gv in global_values.items():
+        val_str = json.dumps(gv, default=str)
+        rows.append({'System': 'Global', 'Parameter': gk, 'Value': val_str})
 
     df = pd.DataFrame(rows)
     return df.to_csv(index=False).encode('utf-8')
+
+
+def _capture_session_payload_into(systems, global_values):
+    systems.clear()
+    for k in ('sysA', 'sysB'):
+        if k in st.session_state:
+            systems[k] = st.session_state[k]
+    global_values.clear()
+    for gk in SESSION_GLOBAL_KEYS:
+        if gk in st.session_state:
+            global_values[gk] = st.session_state[gk]
+
+
+def session_csv_payload():
+    """Capture the savable session payload NOW, while the script-run
+    context exists. The system dicts are live references, so a download
+    serialized later still reflects the current state."""
+    systems, global_values = {}, {}
+    _capture_session_payload_into(systems, global_values)
+    return systems, global_values
+
+
+def session_csv_builder():
+    """Deferred-download callable for st.download_button: the payload is
+    captured at render time (with context), the serialization runs at
+    download time (without context). Never read st.session_state inside
+    the callable itself.
+
+    The returned callable carries a .refresh() hook that re-captures the
+    payload in place. Call it at the END of the script run: 'result_mode'
+    is a plain session key written by the results UI AFTER the sidebar
+    rendered (its radio uses a separate widget key), so a render-time
+    snapshot alone would save the PREVIOUS result selection when the user
+    switches Result Type and downloads in the same interaction."""
+    systems, global_values = session_csv_payload()
+
+    def _build():
+        return build_session_csv(systems, global_values)
+
+    def _refresh():
+        _capture_session_payload_into(systems, global_values)
+
+    _build.refresh = _refresh
+    return _build
+
+
+def generate_csv_data():
+    """Generates the CSV bytes for saving the current session state.
+    Reads st.session_state - only call this during the script run (e.g.
+    the autosave path), never from a deferred download callable."""
+    return build_session_csv(*session_csv_payload())
 
 def load_data_from_df(df_load):
     """Loads session state from a DataFrame.

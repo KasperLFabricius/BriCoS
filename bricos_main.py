@@ -210,8 +210,14 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
         if rk not in st.session_state: st.session_state[rk] = ""
 
     # Deferred data callable: the session is serialized only when the user
-    # actually clicks, not on every rerun.
-    st.download_button("Download Configuration (.csv)", data_mod.generate_csv_data, "brico_config.csv", "text/csv", disabled=ui_locked)
+    # actually clicks, not on every rerun. The callable runs on Streamlit's
+    # download thread WITHOUT a script-run context, where st.session_state
+    # is an empty dummy - so the payload must be captured here, at render
+    # time (passing generate_csv_data itself produced empty save files).
+    # config_download.refresh() runs at the END of the script, after the
+    # results UI has written 'result_mode' (see session_csv_builder).
+    config_download = data_mod.session_csv_builder()
+    st.download_button("Download Configuration (.csv)", config_download, "brico_config.csv", "text/csv", disabled=ui_locked)
 
     uploaded_file = st.file_uploader("Upload Configuration (.csv)", type="csv", key=f"uploader_{st.session_state.uploader_key}", disabled=ui_locked)
     if uploaded_file is not None:
@@ -1258,3 +1264,9 @@ if st.session_state.is_generating_report:
 # ==========================================
 
 results_ui.render_results_section(st.session_state['sysA'], st.session_state['sysB'], raw_res_A, raw_res_B, nodes_A, nodes_B)
+
+# Re-capture the config-download payload now that the whole script ran:
+# the results UI above writes 'result_mode' after the sidebar rendered, so
+# without this a download taken right after switching Result Type would
+# save the previous selection (Codex review on #37).
+config_download.refresh()
