@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import bricos_solver as solver
 import bricos_viz as viz
+import bricos_export as export_mod
 
 # ==========================================
 # HELPER FUNCTIONS (MATH & FORMATTING)
@@ -532,62 +533,73 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
     # --- TAB 2: DETAILED DATA ---
     with t2:
         st.markdown(f"### Detailed Data ({view_case})")
-        detailed_frames = []
-
-        def process_detailed(r_dict, sys_name):
-            # Build one DataFrame block per element from whole arrays instead
-            # of appending Python dicts per point; on fine meshes this is
-            # orders of magnitude faster.
-            if not r_dict: return
-            for eid, data in r_dict.items():
-                x_vals = np.asarray(data.get('x', []))
-                n_pts = len(x_vals)
-                if n_pts == 0: continue
-
-                def get_arr(key):
-                    arr = data.get(key)
-                    if arr is None: return np.zeros(n_pts)
-                    return np.asarray(arr)
-
-                block = {
-                    "System": np.repeat(sys_name, n_pts),
-                    "Element": np.repeat(eid, n_pts),
-                    "Location [m]": x_vals,
-                }
-                if view_case == "Vehicle Steps":
-                    block.update({
-                        "M [kNm]": get_arr('M'), "V [kN]": get_arr('V'), "N [kN]": get_arr('N'),
-                        "Def_X [mm]": get_arr('def_x') * 1000, "Def_Y [mm]": get_arr('def_y') * 1000,
-                    })
-                else:
-                    is_static_only = 'M_max' not in data and 'M' in data
-                    def env_arr(key):
-                        if is_static_only:
-                            return get_arr(key.replace('_max', '').replace('_min', ''))
-                        return get_arr(key)
-                    block.update({
-                        "M_max [kNm]": env_arr('M_max'), "M_min [kNm]": env_arr('M_min'),
-                        "V_max [kN]": env_arr('V_max'), "V_min [kN]": env_arr('V_min'),
-                        "N_max [kN]": env_arr('N_max'), "N_min [kN]": env_arr('N_min'),
-                        "Def_X_max [mm]": env_arr('def_x_max') * 1000, "Def_X_min [mm]": env_arr('def_x_min') * 1000,
-                        "Def_Y_max [mm]": env_arr('def_y_max') * 1000, "Def_Y_min [mm]": env_arr('def_y_min') * 1000,
-                    })
-                detailed_frames.append(pd.DataFrame(block))
-
-        process_detailed(rA, name_A)
-        if valid_B:
-            process_detailed(rB, name_B)
+        # case_dataframe builds one block per element from whole arrays
+        # instead of appending Python dicts per point; on fine meshes this
+        # is orders of magnitude faster.
+        step_mode = (view_case == "Vehicle Steps")
+        detailed_frames = [
+            df for df in (
+                export_mod.case_dataframe(rA, name_A, step_mode=step_mode),
+                export_mod.case_dataframe(rB, name_B, step_mode=step_mode) if valid_B else None,
+            ) if df is not None
+        ]
 
         if detailed_frames:
             df_detailed = pd.concat(detailed_frames, ignore_index=True)
             st.dataframe(df_detailed, width='stretch')
-            st.download_button(
-                "Download Detailed Data (.csv)",
-                lambda: df_detailed.to_csv(index=False).encode('utf-8'),
-                f"bricos_detailed_{view_case.replace(' ', '_')}.csv",
-                "text/csv",
-                disabled=ui_locked
-            )
+
+            c_dl_csv, c_dl_xlsx = st.columns(2)
+            if view_case == "Total Envelope":
+                # Full QA package: settings + per-load-case unfactored
+                # sheets + Total Envelope per analyzed result mode. Built
+                # lazily - the combinations only run on actual download.
+                def _full_package():
+                    return export_mod.total_envelope_export(
+                        sysA, raw_res_A, sysB, raw_res_B, valid_B)
+
+                c_dl_csv.download_button(
+                    "Download Detailed Data (.csv)",
+                    lambda: export_mod.to_csv_bytes(*_full_package()),
+                    "bricos_total_envelope.csv",
+                    "text/csv",
+                    disabled=ui_locked,
+                    help="Analysis settings block plus all load cases and "
+                         "envelopes as one long-format table."
+                )
+                c_dl_xlsx.download_button(
+                    "Download Detailed Data (.xlsx)",
+                    lambda: export_mod.to_xlsx_bytes(*_full_package()),
+                    "bricos_total_envelope.xlsx",
+                    export_mod.XLSX_MIME,
+                    disabled=ui_locked,
+                    help="Settings tab, one unfactored tab per applied load "
+                         "case, and a Total Envelope tab per analyzed "
+                         "result mode."
+                )
+            else:
+                mode_tags = {"Design (ULS)": "ULS", "Characteristic (SLS)": "SLS"}
+                sheet_name = f"{view_case} ({mode_tags.get(result_mode_val, 'Unfactored')})"
+
+                def _view_xlsx():
+                    settings = export_mod.settings_dataframe(
+                        sysA, sysB, raw_res_A, raw_res_B, valid_B)
+                    return export_mod.to_xlsx_bytes(settings, {sheet_name: df_detailed})
+
+                c_dl_csv.download_button(
+                    "Download Detailed Data (.csv)",
+                    lambda: df_detailed.to_csv(index=False).encode('utf-8'),
+                    f"bricos_detailed_{view_case.replace(' ', '_')}.csv",
+                    "text/csv",
+                    disabled=ui_locked
+                )
+                c_dl_xlsx.download_button(
+                    "Download Detailed Data (.xlsx)",
+                    _view_xlsx,
+                    f"bricos_detailed_{view_case.replace(' ', '_')}.xlsx",
+                    export_mod.XLSX_MIME,
+                    disabled=ui_locked,
+                    help="The displayed table plus a Settings tab."
+                )
         else:
             st.info("No detailed data available for this view.")
 
