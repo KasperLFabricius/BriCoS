@@ -163,6 +163,98 @@ def test_force_ui_update_restores_soil_gamma_selector():
     assert st.session_state["sysA_gj_sel"] == "1.1"
 
 
+def test_factor_preset_entry_matches_presets_and_custom():
+    assert data.factor_preset_entry(1.1, data.GAMMA_G_PRESETS) == 1.10
+    assert data.factor_preset_entry(1.25, data.GAMMA_G_PRESETS) == 1.25
+    assert data.factor_preset_entry(1.17, data.GAMMA_G_PRESETS) == "Custom"
+    assert data.factor_preset_entry(None, data.GAMMA_G_PRESETS, 1.0) == 1.0
+    assert data.factor_preset_entry("not a number", data.GAMMA_G_PRESETS) == "Custom"
+    # Float noise from saved files snaps to the preset.
+    assert data.factor_preset_entry(0.56 + 1e-12, data.GAMMA_UDL_PRESETS) == 0.56
+
+
+def test_force_ui_update_restores_all_factor_preset_selectors():
+    # v0.64: every preset selector follows the stored value on
+    # load/copy/reset - left stale, a selector re-applies its old preset on
+    # the next rerun and silently overwrites the loaded factor (the
+    # gamma_j/udl_gap fix of v0.58, completed for the whole factor set).
+    st = data.st
+    st.session_state.clear()
+    params = data.get_def()
+    params.update({
+        "gamma_g": 1.25, "gamma_veh": 1.40, "gamma_vehB": 0.56,
+        "gamma_udl": 1.40, "sls_g": 0.9, "sls_j": 0.9,
+        "sls_veh": 0.75, "sls_vehB": 1.0, "sls_udl": 1.0,
+    })
+    stale = {
+        "sysA_gg_sel": 1.0, "sysA_gamA_sel": 1.0, "sysA_gamB_sel": 1.0,
+        "sysA_gudl_sel": 0.56, "sysA_slsg_sel": 1.0, "sysA_slsj_sel": 1.0,
+        "sysA_slsA_sel": 1.0, "sysA_slsB_sel": 0.75, "sysA_slsudl_sel": 0.40,
+    }
+    st.session_state.update(stale)
+
+    data.force_ui_update("sysA", params)
+
+    assert st.session_state["sysA_gg_sel"] == 1.25
+    assert st.session_state["sysA_gamA_sel"] == 1.40
+    assert st.session_state["sysA_gamB_sel"] == 0.56
+    assert st.session_state["sysA_gudl_sel"] == 1.40
+    assert st.session_state["sysA_slsg_sel"] == 0.9
+    assert st.session_state["sysA_slsj_sel"] == 0.9
+    assert st.session_state["sysA_slsA_sel"] == 0.75
+    assert st.session_state["sysA_slsB_sel"] == 1.0
+    assert st.session_state["sysA_slsudl_sel"] == 1.0
+
+    # Non-preset values land on Custom with the custom input carrying them.
+    params["gamma_veh"] = 1.17
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_gamA_sel"] == "Custom"
+    assert st.session_state["sysA_gamA_cust"] == 1.17
+
+
+def test_force_ui_update_snaps_kfi_to_preset_or_drops_the_key():
+    # KFI has no Custom option: a non-preset session value would crash the
+    # selectbox, so the key is dropped and the index fallback applies.
+    st = data.st
+    st.session_state.clear()
+    params = data.get_def()
+
+    params["KFI"] = 1.1 + 1e-12  # float noise from a saved file
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_kfi"] == 1.1
+
+    params["KFI"] = 1.05  # hand-edited file, not a preset
+    data.force_ui_update("sysA", params)
+    assert "sysA_kfi" not in st.session_state
+
+
+def test_force_ui_update_restores_support_type_selectors():
+    # A stale support type selector re-applies its old preset on the next
+    # rerun and overwrites BOTH the loaded type and its spring vector.
+    st = data.st
+    st.session_state.clear()
+    params = data.get_def()
+    params["supports"] = [
+        {"type": "Custom Spring", "k": [1e5, 2e5, 0.0]},
+        {"type": "Pinned", "k": [1e14, 1e14, 0.0]},
+    ]
+    st.session_state["sysA_supp_t_0"] = "Fixed"   # stale
+    st.session_state["sysA_supp_t_5"] = "Pinned"  # stale leftover index
+
+    data.force_ui_update("sysA", params)
+
+    assert st.session_state["sysA_supp_t_0"] == "Custom Spring"
+    assert st.session_state["sysA_supp_t_1"] == "Pinned"
+    assert "sysA_supp_t_5" not in st.session_state
+    assert st.session_state["sysA_kx_0"] == 1e5
+    assert st.session_state["sysA_ky_0"] == 2e5
+    # Legacy/unknown type names map to Custom Spring (same as the UI).
+    params["supports"] = [{"type": "Roller X", "k": [0.0, 1e14, 0.0]}]
+    data.force_ui_update("sysA", params)
+    assert st.session_state["sysA_supp_t_0"] == "Custom Spring"
+    assert st.session_state["sysA_kx_0"] == 0.0
+
+
 def test_get_clear_initializes_empty_vehicle_and_surcharge_state():
     params = data.get_clear("A", "Beam")
 

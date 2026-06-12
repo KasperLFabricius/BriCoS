@@ -1,10 +1,15 @@
 import hashlib
+import itertools
 import json
 
 import streamlit as st
 import numpy as np
 import bricos_kernels as kernels
 import bricos_data as data_mod
+
+# Process-unique tokens identifying raw analysis results; see the
+# combine_results memo.
+_combine_token_counter = itertools.count(1)
 
 # ==========================================
 # 1. CORE FEM CLASSES & FUNCTIONS
@@ -539,9 +544,11 @@ def _solver_cache_hash(cache_params, phi_val_override):
 
 
 def clear_solver_cache():
-    """Drop all cached raw-analysis results (used by tests and migrations)."""
+    """Drop all cached raw-analysis results and combined results (used by
+    tests and migrations)."""
     try:
         st.session_state.pop(_SOLVER_CACHE_KEY, None)
+        st.session_state.pop(_COMBINE_MEMO_KEY, None)
     except Exception:
         pass
 
@@ -1677,7 +1684,11 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         # zero-height wall places its restraint at the top node (200+i),
         # which coordinate/id heuristics misclassify as a free node.
         'Restrained Nodes': sorted(restraints.keys()),
-        'Reactions': calculate_reactions(nodes, res_sw)
+        'Reactions': calculate_reactions(nodes, res_sw),
+        # Process-unique identity for the combine_results memo: a raw
+        # result reused from the solver cache keeps its token, a fresh
+        # analysis gets a new one.
+        'combine_token': next(_combine_token_counter),
     }, nodes, model_props, 0
 
 def coupled_vehicle_udl_envelope(steps, f_veh_map, f_veh_default, f_udl):
@@ -1720,7 +1731,64 @@ def coupled_vehicle_udl_envelope(steps, f_veh_map, f_veh_default, f_udl):
     return out
 
 
+# ==========================================
+# COMBINATION MEMO
+# ==========================================
+# Combining is pure in (raw result identity, factor params, result mode),
+# yet it ran from scratch on every Streamlit rerun, on every result-mode
+# switch back and forth, per report chapter (the report generator added a
+# local cache for exactly this) and up to six times per Excel-export
+# click. The memo lives in session state like the raw solver cache;
+# memoized results are shared READ-ONLY objects (the established cache
+# contract - no consumer mutates combined results).
+_COMBINE_MEMO_KEY = '_bricos_combine_memo'
+_COMBINE_MEMO_MAX_ENTRIES = 24
+
+# Every params key combine_results reads. test_combine_memo verifies this
+# list against the implementation's source, so a new params read cannot
+# silently bypass the memo key.
+COMBINE_PARAM_KEYS = (
+    'KFI', 'gamma_g', 'gamma_j', 'gamma_veh', 'gamma_vehB', 'gamma_udl',
+    'phi_mode', 'phi', 'phi_sls_mode', 'phi_sls',
+    'sls_g', 'sls_j', 'sls_veh', 'sls_vehB', 'sls_udl',
+    'combine_surcharge_vehicle',
+)
+
+
+def _combine_memo_lookup_key(raw_res, params, result_mode):
+    """Value-based memo key, or None when the memo must be bypassed
+    (raw results from before the token existed)."""
+    token = raw_res.get('combine_token') if raw_res else None
+    if token is None:
+        return None
+    factors = []
+    for k in COMBINE_PARAM_KEYS:
+        v = params.get(k)
+        if not isinstance(v, (int, float, str, bool, type(None))):
+            v = repr(v)
+        factors.append(v)
+    return (token, result_mode, tuple(factors))
+
+
 def combine_results(raw_res, params, result_mode="Design (ULS)"):
+    key = _combine_memo_lookup_key(raw_res, params, result_mode)
+    if key is None:
+        return _combine_results_impl(raw_res, params, result_mode)
+    try:
+        memo = st.session_state.setdefault(_COMBINE_MEMO_KEY, {})
+    except Exception:
+        return _combine_results_impl(raw_res, params, result_mode)
+    hit = memo.get(key)
+    if hit is not None:
+        return hit
+    out = _combine_results_impl(raw_res, params, result_mode)
+    while len(memo) >= _COMBINE_MEMO_MAX_ENTRIES:
+        memo.pop(next(iter(memo)))
+    memo[key] = out
+    return out
+
+
+def _combine_results_impl(raw_res, params, result_mode):
     KFI = params.get('KFI', 1.0)
     gamma_g = params.get('gamma_g', 1.0)
     gamma_j = params.get('gamma_j', 1.0)
