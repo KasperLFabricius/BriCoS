@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.63"
+APP_VERSION = "0.64"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -366,6 +366,47 @@ def soil_gamma_display(gamma_j, kfi) -> str:
         g = _as_float(gamma_j, 1.0)
         return f"{g:g}" if g is not None else "1"
     return label
+
+
+# Sidebar factor/selector presets. Single source for the selectbox option
+# lists in bricos_main AND for force_ui_update's selector restoration: a
+# load/copy/reset must move every preset selector to match the stored
+# value - left stale, a selector re-applies its old preset on the next
+# rerun and silently overwrites the loaded value (the gamma_j and udl_gap
+# selectors had exactly this bug before v0.58).
+KFI_PRESETS = (0.9, 1.0, 1.1)
+GAMMA_G_PRESETS = (0.9, 1.0, 1.10, 1.25)
+GAMMA_VEH_PRESETS = (0.56, 1.0, 1.05, 1.20, 1.25, 1.40)
+GAMMA_UDL_PRESETS = (0.40, 0.56, 1.0, 1.40)
+SLS_G_PRESETS = (1.0, 0.9)
+SLS_J_PRESETS = (1.0, 0.9)
+SLS_VEH_PRESETS = (1.0, 0.75)
+SLS_VEHB_PRESETS = (0.75, 1.0)
+SLS_UDL_PRESETS = (0.40, 1.0)
+
+# Support type presets with their spring vectors [Kx, Ky, Km]; 'Custom
+# Spring' carries user-defined values. Consumers must COPY the vectors
+# (they are module-level constants).
+SUPPORT_TYPE_PRESETS = {
+    "Fixed": (1e14, 1e14, 1e14),
+    "Pinned": (1e14, 1e14, 0.0),
+    "Roller (X-Free)": (0.0, 1e14, 0.0),
+    "Roller (Y-Free)": (1e14, 0.0, 0.0),
+    "Custom Spring": None,
+}
+
+
+def factor_preset_entry(value, presets, default=None):
+    """Selectbox entry for a stored factor: the matching preset (the float
+    itself - the factor option lists are floats plus 'Custom') or
+    'Custom'."""
+    v = _as_float(value, default)
+    if v is None:
+        return "Custom"
+    for preset in presets:
+        if abs(v - float(preset)) < 1e-9:
+            return preset
+    return "Custom"
 
 
 def parse_vehicle_text(load_text: str, spacing_text: str):
@@ -832,7 +873,15 @@ def force_ui_update(sys_key, data):
     # 1. Main Config Keys
     st.session_state[f"{sys_key}_md_sel"] = data.get('mode', 'Frame')
     st.session_state[f"{sys_key}_emode"] = "Eurocode (f_ck)" if data.get('e_mode') == "Eurocode" else "Manual (E-Modulus)"
-    st.session_state[f"{sys_key}_kfi"] = data.get('KFI', 1.0)
+    # KFI has no Custom option: snap to the matching preset (kills float
+    # noise from saved files); a non-preset value drops the key so the
+    # selectbox falls back to its index logic instead of crashing on a
+    # session value that is not among the options.
+    kfi_entry = factor_preset_entry(data.get('KFI', 1.0), KFI_PRESETS, 1.0)
+    if kfi_entry == "Custom":
+        st.session_state.pop(f"{sys_key}_kfi", None)
+    else:
+        st.session_state[f"{sys_key}_kfi"] = kfi_entry
     st.session_state[f"{sys_key}_phim"] = data.get('phi_mode', 'Calculate')
     st.session_state[f"{sys_key}_phiv"] = data.get('phi', 1.0)
     st.session_state[f"{sys_key}_philinf"] = (
@@ -869,13 +918,26 @@ def force_ui_update(sys_key, data):
     st.session_state[f"{sys_key}_udlgap_sel"] = udl_gap_preset_label(data.get('udl_gap', 10.0))
     st.session_state[f"{sys_key}_udlfoot"] = bool(data.get('udl_footprint', False))
     st.session_state[f"{sys_key}_gudl_cust"] = data.get('gamma_udl', 0.56)
+    st.session_state[f"{sys_key}_gudl_sel"] = factor_preset_entry(
+        data.get('gamma_udl', 0.56), GAMMA_UDL_PRESETS, 0.56)
 
-    # SLS factor set
+    # SLS factor set: custom inputs AND preset selectors (a stale selector
+    # re-applies its old preset on the next rerun, like gamma_j/udl_gap).
     st.session_state[f"{sys_key}_slsg_cust"] = data.get('sls_g', 1.0)
     st.session_state[f"{sys_key}_slsj_cust"] = data.get('sls_j', 1.0)
     st.session_state[f"{sys_key}_slsA_cust"] = data.get('sls_veh', 1.0)
     st.session_state[f"{sys_key}_slsB_cust"] = data.get('sls_vehB', 0.75)
     st.session_state[f"{sys_key}_slsudl_cust"] = data.get('sls_udl', 0.40)
+    st.session_state[f"{sys_key}_slsg_sel"] = factor_preset_entry(
+        data.get('sls_g', 1.0), SLS_G_PRESETS, 1.0)
+    st.session_state[f"{sys_key}_slsj_sel"] = factor_preset_entry(
+        data.get('sls_j', 1.0), SLS_J_PRESETS, 1.0)
+    st.session_state[f"{sys_key}_slsA_sel"] = factor_preset_entry(
+        data.get('sls_veh', 1.0), SLS_VEH_PRESETS, 1.0)
+    st.session_state[f"{sys_key}_slsB_sel"] = factor_preset_entry(
+        data.get('sls_vehB', 0.75), SLS_VEHB_PRESETS, 0.75)
+    st.session_state[f"{sys_key}_slsudl_sel"] = factor_preset_entry(
+        data.get('sls_udl', 0.40), SLS_UDL_PRESETS, 0.40)
     if sys_key == "sysA":
         st.session_state["uls_toggle_sidebar"] = bool(data.get('analyze_uls', True))
         st.session_state["sls_toggle_sidebar"] = bool(data.get('analyze_sls', True))
@@ -889,16 +951,20 @@ def force_ui_update(sys_key, data):
         st.session_state["common_mesh_slider"] = data.get('mesh_size', 0.5)
         st.session_state["common_step_slider"] = data.get('step_size', 0.5)
     
-    # 3. Factors
+    # 3. Factors: custom inputs and preset selectors alike (cf. the SLS
+    # block above for why the selectors must follow the stored values).
     st.session_state[f"{sys_key}_gg_cust"] = data.get('gamma_g', 1.0)
+    st.session_state[f"{sys_key}_gg_sel"] = factor_preset_entry(
+        data.get('gamma_g', 1.0), GAMMA_G_PRESETS, 1.0)
     st.session_state[f"{sys_key}_gj_cust"] = data.get('gamma_j', 1.0)
-    # Restore the soil preset selector too (cf. the udl_gap selector): left
-    # stale, it re-applies its old preset on the next rerun and overwrites
-    # the loaded factor.
     st.session_state[f"{sys_key}_gj_sel"] = soil_gamma_preset_label(
         data.get('gamma_j', 1.0), data.get('KFI', 1.0))
     st.session_state[f"{sys_key}_gamA_cust"] = data.get('gamma_veh', 1.0)
+    st.session_state[f"{sys_key}_gamA_sel"] = factor_preset_entry(
+        data.get('gamma_veh', 1.0), GAMMA_VEH_PRESETS, 1.0)
     st.session_state[f"{sys_key}_gamB_cust"] = data.get('gamma_vehB', 1.0)
+    st.session_state[f"{sys_key}_gamB_sel"] = factor_preset_entry(
+        data.get('gamma_vehB', 1.0), GAMMA_VEH_PRESETS, 1.0)
 
     # 4. Spans & Profiler Keys
     shape_map_rev = {0: "Constant", 1: "Linear (Taper)", 2: "3-Point (Start/Mid/End)"}
@@ -976,14 +1042,22 @@ def force_ui_update(sys_key, data):
     sync_vehicle_widgets_from_params(sys_key, data)
 
     # 7. Supports
-    # Only clear the custom-spring widget keys. A broad "_k" substring match
-    # would also delete unrelated keys such as f"{sys_key}_kfi".
-    spring_prefixes = (f"{sys_key}_kx_", f"{sys_key}_ky_", f"{sys_key}_km_")
+    # Clear the custom-spring widget keys AND the type selectors before
+    # re-seeding: a stale type selector re-applies its old preset on the
+    # next rerun and overwrites a loaded support (type and spring vector
+    # alike). Only prefixed keys - a broad "_k" substring match would also
+    # delete unrelated keys such as f"{sys_key}_kfi".
+    spring_prefixes = (f"{sys_key}_kx_", f"{sys_key}_ky_", f"{sys_key}_km_",
+                       f"{sys_key}_supp_t_")
     supp_keys = [k for k in st.session_state.keys() if k.startswith(spring_prefixes)]
     for k in supp_keys: del st.session_state[k]
-    
+
     for i, supp in enumerate(data.get('supports', [])):
-        if supp['type'] == 'Custom Spring':
+        s_type = supp.get('type', 'Fixed')
+        if s_type not in SUPPORT_TYPE_PRESETS:
+            s_type = 'Custom Spring'
+        st.session_state[f"{sys_key}_supp_t_{i}"] = s_type
+        if s_type == 'Custom Spring':
             st.session_state[f"{sys_key}_kx_{i}"] = supp['k'][0]
             st.session_state[f"{sys_key}_ky_{i}"] = supp['k'][1]
             st.session_state[f"{sys_key}_km_{i}"] = supp['k'][2]
