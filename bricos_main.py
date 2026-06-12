@@ -210,8 +210,11 @@ with st.sidebar.expander("File Operations (Save/Load)", expanded=False):
         if rk not in st.session_state: st.session_state[rk] = ""
 
     # Deferred data callable: the session is serialized only when the user
-    # actually clicks, not on every rerun.
-    st.download_button("Download Configuration (.csv)", data_mod.generate_csv_data, "brico_config.csv", "text/csv", disabled=ui_locked)
+    # actually clicks, not on every rerun. The callable runs on Streamlit's
+    # download thread WITHOUT a script-run context, where st.session_state
+    # is an empty dummy - so the payload must be captured here, at render
+    # time (passing generate_csv_data itself produced empty save files).
+    st.download_button("Download Configuration (.csv)", data_mod.session_csv_builder(), "brico_config.csv", "text/csv", disabled=ui_locked)
 
     uploaded_file = st.file_uploader("Upload Configuration (.csv)", type="csv", key=f"uploader_{st.session_state.uploader_key}", disabled=ui_locked)
     if uploaded_file is not None:
