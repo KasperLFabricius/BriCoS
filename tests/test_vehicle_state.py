@@ -211,6 +211,73 @@ def test_toggling_use_shear_def_after_copy_does_not_change_vehicle_fields():
     assert (copied_b["vehicle"], copied_b["vehicle_loads"], copied_b["vehicle_space"]) == before_b
 
 
+# --- vehicle widget re-seed guard (v0.67) ---
+
+def _sig(params):
+    return data.vehicle_state_signature(params, "vehicle", "vehicle_loads", "vehicle_space")
+
+
+def test_reseed_when_widget_keys_absent():
+    # Garbage-collected widget keys (the other system's sidebar was active)
+    # must always re-seed from the dict.
+    params = _class_100_params()
+    sig = _sig(params)
+    assert data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig,
+        params["vehicle_loads"], params["vehicle_space"], keys_present=False)
+
+
+def test_reseed_when_signature_mismatched():
+    # Out-of-band change (copy/reset/load): stored signature differs.
+    params = _class_100_params()
+    assert data.vehicle_widgets_need_reseed(
+        params, "vehicle", "stale-sig", _sig(params),
+        params["vehicle_loads"], params["vehicle_space"], keys_present=True)
+
+
+def test_reseed_when_browser_submits_empty_text_for_a_stored_vehicle():
+    # The v0.67 bug: an interrupted rerun (e.g. scrubbing the vehicle step
+    # slider) leaves the browser holding empty widget text while the
+    # signature still claims sync and the dict still holds the vehicle.
+    # Accepting the empties would erase the vehicle - so re-seed.
+    params = _class_100_params()
+    sig = _sig(params)
+    assert data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig, "", "", keys_present=True)
+
+
+def test_no_reseed_for_in_sync_non_empty_vehicle():
+    params = _class_100_params()
+    sig = _sig(params)
+    assert not data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig,
+        params["vehicle_loads"], params["vehicle_space"], keys_present=True)
+
+
+def test_no_reseed_for_legitimately_empty_vehicle():
+    # No vehicle in the dict and empty text: nothing to protect, the empty
+    # widgets are correct (e.g. after Clear Vehicle).
+    params = data.get_def()
+    params["vehicle"] = {"loads": [], "spacing": []}
+    params["vehicle_loads"] = ""
+    params["vehicle_space"] = ""
+    sig = _sig(params)
+    assert not data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig, "", "", keys_present=True)
+
+
+def test_no_reseed_while_user_is_typing_a_new_vehicle():
+    # Non-empty text that does not yet match the dict is a normal edit in
+    # progress, not a poisoned-empty submission: do not clobber it.
+    params = data.get_def()
+    params["vehicle"] = {"loads": [], "spacing": []}
+    params["vehicle_loads"] = ""
+    params["vehicle_space"] = ""
+    sig = _sig(params)
+    assert not data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig, "10, 20", "0, 1.5", keys_present=True)
+
+
 def test_selecting_custom_preserves_current_vehicle_text_and_object():
     params = _class_100_params()
     before = params.copy()

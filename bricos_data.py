@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.66"
+APP_VERSION = "0.67"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -527,6 +527,36 @@ def vehicle_state_signature(params: dict, vehicle_key: str, loads_key: str, spac
         'errors': (params.get('_vehicle_text_errors', {}) if params else {}).get(vehicle_key, []),
     }
     return json.dumps(payload, sort_keys=True, default=str)
+
+
+def vehicle_widgets_need_reseed(params, struct_key, stored_sig, current_sig,
+                                loads_text, space_text, keys_present):
+    """Whether the vehicle widget keys must be re-seeded from the
+    calculation dict before the widgets are constructed.
+
+    Reseed when the keys were garbage-collected (widgets not rendered in a
+    run, e.g. while the other system's sidebar was active), when the dict
+    changed out of band (copy/reset/load: signature mismatch) - and when
+    BOTH text widgets are empty while the dict holds a vehicle. The app
+    never produces that last combination itself (clearing the text clears
+    the struct in the same run, and the Clear button empties both), but an
+    INTERRUPTED rerun - e.g. while scrubbing the vehicle step slider,
+    where every step triggers a full re-analysis - can leave the browser
+    holding empty widget state that it then submits wholesale on the next
+    interaction, with the signature still claiming the keys are in sync.
+    Accepting those empties would silently erase the vehicle from the
+    UI and the analysis (v0.67). The explicit 'Clear Vehicle' button
+    remains the way to remove a vehicle.
+    """
+    if not keys_present:
+        return True
+    if stored_sig != current_sig:
+        return True
+    if (not str(loads_text or "").strip()
+            and not str(space_text or "").strip()
+            and bool((params.get(struct_key) or {}).get('loads'))):
+        return True
+    return False
 
 
 def sync_vehicle_widgets_from_params(sys_key: str, params: dict) -> None:
