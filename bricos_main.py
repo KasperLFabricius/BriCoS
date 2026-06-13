@@ -991,28 +991,45 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         last_key = f"{key_class}_last"
         sig_key = f"{curr}_{prefix}_vehicle_sig"
 
-        # The calculation dictionary is the source of truth. If copy/reset/load
-        # changed it since the last render, refresh widget keys before widgets
-        # are constructed so stale Streamlit values cannot overwrite it.
-        # Streamlit garbage-collects widget keys that are not rendered in a
-        # run (e.g. while the other system's sidebar is active), so missing
-        # keys must also trigger a re-seed - otherwise the empty text inputs
-        # below would silently erase the stored vehicle.
+        # The calculation dictionary is the source of truth. Widget keys are
+        # re-seeded from it whenever they cannot be trusted: garbage-
+        # collected keys, out-of-band dict changes (copy/reset/load), and
+        # empty text submitted by the browser while the dict holds a vehicle
+        # (interrupted reruns can poison the frontend widget state; see
+        # vehicle_widgets_need_reseed). Without the re-seed the empty text
+        # inputs below would silently erase the stored vehicle.
         data_mod.normalize_vehicle_fields(p, struct_key, key_loads, key_space)
         current_sig = data_mod.vehicle_state_signature(p, struct_key, key_loads, key_space)
-        if (st.session_state.get(sig_key) != current_sig
-                or input_key_l not in st.session_state
-                or input_key_s not in st.session_state
-                or sess_key not in st.session_state):
+        keys_present = (input_key_l in st.session_state
+                        and input_key_s in st.session_state
+                        and sess_key in st.session_state)
+        poisoned_empty = data_mod.vehicle_text_poisoned_empty(
+            p, struct_key,
+            st.session_state.get(input_key_l),
+            st.session_state.get(input_key_s),
+            keys_present)
+        if data_mod.vehicle_widgets_need_reseed(
+                p, struct_key, st.session_state.get(sig_key), current_sig,
+                st.session_state.get(input_key_l),
+                st.session_state.get(input_key_s),
+                keys_present):
+            curr_vehicle = p.get(struct_key, {}) if isinstance(p.get(struct_key), dict) else {}
+            # ONLY the poisoned empty-widget recovery recanonicalizes the
+            # text from the vehicle object; the empty widgets carry no
+            # usable text to preserve. Garbage-collected-key and signature-
+            # mismatch reseeds keep p's stored text, which may be invalid
+            # input the user is still editing (do not discard it).
+            if poisoned_empty and curr_vehicle.get('loads'):
+                p[key_loads], p[key_space] = data_mod.format_vehicle_text(curr_vehicle)
             st.session_state[input_key_l] = p.get(key_loads, "")
             st.session_state[input_key_s] = p.get(key_space, "")
-            curr_vehicle = p.get(struct_key, {}) if isinstance(p.get(struct_key), dict) else {}
             st.session_state[sess_key] = data_mod.identify_vehicle_class(
                 curr_vehicle.get('loads', []),
                 curr_vehicle.get('spacing', []),
             )
             st.session_state[last_key] = st.session_state[sess_key]
-            st.session_state[sig_key] = current_sig
+            st.session_state[sig_key] = data_mod.vehicle_state_signature(
+                p, struct_key, key_loads, key_space)
 
         sel_class = st.selectbox(f"Class {prefix}", veh_options, key=sess_key, disabled=ui_locked, help=veh_help_txt)
 
@@ -1029,8 +1046,12 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
                 st.rerun()
 
         # --- TOOLTIP CONFIGURATION ---
-        help_loads = "Define axle loads in tonnes [t], separated by commas. Example: '10, 10, 15'"
-        help_space = "Define incremental axle spacing in meters [m]. The first value must be 0. Subsequent values are distances from the previous axle, not cumulative axle positions. The list length must equal the number of loads. Example: '0, 1.5, 3.0'"
+        help_loads = ("Define axle loads in tonnes [t], separated by commas. Example: '10, 10, 15'. "
+                      "Remove the vehicle with the 'Clear Vehicle' button.")
+        help_space = ("Define incremental axle spacing in meters [m]. The first value must be 0. "
+                      "Subsequent values are distances from the previous axle, not cumulative axle "
+                      "positions. The list length must equal the number of loads. Example: '0, 1.5, 3.0'. "
+                      "Remove the vehicle with the 'Clear Vehicle' button.")
 
         p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, disabled=ui_locked, help=help_loads)
         p[key_space] = st.text_input(f"Axle spacing {prefix} [m]", key=input_key_s, disabled=ui_locked, help=help_space)

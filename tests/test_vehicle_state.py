@@ -211,6 +211,123 @@ def test_toggling_use_shear_def_after_copy_does_not_change_vehicle_fields():
     assert (copied_b["vehicle"], copied_b["vehicle_loads"], copied_b["vehicle_space"]) == before_b
 
 
+# --- vehicle widget re-seed guard (v0.67) ---
+
+def _sig(params):
+    return data.vehicle_state_signature(params, "vehicle", "vehicle_loads", "vehicle_space")
+
+
+def test_reseed_when_widget_keys_absent():
+    # Garbage-collected widget keys (the other system's sidebar was active)
+    # must always re-seed from the dict.
+    params = _class_100_params()
+    sig = _sig(params)
+    assert data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig,
+        params["vehicle_loads"], params["vehicle_space"], keys_present=False)
+
+
+def test_reseed_when_signature_mismatched():
+    # Out-of-band change (copy/reset/load): stored signature differs.
+    params = _class_100_params()
+    assert data.vehicle_widgets_need_reseed(
+        params, "vehicle", "stale-sig", _sig(params),
+        params["vehicle_loads"], params["vehicle_space"], keys_present=True)
+
+
+def test_reseed_when_browser_submits_empty_text_for_a_stored_vehicle():
+    # The v0.67 bug: an interrupted rerun (e.g. scrubbing the vehicle step
+    # slider) leaves the browser holding empty widget text while the
+    # signature still claims sync and the dict still holds the vehicle.
+    # Accepting the empties would erase the vehicle - so re-seed.
+    params = _class_100_params()
+    sig = _sig(params)
+    assert data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig, "", "", keys_present=True)
+
+
+def test_no_reseed_for_in_sync_non_empty_vehicle():
+    params = _class_100_params()
+    sig = _sig(params)
+    assert not data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig,
+        params["vehicle_loads"], params["vehicle_space"], keys_present=True)
+
+
+def test_no_reseed_for_legitimately_empty_vehicle():
+    # No vehicle in the dict and empty text: nothing to protect, the empty
+    # widgets are correct (e.g. after Clear Vehicle).
+    params = data.get_def()
+    params["vehicle"] = {"loads": [], "spacing": []}
+    params["vehicle_loads"] = ""
+    params["vehicle_space"] = ""
+    sig = _sig(params)
+    assert not data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig, "", "", keys_present=True)
+
+
+def test_no_reseed_while_user_is_typing_a_new_vehicle():
+    # Non-empty text that does not yet match the dict is a normal edit in
+    # progress, not a poisoned-empty submission: do not clobber it.
+    params = data.get_def()
+    params["vehicle"] = {"loads": [], "spacing": []}
+    params["vehicle_loads"] = ""
+    params["vehicle_space"] = ""
+    sig = _sig(params)
+    assert not data.vehicle_widgets_need_reseed(
+        params, "vehicle", sig, sig, "10, 20", "0, 1.5", keys_present=True)
+
+
+# --- poisoned-empty predicate (gates text recanonicalization, v0.67) ---
+
+def test_poisoned_empty_only_for_empty_both_with_stored_vehicle():
+    params = _class_100_params()
+    # Both widgets empty + struct populated = poisoned (recanonicalize).
+    assert data.vehicle_text_poisoned_empty(params, "vehicle", "", "", keys_present=True)
+    # Only one empty: a normal mid-edit, not poisoned.
+    assert not data.vehicle_text_poisoned_empty(params, "vehicle", "", "0, 1.4", keys_present=True)
+    # Non-empty text: not poisoned.
+    assert not data.vehicle_text_poisoned_empty(params, "vehicle", "10", "0", keys_present=True)
+
+
+def test_poisoned_empty_false_when_keys_absent_so_gc_reseed_preserves_text():
+    # Garbage-collected keys are NOT the poisoned-empty case: the reseed
+    # there must preserve p's stored text (which may be invalid input the
+    # user is editing), not recanonicalize from the object.
+    params = _class_100_params()
+    assert not data.vehicle_text_poisoned_empty(params, "vehicle", None, None, keys_present=False)
+
+
+def test_poisoned_empty_false_when_struct_already_empty():
+    params = data.get_def()
+    params["vehicle"] = {"loads": [], "spacing": []}
+    params["vehicle_loads"] = ""
+    params["vehicle_space"] = ""
+    assert not data.vehicle_text_poisoned_empty(params, "vehicle", "", "", keys_present=True)
+
+
+def test_invalid_vehicle_text_is_preserved_through_a_gc_reseed():
+    # Codex review on #38: a GC reseed (or signature-mismatch reseed) must
+    # keep the user's INVALID in-progress text and its validation error -
+    # not silently replace it with the last valid vehicle's canonical text.
+    # The poisoned-empty predicate (the only recanonicalizing path) must be
+    # False here, so bricos_main reseeds from the stored invalid text.
+    params = _class_100_params()
+    # User types mismatched text (2 loads, 1 spacing): normalize records the
+    # error and preserves both the invalid text and the last valid object.
+    params["vehicle_loads"] = "10, 20"
+    params["vehicle_space"] = "0"
+    errors = data.normalize_vehicle_fields(params, "vehicle", "vehicle_loads", "vehicle_space")
+    assert errors and params["vehicle_loads"] == "10, 20"
+
+    # Keys garbage-collected by a system switch: reseed is needed, but it is
+    # NOT the poisoned-empty path, so the invalid text is preserved.
+    assert data.vehicle_widgets_need_reseed(
+        params, "vehicle", "stale", _sig(params), None, None, keys_present=False)
+    assert not data.vehicle_text_poisoned_empty(
+        params, "vehicle", None, None, keys_present=False)
+
+
 def test_selecting_custom_preserves_current_vehicle_text_and_object():
     params = _class_100_params()
     before = params.copy()
