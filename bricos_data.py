@@ -529,6 +529,25 @@ def vehicle_state_signature(params: dict, vehicle_key: str, loads_key: str, spac
     return json.dumps(payload, sort_keys=True, default=str)
 
 
+def vehicle_text_poisoned_empty(params, struct_key, loads_text, space_text, keys_present):
+    """True only for the interrupted-rerun poisoned state: both vehicle
+    text widgets present-but-empty while the dict still holds a vehicle.
+
+    The app never produces this itself - clearing the text clears the
+    struct in the same run, and the Clear button empties both - so an
+    empty-both against a populated struct can only be a stale frontend
+    submission from a rerun that was interrupted mid-flight (e.g. scrubbing
+    the vehicle step slider, where every increment triggers a full
+    re-analysis). This is the ONLY reseed case that recanonicalizes the
+    text from the vehicle object; every other reseed preserves the stored
+    text, which may be invalid input the user is still editing.
+    """
+    return (keys_present
+            and not str(loads_text or "").strip()
+            and not str(space_text or "").strip()
+            and bool((params.get(struct_key) or {}).get('loads')))
+
+
 def vehicle_widgets_need_reseed(params, struct_key, stored_sig, current_sig,
                                 loads_text, space_text, keys_present):
     """Whether the vehicle widget keys must be re-seeded from the
@@ -536,27 +555,17 @@ def vehicle_widgets_need_reseed(params, struct_key, stored_sig, current_sig,
 
     Reseed when the keys were garbage-collected (widgets not rendered in a
     run, e.g. while the other system's sidebar was active), when the dict
-    changed out of band (copy/reset/load: signature mismatch) - and when
-    BOTH text widgets are empty while the dict holds a vehicle. The app
-    never produces that last combination itself (clearing the text clears
-    the struct in the same run, and the Clear button empties both), but an
-    INTERRUPTED rerun - e.g. while scrubbing the vehicle step slider,
-    where every step triggers a full re-analysis - can leave the browser
-    holding empty widget state that it then submits wholesale on the next
-    interaction, with the signature still claiming the keys are in sync.
-    Accepting those empties would silently erase the vehicle from the
-    UI and the analysis (v0.67). The explicit 'Clear Vehicle' button
-    remains the way to remove a vehicle.
+    changed out of band (copy/reset/load: signature mismatch), or when the
+    widgets are in the poisoned empty-both state (see
+    vehicle_text_poisoned_empty). Accepting the poisoned empties would
+    silently erase the vehicle from the UI and the analysis (v0.67); the
+    explicit 'Clear Vehicle' button remains the way to remove a vehicle.
     """
     if not keys_present:
         return True
     if stored_sig != current_sig:
         return True
-    if (not str(loads_text or "").strip()
-            and not str(space_text or "").strip()
-            and bool((params.get(struct_key) or {}).get('loads'))):
-        return True
-    return False
+    return vehicle_text_poisoned_empty(params, struct_key, loads_text, space_text, keys_present)
 
 
 def sync_vehicle_widgets_from_params(sys_key: str, params: dict) -> None:

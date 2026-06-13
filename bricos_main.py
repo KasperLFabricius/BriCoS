@@ -1003,16 +1003,23 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         keys_present = (input_key_l in st.session_state
                         and input_key_s in st.session_state
                         and sess_key in st.session_state)
+        poisoned_empty = data_mod.vehicle_text_poisoned_empty(
+            p, struct_key,
+            st.session_state.get(input_key_l),
+            st.session_state.get(input_key_s),
+            keys_present)
         if data_mod.vehicle_widgets_need_reseed(
                 p, struct_key, st.session_state.get(sig_key), current_sig,
                 st.session_state.get(input_key_l),
                 st.session_state.get(input_key_s),
                 keys_present):
             curr_vehicle = p.get(struct_key, {}) if isinstance(p.get(struct_key), dict) else {}
-            # Restore the text from the vehicle object (the source of truth)
-            # so the boxes are always consistent with it, even if p's text
-            # fields were left half-edited by an interrupted rerun.
-            if curr_vehicle.get('loads'):
+            # ONLY the poisoned empty-widget recovery recanonicalizes the
+            # text from the vehicle object; the empty widgets carry no
+            # usable text to preserve. Garbage-collected-key and signature-
+            # mismatch reseeds keep p's stored text, which may be invalid
+            # input the user is still editing (do not discard it).
+            if poisoned_empty and curr_vehicle.get('loads'):
                 p[key_loads], p[key_space] = data_mod.format_vehicle_text(curr_vehicle)
             st.session_state[input_key_l] = p.get(key_loads, "")
             st.session_state[input_key_s] = p.get(key_space, "")
