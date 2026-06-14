@@ -1181,14 +1181,22 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
         p[key_loads] = st.text_input(f"Loads {prefix} [t]", key=input_key_l, disabled=ui_locked, help=help_loads)
         p[key_space] = st.text_input(f"Axle spacing {prefix} [m]", key=input_key_s, disabled=ui_locked, help=help_space)
 
-        if st.button(f"Clear Vehicle {prefix}", key=f"{curr}_{prefix}_clear_vehicle", disabled=ui_locked):
+        def _clear_vehicle():
+            # Run as the button's on_click callback. Callbacks execute at the
+            # start of the rerun, BEFORE the widgets are instantiated, so the
+            # loads/spacing text_input keys and the class selectbox key can be
+            # reset here. Doing it inline after those widgets were created (the
+            # previous approach) raised StreamlitAPIException ("cannot be
+            # modified after the widget ... was instantiated").
             data_mod.clear_vehicle_definition(p, struct_key, key_loads, key_space)
             st.session_state[input_key_l] = ""
             st.session_state[input_key_s] = ""
             st.session_state[sess_key] = "Custom"
             st.session_state[last_key] = "Custom"
             st.session_state[sig_key] = data_mod.vehicle_state_signature(p, struct_key, key_loads, key_space)
-            st.rerun()
+
+        st.button(f"Clear Vehicle {prefix}", key=f"{curr}_{prefix}_clear_vehicle",
+                  disabled=ui_locked, on_click=_clear_vehicle)
 
         if not str(p.get(key_loads, "")).strip() and not str(p.get(key_space, "")).strip():
             data_mod.clear_vehicle_definition(p, struct_key, key_loads, key_space)
