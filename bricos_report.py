@@ -982,47 +982,77 @@ class BricosReportGenerator:
         else:
             scope = "per span" if p.get('phi_manual_scope') == 'Per span' else "global"
             phi_txt = f"{self._phi_display_text(p, raw_res)} (Manual, {scope})"
-        sls_mode = p.get('phi_sls_mode', 'Same')
-        if sys_has_vehicle and sls_mode == 'Reduced':
-            phi_txt += " | SLS reduced per Vejl. 5.4.2"
-        elif sys_has_vehicle and sls_mode == 'Manual':
-            phi_txt += f" | SLS manual = {p.get('phi_sls', 1.0):.3f}"
-
         analyze_uls = bool(p.get('analyze_uls', True))
         analyze_sls = bool(p.get('analyze_sls', True))
+        sls_mode = p.get('phi_sls_mode', 'Same')
+        # The SLS Phi treatment only matters when SLS is analyzed.
+        if sys_has_vehicle and analyze_sls and sls_mode == 'Reduced':
+            phi_txt += " | SLS reduced per Vejl. 5.4.2"
+        elif sys_has_vehicle and analyze_sls and sls_mode == 'Manual':
+            phi_txt += f" | SLS manual = {p.get('phi_sls', 1.0):.3f}"
+
         ls_txt = ("ULS and SLS" if analyze_uls and analyze_sls else
                   "ULS only" if analyze_uls else
                   "SLS only" if analyze_sls else
                   "none (unfactored combination only)")
-        self.elements.append(Paragraph(
-            f"<b>Limit states analyzed:</b> {ls_txt} | <b>Φ:</b> {phi_txt}",
-            self.styles['SwecoBody']))
+        # Phi is not applied in the unfactored combination, so the dynamic
+        # factor is omitted from the line when neither limit state is analyzed.
+        if analyze_uls or analyze_sls:
+            self.elements.append(Paragraph(
+                f"<b>Limit states analyzed:</b> {ls_txt} | <b>Φ:</b> {phi_txt}",
+                self.styles['SwecoBody']))
+        else:
+            self.elements.append(Paragraph(
+                f"<b>Limit states analyzed:</b> {ls_txt}",
+                self.styles['SwecoBody']))
 
-        # Combination factor table: one row per load component, the ULS
-        # partial factor (multiplied by KFI) and the SLS combination factor.
+        # Combination factor table: one row per load component. A factored
+        # report shows the ULS partial factor (x KFI), the SLS combination
+        # factor and the dynamic factor. An unfactored-only report (no limit
+        # state analyzed) instead documents the actual combination - every
+        # load at factor 1.0 with no dynamic factor - rather than the stored
+        # ULS/SLS factors, which feed no combination there.
         kfi = p.get('KFI', 1.0)
-        uls_col = f"ULS factor (× KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
-        sls_col = "SLS factor" if analyze_sls else "SLS factor (not analyzed)"
-        fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
-        if p.get('auto_selfweight', False):
-            fact_rows.append(["Self-weight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
-        fact_rows.append(["Dead Load", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
-        if p.get('soil'):
-            # Presets by label: the '1.0 (No KFI)' option must never leak
-            # its raw stored value (1/KFI).
-            gj_txt = data_mod.soil_gamma_display(p.get('gamma_j', 1.0), kfi)
-            fact_rows.append(["Soil", gj_txt, f"{p.get('sls_j', 1.0)}", "-"])
-        if bool(p.get('vehicle', {}).get('loads')):
-            fact_rows.append(["Vehicle A", f"{p.get('gamma_veh', 1.0)}", f"{p.get('sls_veh', 1.0)}", "Φ applied"])
-        if bool(p.get('vehicleB', {}).get('loads')):
-            fact_rows.append(["Vehicle B", f"{p.get('gamma_vehB', 1.0)}", f"{p.get('sls_vehB', 1.0)}", "Φ applied"])
         udl_line = data_mod.udl_line_load(p)
-        if udl_line > 0.0:
-            fact_rows.append(["Traffic UDL", f"{p.get('gamma_udl', 0.56)}", f"{p.get('sls_udl', 0.40)}",
-                              "not applied (intensity includes the dynamic increment, DK NA A.2.3.2)"])
-        if p.get('surcharge'):
-            fact_rows.append(["Surcharge", f"{p.get('gamma_veh', 1.0)} (= Vehicle A)", f"{p.get('sls_veh', 1.0)} (= Vehicle A)", "not applied (static)"])
-        t = self._make_std_table(fact_rows, [3.2*cm, 4.4*cm, 4.0*cm, 5.6*cm], font_size=8)
+        if analyze_uls or analyze_sls:
+            uls_col = f"ULS factor (× KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
+            sls_col = "SLS factor" if analyze_sls else "SLS factor (not analyzed)"
+            fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
+            if p.get('auto_selfweight', False):
+                fact_rows.append(["Self-weight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
+            fact_rows.append(["Dead Load", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
+            if p.get('soil'):
+                # Presets by label: the '1.0 (No KFI)' option must never leak
+                # its raw stored value (1/KFI).
+                gj_txt = data_mod.soil_gamma_display(p.get('gamma_j', 1.0), kfi)
+                fact_rows.append(["Soil", gj_txt, f"{p.get('sls_j', 1.0)}", "-"])
+            if bool(p.get('vehicle', {}).get('loads')):
+                fact_rows.append(["Vehicle A", f"{p.get('gamma_veh', 1.0)}", f"{p.get('sls_veh', 1.0)}", "Φ applied"])
+            if bool(p.get('vehicleB', {}).get('loads')):
+                fact_rows.append(["Vehicle B", f"{p.get('gamma_vehB', 1.0)}", f"{p.get('sls_vehB', 1.0)}", "Φ applied"])
+            if udl_line > 0.0:
+                fact_rows.append(["Traffic UDL", f"{p.get('gamma_udl', 0.56)}", f"{p.get('sls_udl', 0.40)}",
+                                  "not applied (intensity includes the dynamic increment, DK NA A.2.3.2)"])
+            if p.get('surcharge'):
+                fact_rows.append(["Surcharge", f"{p.get('gamma_veh', 1.0)} (= Vehicle A)", f"{p.get('sls_veh', 1.0)} (= Vehicle A)", "not applied (static)"])
+            t = self._make_std_table(fact_rows, [3.2*cm, 4.4*cm, 4.0*cm, 5.6*cm], font_size=8)
+        else:
+            fact_rows = [["Load component", "Combination factor", "Dynamic factor"]]
+            if p.get('auto_selfweight', False):
+                fact_rows.append(["Self-weight", "1.0", "-"])
+            fact_rows.append(["Dead Load", "1.0", "-"])
+            if p.get('soil'):
+                fact_rows.append(["Soil", "1.0", "-"])
+            if bool(p.get('vehicle', {}).get('loads')):
+                fact_rows.append(["Vehicle A", "1.0", "not applied"])
+            if bool(p.get('vehicleB', {}).get('loads')):
+                fact_rows.append(["Vehicle B", "1.0", "not applied"])
+            if udl_line > 0.0:
+                fact_rows.append(["Traffic UDL", "1.0",
+                                  "not applied (intensity includes the dynamic increment, DK NA A.2.3.2)"])
+            if p.get('surcharge'):
+                fact_rows.append(["Surcharge", "1.0", "not applied (static)"])
+            t = self._make_std_table(fact_rows, [4.0*cm, 4.0*cm, 9.2*cm], font_size=8)
         self.elements.append(KeepTogether([t]))
 
         if udl_line > 0.0:
@@ -1183,10 +1213,12 @@ class BricosReportGenerator:
                     self.styles['SwecoBody']))
                 self.elements.append(Spacer(1, 0.2*cm))
 
-        # 6. DYNAMIC FACTOR (PHI)
-        if raw_res:
+        # 6. DYNAMIC FACTOR (PHI). Only ULS/SLS apply Phi; the unfactored
+        # combination never does, so the whole section is omitted when neither
+        # limit state is analyzed.
+        if raw_res and (analyze_uls or analyze_sls):
             if sys_has_vehicle:
-                self._add_dynamic_factor_section(p, raw_res)
+                self._add_dynamic_factor_section(p, raw_res, analyze_sls)
             else:
                 self.elements.append(Spacer(1, 0.2*cm))
                 self.elements.append(Paragraph(
@@ -1269,9 +1301,10 @@ class BricosReportGenerator:
         # cannot strand them at the bottom of the previous page.
         self.elements.append(KeepTogether([heading, explanation, t]))
 
-    def _add_dynamic_factor_section(self, p, raw_res):
-        """Methodology statement, per-member phi table (ULS and SLS values),
-        and the calculation log for the dynamic factor."""
+    def _add_dynamic_factor_section(self, p, raw_res, analyze_sls=True):
+        """Methodology statement, per-member phi table and the calculation log
+        for the dynamic factor. The SLS column and the SLS-treatment note are
+        shown only when SLS analysis is enabled."""
         self.elements.append(Spacer(1, 0.2*cm))
         self.elements.append(Paragraph("Dynamic Factor (<i>Φ</i>):", self.styles['SwecoSmall']))
 
@@ -1299,12 +1332,12 @@ class BricosReportGenerator:
         self.elements.append(Paragraph(method_txt, self.styles['SwecoFormula']))
 
         sls_mode = p.get('phi_sls_mode', 'Same')
-        if sls_mode == 'Reduced':
+        if analyze_sls and sls_mode == 'Reduced':
             self.elements.append(Paragraph(
                 "SLS reduction enabled: <i>Φ<sub>SLS</sub></i> = 1 + (<i>Φ<sub>ULS</sub></i> - 1)/2 "
                 "per Vejledning til belastnings- og beregningsgrundlag for broer, 5.4.2.",
                 self.styles['SwecoFormula']))
-        elif sls_mode == 'Manual':
+        elif analyze_sls and sls_mode == 'Manual':
             self.elements.append(Paragraph(
                 f"SLS: user-defined uniform <i>Φ<sub>SLS</sub></i> = {p.get('phi_sls', 1.0):.3f} "
                 "replaces all member values in the Characteristic (SLS) result mode.",
@@ -1318,21 +1351,25 @@ class BricosReportGenerator:
         members = raw_res.get('Phi Members') or {}
 
         def fmt_row(label, val):
-            if sls_mode == 'Reduced':
-                sls_note = f"{1.0 + (val - 1.0) / 2.0:.3f}"
-            elif sls_mode == 'Manual':
-                sls_note = f"{p.get('phi_sls', 1.0):.3f} (manual)"
-            else:
-                sls_note = f"{val:.3f} (no reduction)"
-            return [label, f"{val:.3f}", sls_note]
+            row = [label, f"{val:.3f}"]
+            if analyze_sls:
+                if sls_mode == 'Reduced':
+                    sls_note = f"{1.0 + (val - 1.0) / 2.0:.3f}"
+                elif sls_mode == 'Manual':
+                    sls_note = f"{p.get('phi_sls', 1.0):.3f} (manual)"
+                else:
+                    sls_note = f"{val:.3f} (no reduction)"
+                row.append(sls_note)
+            return row
 
-        phi_table = [["Member", "Φ (ULS)", "Φ (SLS)"]]
+        phi_table = [["Member", "Φ (ULS)"] + (["Φ (SLS)"] if analyze_sls else [])]
         if members:
             for eid in sorted(members.keys(), key=lambda x: (x[0], int(x[1:]))):
                 phi_table.append(fmt_row(eid, members[eid]))
         else:
             phi_table.append(fmt_row("All members", phi_uniform))
-        t = self._make_std_table(phi_table, [4*cm, 3.5*cm, 4.5*cm], font_size=8)
+        col_widths = [4*cm, 3.5*cm, 4.5*cm] if analyze_sls else [6*cm, 4*cm]
+        t = self._make_std_table(phi_table, col_widths, font_size=8)
         self.elements.append(KeepTogether([t]))
 
         # Calculation log.
