@@ -68,8 +68,8 @@ def test_factor_change_busts_the_memo_and_scales_correctly(raw_and_params):
     out = solver.combine_results(raw, changed, "Design (ULS)")
     assert out is not base
     np.testing.assert_allclose(
-        out["Selfweight"]["S1"]["M_max"],
-        np.asarray(base["Selfweight"]["S1"]["M_max"]) * 1.35, atol=1e-9)
+        out["Dead Load"]["S1"]["M_max"],
+        np.asarray(base["Dead Load"]["S1"]["M_max"]) * 1.35, atol=1e-9)
 
     # Reverting the factor hits the original entry again.
     assert solver.combine_results(raw, params, "Design (ULS)") is base

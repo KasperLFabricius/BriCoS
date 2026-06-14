@@ -445,8 +445,8 @@ class BricosReportGenerator:
         prog_step = prog_total_span / max(1, active_comps)
         
         if has_sw:
-            self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Selfweight (Unfactored)", self.styles['SwecoSubHeader']))
-            self._add_component_section("Selfweight", prog_range=(prog_start, prog_start + prog_step))
+            self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Dead Load (Unfactored)", self.styles['SwecoSubHeader']))
+            self._add_component_section("Dead Load", prog_range=(prog_start, prog_start + prog_step))
             self.elements.append(PageBreak())
             self.chapter_count += 1
             prog_start += prog_step
@@ -984,7 +984,7 @@ class BricosReportGenerator:
         uls_col = f"ULS factor (× KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
         sls_col = "SLS factor" if analyze_sls else "SLS factor (not analyzed)"
         fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
-        fact_rows.append(["Selfweight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
+        fact_rows.append(["Dead Load", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
         if p.get('soil'):
             # Presets by label: the '1.0 (No KFI)' option must never leak
             # its raw stored value (1/KFI).
@@ -1187,7 +1187,7 @@ class BricosReportGenerator:
         the residual check remains meaningful at zero sums.
         """
         rows = [["Load case", "Sum applied Fx / Fy [kN]", "Sum reactions Rx / Ry [kN]", "Residual Fx / Fy [kN]", "Status"]]
-        for case in ('Selfweight', 'Soil', 'Surcharge'):
+        for case in ('Dead Load', 'Soil', 'Surcharge'):
             eq = equilibrium.get(case)
             if not eq:
                 continue
@@ -1409,7 +1409,7 @@ class BricosReportGenerator:
                 'type_base': t_code, 'title': f"{t_title} - {self.params_A['name']}", 
                 'load_case_name': "Total Envelope",
                 'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                'geom_A': self.raw_A.get('Selfweight'), 'geom_B': None,
+                'geom_A': self.raw_A.get('Dead Load'), 'geom_B': None,
                 'params_A': self.params_A, 'params_B': self.params_B,
                 'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5,
                 'export_scale': 1.0
@@ -1422,7 +1422,7 @@ class BricosReportGenerator:
                     'type_base': t_code, 'title': f"{t_title} - {self.params_B['name']}", 
                     'load_case_name': "Total Envelope",
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                    'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
+                    'geom_A': None, 'geom_B': self.raw_B.get('Dead Load'),
                     'params_A': self.params_A, 'params_B': self.params_B,
                     'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5,
                     'export_scale': 1.0
@@ -1448,7 +1448,7 @@ class BricosReportGenerator:
     @staticmethod
     def _system_has_component(params, load_key):
         """Whether a static load component is defined for the given system."""
-        if load_key == "Selfweight":
+        if load_key == "Dead Load":
             return any(v > 0 for v in params.get('sw_list', []))
         if load_key == "Soil":
             return bool(params.get('soil'))
@@ -1480,7 +1480,7 @@ class BricosReportGenerator:
                     'type_base': t_code, 'title': f"{t_title} - {self.params_A['name']}",
                     'load_case_name': load_key,
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                    'geom_A': self.raw_A.get('Selfweight'), 'geom_B': None,
+                    'geom_A': self.raw_A.get('Dead Load'), 'geom_B': None,
                     'params_A': self.params_A, 'params_B': self.params_B,
                     'show_A': True, 'show_B': False, 'show_supports': True, 'font_scale': 1.5,
                     'export_scale': 1.0
@@ -1493,7 +1493,7 @@ class BricosReportGenerator:
                     'type_base': t_code, 'title': f"{t_title} - {self.params_B['name']}",
                     'load_case_name': load_key,
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                    'geom_A': None, 'geom_B': self.raw_B.get('Selfweight'),
+                    'geom_A': None, 'geom_B': self.raw_B.get('Dead Load'),
                     'params_A': self.params_A, 'params_B': self.params_B,
                     'show_A': False, 'show_B': True, 'show_supports': True, 'font_scale': 1.5,
                     'export_scale': 1.0
@@ -1739,7 +1739,7 @@ class BricosReportGenerator:
                     'title': title,
                     'load_case_name': "Vehicle Steps",
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                    'geom_A': self.raw_A.get('Selfweight'), 'geom_B': self.raw_B.get('Selfweight'),
+                    'geom_A': self.raw_A.get('Dead Load'), 'geom_B': self.raw_B.get('Dead Load'),
                     'show_A': is_A, 'show_B': (not is_A),
                     'params_A': self.params_A, 'params_B': self.params_B,
                     'show_supports': True, 'font_scale': 1.5

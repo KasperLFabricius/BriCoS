@@ -50,7 +50,7 @@ def _frame_params():
 
 def test_simply_supported_beam_signs():
     raw, _ = _run(_ss_beam_params())
-    sw = raw["Selfweight"]["S1"]
+    sw = raw["Dead Load"]["S1"]
     i_mid = len(sw["x"]) // 2
 
     # Sagging positive: closed form wL^2/8 = +125 kNm.
@@ -80,8 +80,8 @@ def test_moving_load_envelope_sagging_is_max():
 
 def test_frame_compression_and_corner_hogging_signs():
     raw, _ = _run(_frame_params())
-    w1 = raw["Selfweight"]["W1"]
-    s1 = raw["Selfweight"]["S1"]
+    w1 = raw["Dead Load"]["W1"]
+    s1 = raw["Dead Load"]["S1"]
     i_mid = len(s1["x"]) // 2
 
     # Walls carry the deck: compression negative (~ -wL/2).

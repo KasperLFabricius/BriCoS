@@ -440,7 +440,7 @@ def calculate_reactions(nodes, detailed_results):
 def get_safe_error_result():
     empty_dict = {} 
     return {
-        'Selfweight': empty_dict, 'Soil': empty_dict, 'Surcharge': empty_dict,
+        'Dead Load': empty_dict, 'Soil': empty_dict, 'Surcharge': empty_dict,
         'Vehicle Envelope A': empty_dict, 'Vehicle Envelope B': empty_dict,
         'Vehicle Steps A': [], 'Vehicle Steps B': [],
         'phi_calc': 1.0, 'phi_log': ["System Unstable or Empty"],
@@ -912,7 +912,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                         'params': [P_val, local_x]
                     })
 
-    # 1. Selfweight
+    # 1. Dead Load
     sw_loads_map = {}
     sw_global_loads = {} 
 
@@ -1260,7 +1260,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
 
     equilibrium = {}
     for case_name, loads_map_g, col in (
-        ('Selfweight', sw_global_loads, 0),
+        ('Dead Load', sw_global_loads, 0),
         ('Soil', soil_global_loads, 1),
         ('Surcharge', surch_global_loads, 2),
     ):
@@ -1660,7 +1660,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     steps_B = process_vehicle_runs(runs_B, veh_env_B)
 
     return {
-        'Selfweight': res_sw,
+        'Dead Load': res_sw,
         'Soil': res_soil,
         'Surcharge': res_surch,
         'Vehicle Envelope A': veh_env_A,
@@ -1886,7 +1886,7 @@ def _combine_results_impl(raw_res, params, result_mode):
             }
         return out
 
-    out_sw = factor_res(raw_res['Selfweight'], f_sw)
+    out_sw = factor_res(raw_res['Dead Load'], f_sw)
     out_soil = factor_res(raw_res['Soil'], f_soil)
     out_surch = factor_res(raw_res['Surcharge'], f_surch) 
     
@@ -2043,7 +2043,7 @@ def _combine_results_impl(raw_res, params, result_mode):
         }
     
     return {
-        'Selfweight': out_sw, 'Soil': out_soil, 'Surcharge': out_surch,
+        'Dead Load': out_sw, 'Soil': out_soil, 'Surcharge': out_surch,
         'Vehicle Envelope': out_veh_env, 'Traffic UDL': out_udl,
         'Total Envelope': out_total,
         'f_udl': f_udl,

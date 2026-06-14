@@ -138,13 +138,13 @@ def test_equilibrium_rows_drop_cases_without_loads():
     # Cases without any load definition are no longer listed at all;
     # cancelling loads (zero sums, has_loads=True) still get a PASS row.
     rows = BricosReportGenerator._equilibrium_rows({
-        "Selfweight": _eq_case(ay=-200.0, ry=200.0, has_loads=True),
+        "Dead Load": _eq_case(ay=-200.0, ry=200.0, has_loads=True),
         "Soil": _eq_case(has_loads=True),
         "Surcharge": _eq_case(has_loads=False),
     })
 
     by_case = {r[0]: r for r in rows[1:]}
-    assert by_case["Selfweight"][-1] == "PASS"
+    assert by_case["Dead Load"][-1] == "PASS"
     assert by_case["Soil"][-1] == "PASS"
     assert "Surcharge" not in by_case
 
@@ -183,12 +183,12 @@ def test_equilibrium_rows_legacy_results_fall_back_to_magnitudes():
     # sums are treated as unloaded (dropped), non-zero sums get the check
     # and tolerate the missing pos/neg keys.
     rows = BricosReportGenerator._equilibrium_rows({
-        "Selfweight": _eq_case(ay=-100.0, ry=100.0),
+        "Dead Load": _eq_case(ay=-100.0, ry=100.0),
         "Soil": _eq_case(),
     })
 
     by_case = {r[0]: r for r in rows[1:]}
-    assert by_case["Selfweight"][-1] == "PASS"
+    assert by_case["Dead Load"][-1] == "PASS"
     assert "Soil" not in by_case
 
 
@@ -262,7 +262,7 @@ def test_udl_application_text_modes():
 
 def _minimal_raw():
     return {
-        "Selfweight": {}, "Soil": {}, "Surcharge": {},
+        "Dead Load": {}, "Soil": {}, "Surcharge": {},
         "Vehicle Envelope A": {}, "Vehicle Envelope B": {},
         "phi_calc": 1.0, "phi_log": [],
     }
@@ -548,9 +548,9 @@ def test_unfactored_vehicle_table_reports_governing_direction_per_extreme():
 def test_system_has_component_checks_each_load_case():
     p = _params()
     p["sw_list"] = [0.0] * 10
-    assert not BricosReportGenerator._system_has_component(p, "Selfweight")
+    assert not BricosReportGenerator._system_has_component(p, "Dead Load")
     p["sw_list"][0] = 5.0
-    assert BricosReportGenerator._system_has_component(p, "Selfweight")
+    assert BricosReportGenerator._system_has_component(p, "Dead Load")
 
     assert not BricosReportGenerator._system_has_component(p, "Soil")
     p["soil"] = [{"wall_idx": 0, "face": "L", "h": 6.0, "q_top": 0.0, "q_bot": 20.0}]

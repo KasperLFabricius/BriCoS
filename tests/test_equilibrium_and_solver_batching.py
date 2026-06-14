@@ -68,7 +68,7 @@ def _run(params):
 
 def test_equilibrium_selfweight_beam_udl():
     raw = _run(_beam_params())
-    eq = raw["Equilibrium"]["Selfweight"]
+    eq = raw["Equilibrium"]["Dead Load"]
 
     # q = 10 kN/m over 10 m, acting downward.
     assert eq["applied_y"] == pytest.approx(-100.0, rel=1e-9)
@@ -96,7 +96,7 @@ def test_equilibrium_soil_and_surcharge_on_frame():
     assert eq_surch["reactions_x"] == pytest.approx(-30.0, rel=1e-6)
     assert abs(eq_surch["residual_x"]) < 1e-6
 
-    eq_sw = raw["Equilibrium"]["Selfweight"]
+    eq_sw = raw["Equilibrium"]["Dead Load"]
     assert eq_sw["applied_y"] == pytest.approx(-100.0, rel=1e-9)
     assert abs(eq_sw["residual_y"]) < 1e-6
 
@@ -126,7 +126,7 @@ def test_equilibrium_symmetric_soil_cancels_but_reports_has_loads():
     assert eq_soil["applied_x_neg"] == pytest.approx(-60.0, rel=1e-9)
 
     assert raw["Equilibrium"]["Surcharge"]["has_loads"] is False
-    assert raw["Equilibrium"]["Selfweight"]["has_loads"] is True
+    assert raw["Equilibrium"]["Dead Load"]["has_loads"] is True
 
 
 def test_equilibrium_inclined_span_selfweight():
@@ -137,7 +137,7 @@ def test_equilibrium_inclined_span_selfweight():
         "align_type": 1, "incline_mode": 0, "incline_val": 10.0,
     }
     raw = _run(params)
-    eq = raw["Equilibrium"]["Selfweight"]
+    eq = raw["Equilibrium"]["Dead Load"]
 
     # q applies per metre of (inclined) member length.
     member_len = np.hypot(10.0, 1.0)
@@ -195,7 +195,7 @@ def test_solver_cache_returns_same_object_and_clears():
     third = solver.run_raw_analysis(params)
     assert third is not first
     np.testing.assert_allclose(
-        third[0]["Selfweight"]["S1"]["M"], first[0]["Selfweight"]["S1"]["M"]
+        third[0]["Dead Load"]["S1"]["M"], first[0]["Dead Load"]["S1"]["M"]
     )
     _clear()
 

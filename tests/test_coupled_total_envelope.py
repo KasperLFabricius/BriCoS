@@ -74,7 +74,7 @@ def test_coupled_total_matches_step_formula_all_components():
     for eid in ("S1", "S2"):
         for key in ("M_max", "M_min", "V_max", "V_min", "N_max", "N_min",
                     "def_y_max", "def_y_min"):
-            expected = (res["Selfweight"][eid][key]
+            expected = (res["Dead Load"][eid][key]
                         + _expected_traffic(res, raw, eid, key))
             np.testing.assert_allclose(
                 res["Total Envelope"][eid][key], expected, atol=1e-9,
@@ -89,7 +89,7 @@ def test_coupled_total_respects_uls_factor_ratio():
                    gamma_udl=0.56, phi=1.2)
 
     eid = "S1"
-    expected = (res["Selfweight"][eid]["M_max"]
+    expected = (res["Dead Load"][eid]["M_max"]
                 + _expected_traffic(res, raw, eid, "M_max"))
     np.testing.assert_allclose(
         res["Total Envelope"][eid]["M_max"], expected, atol=1e-9)
@@ -120,7 +120,7 @@ def test_footprint_application_reproduces_conservative_superposition():
 
     eid = "S1"
     for key in ("M_max", "M_min", "V_max", "V_min"):
-        expected = (res["Selfweight"][eid][key]
+        expected = (res["Dead Load"][eid][key]
                     + res["Vehicle Envelope"][eid][key]
                     + res["Traffic UDL"][eid][key])
         np.testing.assert_allclose(
@@ -133,7 +133,7 @@ def test_static_application_reproduces_conservative_superposition():
     res = _combine(raw)
 
     eid = "S1"
-    expected = (res["Selfweight"][eid]["M_max"]
+    expected = (res["Dead Load"][eid]["M_max"]
                 + res["Vehicle Envelope"][eid]["M_max"]
                 + res["Traffic UDL"][eid]["M_max"])
     np.testing.assert_allclose(
@@ -151,7 +151,7 @@ def test_vehicle_absent_alternative_governs_for_light_vehicle():
     res = _combine(raw)
 
     eid = "S1"
-    expected = (res["Selfweight"][eid]["M_max"]
+    expected = (res["Dead Load"][eid]["M_max"]
                 + res["Traffic UDL"][eid]["M_max"])
     i_peak = int(np.argmax(res["Traffic UDL"][eid]["M_max"]))
     assert res["Total Envelope"][eid]["M_max"][i_peak] == pytest.approx(
@@ -163,7 +163,7 @@ def test_total_without_vehicle_is_perm_plus_full_adverse_udl():
     res = _combine(raw)
 
     eid = "S1"
-    expected = (res["Selfweight"][eid]["M_max"]
+    expected = (res["Dead Load"][eid]["M_max"]
                 + res["Traffic UDL"][eid]["M_max"])
     np.testing.assert_allclose(
         res["Total Envelope"][eid]["M_max"], expected, atol=1e-9)
@@ -194,12 +194,12 @@ def test_two_vehicles_couple_with_own_steps_and_cross_superpose():
     envB = raw["Vehicle Envelope B"][eid]["M_max"] * fB
     ud = res["Traffic UDL"][eid]["M_max"]
 
-    expected = (res["Selfweight"][eid]["M_max"]
+    expected = (res["Dead Load"][eid]["M_max"]
                 + np.maximum.reduce([ud, cA + envB, envA + cB]))
     np.testing.assert_allclose(
         res["Total Envelope"][eid]["M_max"], expected, atol=1e-9)
 
     # Tighter than (or equal to) the former full superposition.
-    old_bound = (res["Selfweight"][eid]["M_max"]
+    old_bound = (res["Dead Load"][eid]["M_max"]
                  + res["Vehicle Envelope"][eid]["M_max"] + ud)
     assert np.all(res["Total Envelope"][eid]["M_max"] <= old_bound + 1e-9)

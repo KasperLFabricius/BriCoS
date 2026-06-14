@@ -334,7 +334,7 @@ def test_combine_results_scales_all_deformation_keys_for_static_components():
         }
     }
     raw = {
-        "Selfweight": base,
+        "Dead Load": base,
         "Soil": {},
         "Surcharge": {},
         "Vehicle Envelope A": {},
@@ -359,7 +359,7 @@ def test_combine_results_scales_all_deformation_keys_for_static_components():
     }
 
     results = solver.combine_results(raw, params, "Design (ULS)")
-    span = results["Selfweight"]["S1"]
+    span = results["Dead Load"]["S1"]
 
     np.testing.assert_allclose(span["def_x"], base["S1"]["def_x"] * 6.0)
     np.testing.assert_allclose(span["def_y"], base["S1"]["def_y"] * 6.0)
@@ -404,7 +404,7 @@ def test_combine_results_missing_envelope_b_element_contributes_zero():
         "def_x_max", "def_x_min", "def_y_max", "def_y_min",
     )
     raw = {
-        "Selfweight": {}, "Soil": {}, "Surcharge": {},
+        "Dead Load": {}, "Soil": {}, "Surcharge": {},
         "Vehicle Envelope A": {"S1": {**{k: env_a for k in env_keys}, "base": base}},
         # S1 is missing from envelope B entirely; it must contribute zero,
         # not fall back to envelope A (which double-counted vehicle A).
@@ -438,7 +438,7 @@ def test_combine_results_factoring_does_not_mutate_raw_loads():
         "ni": (0.0, 0.0), "nj": (1.0, 0.0), "ni_id": 200, "nj_id": 201,
     }
     raw = {
-        "Selfweight": {"S1": base}, "Soil": {}, "Surcharge": {},
+        "Dead Load": {"S1": base}, "Soil": {}, "Surcharge": {},
         "Vehicle Envelope A": {}, "Vehicle Envelope B": {},
         "phi_calc": 1.0, "phi_log": [],
     }
@@ -452,7 +452,7 @@ def test_combine_results_factoring_does_not_mutate_raw_loads():
     results = solver.combine_results(raw, params, "Design (ULS)")
 
     assert raw_load["params"][0] == 100.0
-    assert results["Selfweight"]["S1"]["loads"][0]["params"][0] == 600.0
+    assert results["Dead Load"]["S1"]["loads"][0]["params"][0] == 600.0
 
 
 def test_combine_results_has_no_duplicate_literal_dict_keys():

@@ -63,8 +63,8 @@ def _run(params):
 
 
 def _selfweight_span(raw):
-    assert "S1" in raw["Selfweight"]
-    return raw["Selfweight"]["S1"]
+    assert "S1" in raw["Dead Load"]
+    return raw["Dead Load"]["S1"]
 
 
 def _assert_thicker_midspan_frame_is_not_more_flexible(*, use_shear_def):

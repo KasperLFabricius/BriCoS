@@ -80,9 +80,9 @@ def test_udl_two_span_adverse_envelope_bounds_span_patterns():
     env = udl_raw["Traffic UDL"]
 
     # Pattern cases through the selfweight path (same load type/mesh).
-    pat_s1 = _run(_beam_params(sw_list=[q, 0.0] + [0.0] * 8))["Selfweight"]
-    pat_s2 = _run(_beam_params(sw_list=[0.0, q] + [0.0] * 8))["Selfweight"]
-    pat_both = _run(_beam_params(sw_list=[q, q] + [0.0] * 8))["Selfweight"]
+    pat_s1 = _run(_beam_params(sw_list=[q, 0.0] + [0.0] * 8))["Dead Load"]
+    pat_s2 = _run(_beam_params(sw_list=[0.0, q] + [0.0] * 8))["Dead Load"]
+    pat_both = _run(_beam_params(sw_list=[q, q] + [0.0] * 8))["Dead Load"]
 
     for eid in ("S1", "S2"):
         pattern_max = np.maximum.reduce([
@@ -166,13 +166,13 @@ def test_total_envelope_couples_udl_with_vehicle_steps():
     for s in steps:
         r = s["res"][eid]
         cands_max.append(r["M"] * f_v + r["M_udl_max"] * f_u)
-    expected_max = (res["Selfweight"][eid]["M_max"]
+    expected_max = (res["Dead Load"][eid]["M_max"]
                     + np.maximum.reduce(cands_max))
     np.testing.assert_allclose(
         res["Total Envelope"][eid]["M_max"], expected_max, atol=1e-9)
 
     # And strictly below the former superposition where the window bites.
-    old_bound = (res["Selfweight"][eid]["M_max"]
+    old_bound = (res["Dead Load"][eid]["M_max"]
                  + res["Vehicle Envelope"][eid]["M_max"]
                  + res["Traffic UDL"][eid]["M_max"])
     assert np.all(res["Total Envelope"][eid]["M_max"] <= old_bound + 1e-9)

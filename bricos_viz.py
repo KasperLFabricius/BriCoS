@@ -283,7 +283,7 @@ def create_plotly_fig(
                 _add_support_icon(fig, pos_x, pos_y, s_type, support_size, color_override)
 
         # UPDATED: Only draw supports if geometry data (geom_A/geom_B) is present and non-empty.
-        # geom_A/B are typically the 'Selfweight' result dictionaries containing element definitions.
+        # geom_A/B are typically the 'Dead Load' result dictionaries containing element definitions.
         # If the solver returns an error state, these will be empty.
         
         if show_A and params_A and geom_A: 
@@ -511,7 +511,7 @@ def create_plotly_fig(
                             font=dict(color='orange', size=veh_load_font_size, weight="bold")
                         )
 
-                    elif load_case_name == "Selfweight" and l_type == 'distributed_trapezoid' and load.get('is_gravity', False):
+                    elif load_case_name == "Dead Load" and l_type == 'distributed_trapezoid' and load.get('is_gravity', False):
                         q_val = load['params'][0]
                         h_vis = 0.6 * (abs(q_val) / max_q_sw)
                         if h_vis < 0.1: h_vis = 0.1

@@ -45,7 +45,7 @@ def test_simply_supported_beam_udl_regression():
     params = _beam_params(load_q=q)
     raw, _, _ = _run(params)
     results = solver.combine_results(raw, params, "Characteristic (No Dynamic Factor)")
-    span = results["Selfweight"]["S1"]
+    span = results["Dead Load"]["S1"]
 
     max_moment = max(abs(np.max(span["M"])), abs(np.min(span["M"])))
     expected_moment = q * length**2 / 8.0
@@ -94,8 +94,8 @@ def test_loaded_tapered_member_solver_path_stays_finite():
     raw, nodes, _ = _run(params)
 
     assert nodes is not None
-    assert "S1" in raw["Selfweight"]
-    span = raw["Selfweight"]["S1"]
+    assert "S1" in raw["Dead Load"]
+    span = raw["Dead Load"]["S1"]
 
     for key in ["M", "V", "N", "def_x", "def_y"]:
         assert np.all(np.isfinite(span[key]))

@@ -266,7 +266,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
     sysB['scale_manual'] = man_scale
 
     # --- 2. STICKY TOOLBAR & COMBINATION ---
-    view_options = ["Total Envelope", "Selfweight", "Soil", "Surcharge", "Vehicle Envelope", "Traffic UDL", "Vehicle Steps"]
+    view_options = ["Total Envelope", "Dead Load", "Soil", "Surcharge", "Vehicle Envelope", "Traffic UDL", "Vehicle Steps"]
     
     # Ensure session state for selector persistence
     if 'view_case_selector' not in st.session_state: st.session_state.view_case_selector = "Total Envelope"
@@ -489,7 +489,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             rA = get_step(res_A, step_idx, veh_key_res, f_A, f_map_A, f_udl_A)
             rB = get_step(res_B, step_idx, veh_key_res, f_B, f_map_B, f_udl_B) if valid_B else {}
     else:
-        key_map = {"Total Envelope": "Total Envelope", "Selfweight": "Selfweight", "Soil": "Soil", "Surcharge": "Surcharge", "Vehicle Envelope": "Vehicle Envelope", "Traffic UDL": "Traffic UDL"}
+        key_map = {"Total Envelope": "Total Envelope", "Dead Load": "Dead Load", "Soil": "Soil", "Surcharge": "Surcharge", "Vehicle Envelope": "Vehicle Envelope", "Traffic UDL": "Traffic UDL"}
         target_key = key_map.get(view_case, "Total Envelope")
         rA = res_A.get(target_key, {})
         rB = res_B.get(target_key, {}) if valid_B else {}
@@ -706,7 +706,7 @@ def _render_viz_chart(title, nodes_A, nodes_B, rA, rB, type_base, scale, show_A,
         nodes_A, rA, rB, type_base, scale, "",
         show_A, show_B, show_labels, view_case,
         name_A, name_B,
-        geom_A=res_A.get('Selfweight'), geom_B=res_B.get('Selfweight'),
+        geom_A=res_A.get('Dead Load'), geom_B=res_B.get('Dead Load'),
         params_A=sysA, params_B=sysB,
         show_supports=show_supports, support_size=support_size,
         nodes_A=nodes_A, nodes_B=nodes_B
