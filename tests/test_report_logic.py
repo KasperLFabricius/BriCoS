@@ -626,8 +626,10 @@ def test_dynamic_factor_section_hides_sls_when_sls_not_analyzed():
 
 def test_input_summary_omits_phi_when_no_limit_state_analyzed():
     # Unfactored-only: Phi is never applied, so the settings line drops the
-    # dynamic factor and no Dynamic Factor section is added.
-    p = _phi_params(analyze_uls=False, analyze_sls=False)
+    # dynamic factor, no Dynamic Factor section is added, and the factor table
+    # documents the actual combination (all loads at factor 1.0, no Phi)
+    # instead of the stored ULS/SLS factors and "Phi applied".
+    p = _phi_params(analyze_uls=False, analyze_sls=False, gamma_veh=1.4)
     gen = _generator(p)
     gen._add_system_input_summary("System A", p, {"phi_calc": 1.20, "Phi Members": {}},
                                   {"Spans": {}, "Walls": {}}, "sysA")
@@ -635,6 +637,10 @@ def test_input_summary_omits_phi_when_no_limit_state_analyzed():
     assert "none (unfactored combination only)" in txt
     assert "Φ:" not in txt
     assert "Dynamic Factor" not in txt
+    # Factor table reflects the unfactored combination, not the stored factors.
+    assert "Combination factor" in txt
+    assert "Φ applied" not in txt
+    assert "1.4" not in txt  # stored vehicle ULS factor must not appear
 
 
 def test_input_summary_keeps_phi_when_a_limit_state_analyzed():
@@ -645,3 +651,4 @@ def test_input_summary_keeps_phi_when_a_limit_state_analyzed():
     txt = _flatten_report_text(gen)
     assert "Φ:" in txt
     assert "Dynamic Factor" in txt
+    assert "Φ applied" in txt  # the vehicle row keeps the dynamic factor note

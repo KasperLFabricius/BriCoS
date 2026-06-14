@@ -1006,31 +1006,53 @@ class BricosReportGenerator:
                 f"<b>Limit states analyzed:</b> {ls_txt}",
                 self.styles['SwecoBody']))
 
-        # Combination factor table: one row per load component, the ULS
-        # partial factor (multiplied by KFI) and the SLS combination factor.
+        # Combination factor table: one row per load component. A factored
+        # report shows the ULS partial factor (x KFI), the SLS combination
+        # factor and the dynamic factor. An unfactored-only report (no limit
+        # state analyzed) instead documents the actual combination - every
+        # load at factor 1.0 with no dynamic factor - rather than the stored
+        # ULS/SLS factors, which feed no combination there.
         kfi = p.get('KFI', 1.0)
-        uls_col = f"ULS factor (× KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
-        sls_col = "SLS factor" if analyze_sls else "SLS factor (not analyzed)"
-        fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
-        if p.get('auto_selfweight', False):
-            fact_rows.append(["Self-weight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
-        fact_rows.append(["Dead Load", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
-        if p.get('soil'):
-            # Presets by label: the '1.0 (No KFI)' option must never leak
-            # its raw stored value (1/KFI).
-            gj_txt = data_mod.soil_gamma_display(p.get('gamma_j', 1.0), kfi)
-            fact_rows.append(["Soil", gj_txt, f"{p.get('sls_j', 1.0)}", "-"])
-        if bool(p.get('vehicle', {}).get('loads')):
-            fact_rows.append(["Vehicle A", f"{p.get('gamma_veh', 1.0)}", f"{p.get('sls_veh', 1.0)}", "Φ applied"])
-        if bool(p.get('vehicleB', {}).get('loads')):
-            fact_rows.append(["Vehicle B", f"{p.get('gamma_vehB', 1.0)}", f"{p.get('sls_vehB', 1.0)}", "Φ applied"])
         udl_line = data_mod.udl_line_load(p)
-        if udl_line > 0.0:
-            fact_rows.append(["Traffic UDL", f"{p.get('gamma_udl', 0.56)}", f"{p.get('sls_udl', 0.40)}",
-                              "not applied (intensity includes the dynamic increment, DK NA A.2.3.2)"])
-        if p.get('surcharge'):
-            fact_rows.append(["Surcharge", f"{p.get('gamma_veh', 1.0)} (= Vehicle A)", f"{p.get('sls_veh', 1.0)} (= Vehicle A)", "not applied (static)"])
-        t = self._make_std_table(fact_rows, [3.2*cm, 4.4*cm, 4.0*cm, 5.6*cm], font_size=8)
+        if analyze_uls or analyze_sls:
+            uls_col = f"ULS factor (× KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
+            sls_col = "SLS factor" if analyze_sls else "SLS factor (not analyzed)"
+            fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
+            if p.get('auto_selfweight', False):
+                fact_rows.append(["Self-weight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
+            fact_rows.append(["Dead Load", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
+            if p.get('soil'):
+                # Presets by label: the '1.0 (No KFI)' option must never leak
+                # its raw stored value (1/KFI).
+                gj_txt = data_mod.soil_gamma_display(p.get('gamma_j', 1.0), kfi)
+                fact_rows.append(["Soil", gj_txt, f"{p.get('sls_j', 1.0)}", "-"])
+            if bool(p.get('vehicle', {}).get('loads')):
+                fact_rows.append(["Vehicle A", f"{p.get('gamma_veh', 1.0)}", f"{p.get('sls_veh', 1.0)}", "Φ applied"])
+            if bool(p.get('vehicleB', {}).get('loads')):
+                fact_rows.append(["Vehicle B", f"{p.get('gamma_vehB', 1.0)}", f"{p.get('sls_vehB', 1.0)}", "Φ applied"])
+            if udl_line > 0.0:
+                fact_rows.append(["Traffic UDL", f"{p.get('gamma_udl', 0.56)}", f"{p.get('sls_udl', 0.40)}",
+                                  "not applied (intensity includes the dynamic increment, DK NA A.2.3.2)"])
+            if p.get('surcharge'):
+                fact_rows.append(["Surcharge", f"{p.get('gamma_veh', 1.0)} (= Vehicle A)", f"{p.get('sls_veh', 1.0)} (= Vehicle A)", "not applied (static)"])
+            t = self._make_std_table(fact_rows, [3.2*cm, 4.4*cm, 4.0*cm, 5.6*cm], font_size=8)
+        else:
+            fact_rows = [["Load component", "Combination factor", "Dynamic factor"]]
+            if p.get('auto_selfweight', False):
+                fact_rows.append(["Self-weight", "1.0", "-"])
+            fact_rows.append(["Dead Load", "1.0", "-"])
+            if p.get('soil'):
+                fact_rows.append(["Soil", "1.0", "-"])
+            if bool(p.get('vehicle', {}).get('loads')):
+                fact_rows.append(["Vehicle A", "1.0", "not applied"])
+            if bool(p.get('vehicleB', {}).get('loads')):
+                fact_rows.append(["Vehicle B", "1.0", "not applied"])
+            if udl_line > 0.0:
+                fact_rows.append(["Traffic UDL", "1.0",
+                                  "not applied (intensity includes the dynamic increment, DK NA A.2.3.2)"])
+            if p.get('surcharge'):
+                fact_rows.append(["Surcharge", "1.0", "not applied (static)"])
+            t = self._make_std_table(fact_rows, [4.0*cm, 4.0*cm, 9.2*cm], font_size=8)
         self.elements.append(KeepTogether([t]))
 
         if udl_line > 0.0:
