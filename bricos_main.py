@@ -61,6 +61,21 @@ st.markdown("""
 logo_path = data_mod.resource_path("logo.png")
 if os.path.exists(logo_path):
     st.sidebar.image(logo_path, width='stretch')
+    # The Sweco logo is branding, not data, so suppress the hover Fullscreen
+    # control Streamlit overlays on every image (only the logo carries one in
+    # the sidebar). Selectors cover current and older Streamlit testids.
+    st.sidebar.markdown(
+        """<style>
+        [data-testid="stSidebar"] [data-testid="stElementToolbar"],
+        [data-testid="stSidebar"] [data-testid="stBaseButton-elementToolbar"],
+        [data-testid="stSidebar"] button[aria-label="Fullscreen"],
+        [data-testid="stSidebar"] [data-testid="StyledFullScreenButton"],
+        [data-testid="stSidebar"] button[title="View fullscreen"] {
+            display: none !important;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
 
 st.title(f"BriCoS v{APP_VERSION} - Bridge Comparison Software")
 
@@ -584,15 +599,21 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     st.session_state['sysA']['use_shear_def'] = use_shear
     st.session_state['sysB']['use_shear_def'] = use_shear
 
-    col_beff, col_nu = st.columns(2)
+    # Poisson's ratio only feeds the Timoshenko shear modulus G, so it is a
+    # dead input when shear deformations are disabled - show it only then.
+    # b_eff is always relevant (shear area, axial area and auto self-weight).
     val_beff = st.session_state['sysA'].get('b_eff', 1.0)
-    val_nu = st.session_state['sysA'].get('nu', 0.2)
-    
-    new_beff = col_beff.number_input(r"$b_{eff}$ [m]", value=float(val_beff), min_value=0.01, step=0.1, help="Effective shear width.", key="beff_input_sidebar", disabled=ui_locked)
-    new_nu = col_nu.number_input(r"Poisson's Ratio ($\nu$)", value=float(val_nu), min_value=0.0, max_value=0.5, step=0.05, key="nu_input_sidebar", disabled=ui_locked)
-    
+    help_beff = "Effective width: shear area, axial area and auto self-weight."
+    if use_shear:
+        col_beff, col_nu = st.columns(2)
+        new_beff = col_beff.number_input(r"$b_{eff}$ [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
+        val_nu = st.session_state['sysA'].get('nu', 0.2)
+        new_nu = col_nu.number_input(r"Poisson's Ratio ($\nu$)", value=float(val_nu), min_value=0.0, max_value=0.5, step=0.05, key="nu_input_sidebar", disabled=ui_locked, help="Used only for the Timoshenko shear modulus G.")
+        st.session_state['sysA']['nu'] = new_nu; st.session_state['sysB']['nu'] = new_nu
+    else:
+        new_beff = st.number_input(r"$b_{eff}$ [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
+
     st.session_state['sysA']['b_eff'] = new_beff; st.session_state['sysB']['b_eff'] = new_beff
-    st.session_state['sysA']['nu'] = new_nu; st.session_state['sysB']['nu'] = new_nu
 
     st.markdown("---")
     st.markdown("**Calculation Precision**")
@@ -1203,51 +1224,64 @@ with st.sidebar.expander("Vehicle Definitions", expanded=False):
 
     udl_line = data_mod.udl_line_load(p)
     if udl_line > 0.0:
-        help_udl_mode = (
-            "How the UDL accompanies the vehicle. Moving: the UDL fills the deck except a "
-            "window around the vehicle defined by the clear distance below. Static: full "
-            "deck at every step. The Total Envelope couples the UDL exactly with the "
-            "vehicle steps: each position combines the vehicle with the adverse UDL "
-            "outside its window, enveloped together with the vehicle-absent situation "
-            "(full adverse UDL alone). With the Static application (or the footprint "
-            "option) the per-step UDL equals the full adverse envelope, which reproduces "
-            "the conservative vehicle + full UDL superposition."
-        )
-        mode_opts = ["Moving with vehicle", "Static (full deck)"]
-        idx_mode = 1 if p.get('udl_mode') == 'Static' else 0
-        mode_sel = st.radio("Application in step results:", mode_opts, index=idx_mode, horizontal=True, key=f"{curr}_udlmode", disabled=ui_locked, help=help_udl_mode)
-        p['udl_mode'] = 'Static' if "Static" in mode_sel else 'Moving'
+        # The application mode, clear distance and footprint only govern how
+        # the UDL couples with the VEHICLE in the step results; with no
+        # vehicle in this system they have no effect (the UDL enters the Total
+        # Envelope as the full adverse envelope), so they are hidden.
+        sys_has_vehicle = bool(p.get('vehicle', {}).get('loads')) or bool(p.get('vehicleB', {}).get('loads'))
+        if sys_has_vehicle:
+            help_udl_mode = (
+                "How the UDL accompanies the vehicle. Moving: the UDL fills the deck except a "
+                "window around the vehicle defined by the clear distance below. Static: full "
+                "deck at every step. The Total Envelope couples the UDL exactly with the "
+                "vehicle steps: each position combines the vehicle with the adverse UDL "
+                "outside its window, enveloped together with the vehicle-absent situation "
+                "(full adverse UDL alone). With the Static application (or the footprint "
+                "option) the per-step UDL equals the full adverse envelope, which reproduces "
+                "the conservative vehicle + full UDL superposition."
+            )
+            mode_opts = ["Moving with vehicle", "Static (full deck)"]
+            idx_mode = 1 if p.get('udl_mode') == 'Static' else 0
+            mode_sel = st.radio("Application in step results:", mode_opts, index=idx_mode, horizontal=True, key=f"{curr}_udlmode", disabled=ui_locked, help=help_udl_mode)
+            p['udl_mode'] = 'Static' if "Static" in mode_sel else 'Moving'
 
-        if p['udl_mode'] == 'Moving':
-            gap_presets = data_mod.UDL_GAP_PRESETS
-            curr_gap = float(p.get('udl_gap', 10.0))
-            preset_label = data_mod.udl_gap_preset_label(curr_gap)
-            gap_opts = list(gap_presets.keys()) + ["Custom"]
-            help_gap = (
-                "Clear distance from the outermost axles to the start of the UDL, applied "
-                "in front of and behind the vehicle."
-            )
-            c_g1, c_g2 = st.columns(2)
-            gap_sel = c_g1.selectbox("Distance vehicle to UDL", gap_opts, index=gap_opts.index(preset_label), key=f"{curr}_udlgap_sel", disabled=ui_locked, help=help_gap)
-            if gap_sel == "Custom":
-                p['udl_gap'] = c_g2.number_input("Custom distance [m]", value=curr_gap, min_value=0.0, step=0.5, format="%.2f", key=f"{curr}_udlgap_cust", disabled=ui_locked)
-            else:
-                p['udl_gap'] = gap_presets[gap_sel]
-            p['udl_footprint'] = st.checkbox(
-                "Apply UDL also within the vehicle window",
-                value=bool(p.get('udl_footprint', False)), key=f"{curr}_udlfoot", disabled=ui_locked,
-                help=(
-                    "When enabled the UDL coexists with the vehicle over its full "
-                    "footprint (no window is excluded). The Total Envelope then equals "
-                    "the conservative vehicle + full adverse UDL superposition."
-                ),
-            )
+            if p['udl_mode'] == 'Moving':
+                gap_presets = data_mod.UDL_GAP_PRESETS
+                curr_gap = float(p.get('udl_gap', 10.0))
+                preset_label = data_mod.udl_gap_preset_label(curr_gap)
+                gap_opts = list(gap_presets.keys()) + ["Custom"]
+                help_gap = (
+                    "Clear distance from the outermost axles to the start of the UDL, applied "
+                    "in front of and behind the vehicle."
+                )
+                c_g1, c_g2 = st.columns(2)
+                gap_sel = c_g1.selectbox("Distance vehicle to UDL", gap_opts, index=gap_opts.index(preset_label), key=f"{curr}_udlgap_sel", disabled=ui_locked, help=help_gap)
+                if gap_sel == "Custom":
+                    p['udl_gap'] = c_g2.number_input("Custom distance [m]", value=curr_gap, min_value=0.0, step=0.5, format="%.2f", key=f"{curr}_udlgap_cust", disabled=ui_locked)
+                else:
+                    p['udl_gap'] = gap_presets[gap_sel]
+                p['udl_footprint'] = st.checkbox(
+                    "Apply UDL also within the vehicle window",
+                    value=bool(p.get('udl_footprint', False)), key=f"{curr}_udlfoot", disabled=ui_locked,
+                    help=(
+                        "When enabled the UDL coexists with the vehicle over its full "
+                        "footprint (no window is excluded). The Total Envelope then equals "
+                        "the conservative vehicle + full adverse UDL superposition."
+                    ),
+                )
 
         st.success(f"Traffic UDL active: {udl_line:.2f} kN/m on the strip")
-        st.caption(
-            "Adverse-only application per EN 1991-2 4.3.2(1)(b). Use the step viewer's "
-            "step-effects selector to inspect vehicle and UDL effects separately or combined."
-        )
+        if sys_has_vehicle:
+            st.caption(
+                "Adverse-only application per EN 1991-2 4.3.2(1)(b). Use the step viewer's "
+                "step-effects selector to inspect vehicle and UDL effects separately or combined."
+            )
+        else:
+            st.caption(
+                "Adverse-only application per EN 1991-2 4.3.2(1)(b). With no vehicle defined in "
+                "this system, the UDL enters the Total Envelope as the full adverse envelope; "
+                "the moving-window settings apply only when a vehicle is present."
+            )
     else:
         st.caption("No Traffic UDL (q = 0).")
 
