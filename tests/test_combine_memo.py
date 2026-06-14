@@ -119,6 +119,33 @@ def test_clear_solver_cache_drops_the_memo(raw_and_params):
     assert solver.combine_results(raw, params, "Design (ULS)") is not first
 
 
+def test_session_caches_reset_on_app_version_change():
+    # Codex review on #40: a live session that solved on the previous
+    # version holds a raw result cached by the (unchanged) params hash with
+    # the OLD schema (e.g. the pre-rename 'Selfweight' key). The version
+    # stamp must reset both caches so the new code recomputes the current
+    # 'Dead Load' schema instead of serving the stale raw and KeyError-ing.
+    st = solver.st
+    solver.clear_solver_cache()
+    params = _beam_params()
+    raw, _, _, _ = solver.run_raw_analysis(params)
+    solver.combine_results(raw, params, "Unfactored")
+    assert st.session_state[solver._SOLVER_CACHE_KEY]  # populated
+
+    # Simulate a stale prior-version session: old version stamp + a poisoned
+    # raw carrying the pre-rename key under the current params hash.
+    st.session_state[solver._CACHE_VERSION_KEY] = "0.0-old"
+    st.session_state[solver._SOLVER_CACHE_KEY] = {("stale", None): {"Selfweight": {}}}
+    st.session_state[solver._COMBINE_MEMO_KEY] = {("stale",): {}}
+
+    raw2, _, _, _ = solver.run_raw_analysis(params)
+    assert "Dead Load" in raw2 and "Selfweight" not in raw2
+    res2 = solver.combine_results(raw2, params, "Unfactored")
+    assert "Dead Load" in res2  # no KeyError, current schema
+    assert st.session_state[solver._CACHE_VERSION_KEY] == data.APP_VERSION
+    solver.clear_solver_cache()
+
+
 def test_legacy_raw_without_token_bypasses_the_memo():
     raw = solver.get_safe_error_result()
     assert "combine_token" not in raw

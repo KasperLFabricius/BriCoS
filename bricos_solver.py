@@ -536,6 +536,26 @@ def phi_from_length(L_inf):
 # before scaling).
 _SOLVER_CACHE_KEY = '_bricos_solver_result_cache'
 _SOLVER_CACHE_MAX_ENTRIES = 4
+# Stamp the session caches with the app version. The result-cache key is
+# only the params hash, so across a code update under a LIVE session (e.g.
+# a Streamlit hot reload, or a redeployed long-lived server) an unchanged
+# model would otherwise be served a raw result cached by the previous
+# version - with the previous result schema, such as a renamed load case -
+# and the new consumers would KeyError. Resetting both caches on a version
+# change avoids that for this rename and any future schema change. (Frozen
+# EXE users get a fresh process per launch, so they never see the stale
+# cache; this guards dev hot reload and server redeploys.)
+_CACHE_VERSION_KEY = '_bricos_cache_version'
+
+
+def _ensure_cache_version():
+    try:
+        if st.session_state.get(_CACHE_VERSION_KEY) != data_mod.APP_VERSION:
+            st.session_state[_SOLVER_CACHE_KEY] = {}
+            st.session_state[_COMBINE_MEMO_KEY] = {}
+            st.session_state[_CACHE_VERSION_KEY] = data_mod.APP_VERSION
+    except Exception:
+        pass
 
 
 def _solver_cache_hash(cache_params, phi_val_override):
@@ -556,6 +576,7 @@ def clear_solver_cache():
 def run_raw_analysis(params, phi_val_override=None):
     cache_params = solver_cache_params(params)
     key = _solver_cache_hash(cache_params, phi_val_override)
+    _ensure_cache_version()
     cache = st.session_state.setdefault(_SOLVER_CACHE_KEY, {})
     if key in cache:
         return cache[key]
@@ -1775,6 +1796,7 @@ def combine_results(raw_res, params, result_mode="Design (ULS)"):
     if key is None:
         return _combine_results_impl(raw_res, params, result_mode)
     try:
+        _ensure_cache_version()
         memo = st.session_state.setdefault(_COMBINE_MEMO_KEY, {})
     except Exception:
         return _combine_results_impl(raw_res, params, result_mode)
