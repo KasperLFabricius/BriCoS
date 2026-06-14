@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.69"
+APP_VERSION = "0.70"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -306,6 +306,35 @@ def udl_line_load(params) -> float:
     if q is None or q <= 0.0:
         return 0.0
     return q
+
+
+def convert_inertia_geoms_to_height(params) -> bool:
+    """Convert every inertia-mode Section Profiler geometry to height in place.
+
+    Auto self-weight needs a physical thickness, so the section must be
+    height-defined. This normalises ALL stored span/wall profiles still in
+    inertia mode (type 0) at once - not just the one currently shown in the
+    profiler - so enabling auto self-weight gives a deterministic, fully
+    height-locked model regardless of which member was last viewed. Each
+    inertia value I is mapped to the equivalent rectangular height
+    h = (12 I / b_eff)^(1/3). Returns True if anything changed.
+    """
+    b_eff = _as_float(params.get('b_eff', 1.0), 1.0)
+    if b_eff is None or b_eff < 0.01:
+        b_eff = 1.0
+    changed = False
+    for key, geom in params.items():
+        if not (isinstance(key, str) and (key.startswith('span_geom_') or key.startswith('wall_geom_'))):
+            continue
+        if not isinstance(geom, dict) or geom.get('type', 1) != 0:
+            continue
+        geom['vals'] = [
+            (12.0 * float(v) / b_eff) ** (1.0 / 3.0) if (v and float(v) > 0) else 0.0
+            for v in geom.get('vals', [])
+        ]
+        geom['type'] = 1
+        changed = True
+    return changed
 
 
 # Selectbox presets for the vehicle-to-UDL clear distance. Single source of
@@ -826,6 +855,12 @@ def get_def():
         # Independent analysis toggles. Both off -> only the unfactored
         # combination is available.
         'analyze_uls': True, 'analyze_sls': True,
+        # Auto self-weight: when on, the structural weight is computed from
+        # the unit weight (density), b_eff and section height as a separate
+        # "Self-weight" load case (sw_list then carries only superimposed
+        # Dead Load). Off by default; existing sessions are unaffected.
+        'auto_selfweight': False,
+        'density': 25.0,  # unit weight [kN/m3] (reinforced concrete)
 
         # 0.5 m mesh keeps the (undocumented before v0.48) deflection
         # interpolation error negligible; affordable since the v0.47
@@ -885,8 +920,10 @@ def get_clear(name_suffix, current_mode):
         'sls_veh': 1.0, 'sls_vehB': 1.0,
         'sls_udl': 1.0,
         'analyze_uls': True, 'analyze_sls': True,
+        'auto_selfweight': False,
+        'density': 25.0,
 
-        'scale_manual': 2.0, 
+        'scale_manual': 2.0,
         'mesh_size': 0.5, 'step_size': 0.5,
         'name': f"System {name_suffix}",
         'last_mode': current_mode,
@@ -980,6 +1017,9 @@ def force_ui_update(sys_key, data):
     if sys_key == "sysA":
         st.session_state["uls_toggle_sidebar"] = bool(data.get('analyze_uls', True))
         st.session_state["sls_toggle_sidebar"] = bool(data.get('analyze_sls', True))
+        # Shared auto self-weight controls (Analysis & Result Settings).
+        st.session_state["auto_sw_toggle_sidebar"] = bool(data.get('auto_selfweight', False))
+        st.session_state["density_input_sidebar"] = float(data.get('density', 25.0))
     st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
     
     # 2. Shear Deformation Keys & Analysis Settings

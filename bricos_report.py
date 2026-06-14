@@ -428,22 +428,37 @@ class BricosReportGenerator:
         
         # 7. Load Components (Unfactored)
         # Check active components across BOTH systems if valid_B, else just A
+        has_swa = bool(self.params_A.get('auto_selfweight', False))
         has_sw = any(v > 0 for v in self.params_A['sw_list'])
         has_soil = len(self.params_A.get('soil', [])) > 0
         has_surch = len(self.params_A.get('surcharge', [])) > 0
         has_udl = data_mod.udl_line_load(self.params_A) > 0.0
 
         if self.valid_B:
+            if self.params_B.get('auto_selfweight', False): has_swa = True
             if any(v > 0 for v in self.params_B['sw_list']): has_sw = True
             if len(self.params_B.get('soil', [])) > 0: has_soil = True
             if len(self.params_B.get('surcharge', [])) > 0: has_surch = True
             if data_mod.udl_line_load(self.params_B) > 0.0: has_udl = True
 
-        active_comps = sum([has_sw, has_soil, has_surch, has_udl])
+        active_comps = sum([has_swa, has_sw, has_soil, has_surch, has_udl])
         prog_start = 0.50
         prog_total_span = 0.25
         prog_step = prog_total_span / max(1, active_comps)
-        
+
+        if has_swa:
+            self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Self-weight (Unfactored)", self.styles['SwecoSubHeader']))
+            self.elements.append(Paragraph(
+                "Automatically computed self-weight of the structural members, derived from the unit "
+                f"weight &gamma; = {self.params_A.get('density', 25.0):g} kN/m&sup3;, the effective width and the section "
+                "height profile (including any taper). Applied as a gravity load and included in the "
+                "global equilibrium check.",
+                self.styles['SwecoSmall']))
+            self._add_component_section("Self-weight", prog_range=(prog_start, prog_start + prog_step))
+            self.elements.append(PageBreak())
+            self.chapter_count += 1
+            prog_start += prog_step
+
         if has_sw:
             self.elements.append(Paragraph(f"{self.chapter_count}. Load Case: Dead Load (Unfactored)", self.styles['SwecoSubHeader']))
             self._add_component_section("Dead Load", prog_range=(prog_start, prog_start + prog_step))
@@ -792,6 +807,11 @@ class BricosReportGenerator:
         lbl_beff = Paragraph("Effective Width (<i>b<sub>eff</sub></i>)", self.styles['SwecoBody'])
         data.append([lbl_beff, f"{p.get('b_eff', 1.0)} m", "Used for shear area & axial area estimation"])
 
+        if p.get('auto_selfweight', False):
+            lbl_sw = Paragraph("Auto Self-weight (<i>&gamma;</i>)", self.styles['SwecoBody'])
+            data.append([lbl_sw, f"On, {p.get('density', 25.0):g} kN/m³",
+                         "Self-weight computed from γ × b_eff × height profile; inertia input disabled"])
+
         if use_shear:
             data.append(["Poisson's Ratio (ν)", f"{p.get('nu', 0.2)}", "Used for shear modulus G"])
 
@@ -984,6 +1004,8 @@ class BricosReportGenerator:
         uls_col = f"ULS factor (× KFI = {kfi})" if analyze_uls else "ULS factor (not analyzed)"
         sls_col = "SLS factor" if analyze_sls else "SLS factor (not analyzed)"
         fact_rows = [["Load component", uls_col, sls_col, "Dynamic factor"]]
+        if p.get('auto_selfweight', False):
+            fact_rows.append(["Self-weight", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
         fact_rows.append(["Dead Load", f"{p.get('gamma_g', 1.0)}", f"{p.get('sls_g', 1.0)}", "-"])
         if p.get('soil'):
             # Presets by label: the '1.0 (No KFI)' option must never leak
@@ -1187,7 +1209,7 @@ class BricosReportGenerator:
         the residual check remains meaningful at zero sums.
         """
         rows = [["Load case", "Sum applied Fx / Fy [kN]", "Sum reactions Rx / Ry [kN]", "Residual Fx / Fy [kN]", "Status"]]
-        for case in ('Dead Load', 'Soil', 'Surcharge'):
+        for case in ('Self-weight', 'Dead Load', 'Soil', 'Surcharge'):
             eq = equilibrium.get(case)
             if not eq:
                 continue
@@ -1448,6 +1470,8 @@ class BricosReportGenerator:
     @staticmethod
     def _system_has_component(params, load_key):
         """Whether a static load component is defined for the given system."""
+        if load_key == "Self-weight":
+            return bool(params.get('auto_selfweight', False))
         if load_key == "Dead Load":
             return any(v > 0 for v in params.get('sw_list', []))
         if load_key == "Soil":

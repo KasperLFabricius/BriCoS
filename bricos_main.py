@@ -465,6 +465,34 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     st.session_state['sysB']['analyze_sls'] = sls_on
 
     st.markdown("---")
+    st.markdown("**Self-weight**")
+    help_autosw = (
+        "Off: enter all permanent load manually as the per-span Dead Load line load [kN/m]. "
+        "On: the structural self-weight of decks and walls is computed automatically as "
+        "unit weight x effective width x section height and reported as a separate "
+        "'Self-weight' load case (factored like Dead Load by KFI*gamma_g in ULS, sls_g in SLS). "
+        "While on, the section must be defined by height - inertia-mode section input is "
+        "disabled - and b_eff is treated as the physical cross-section width. The Dead Load "
+        "input then carries only superimposed permanent actions (surfacing, ballast, parapets)."
+    )
+    auto_sw_on = st.checkbox("Auto-calculate self-weight", value=bool(st.session_state['sysA'].get('auto_selfweight', False)), key="auto_sw_toggle_sidebar", help=help_autosw, disabled=ui_locked)
+    st.session_state['sysA']['auto_selfweight'] = auto_sw_on
+    st.session_state['sysB']['auto_selfweight'] = auto_sw_on
+    if auto_sw_on:
+        dens_val = st.session_state['sysA'].get('density', 25.0)
+        new_dens = st.number_input(
+            r"Unit weight $\gamma$ [kN/m³]", value=float(dens_val), min_value=0.0, step=1.0,
+            key="density_input_sidebar", disabled=ui_locked,
+            help="Material unit weight (specific weight). Reinforced concrete is approx. 25 kN/m³.")
+        st.session_state['sysA']['density'] = new_dens
+        st.session_state['sysB']['density'] = new_dens
+        # Height-only lockout: convert EVERY stored inertia-mode profile in
+        # both systems now, so the auto self-weight solve never depends on
+        # which Section Profiler member happened to be viewed.
+        data_mod.convert_inertia_geoms_to_height(st.session_state['sysA'])
+        data_mod.convert_inertia_geoms_to_height(st.session_state['sysB'])
+
+    st.markdown("---")
     st.markdown("**Shear Deformations (Timoshenko)**")
     
     help_shear = (
@@ -847,11 +875,23 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         
         # NOTE: We attach 'trigger_lock' to on_change events below to catch explicit edits.
 
+        # Auto self-weight forces a height-defined section. Every profile was
+        # already converted to height when the toggle was enabled (see the
+        # Analysis & Result Settings block), so here we only lock the
+        # Definition Mode to Height and disable the Inertia option.
+        auto_sw_on = bool(p.get('auto_selfweight', False))
+        type_key = f"{curr}_prof_type_{sel_el}"
         c_p1, c_p2 = st.columns(2)
+        if auto_sw_on:
+            # Keep the disabled radio's displayed value consistent with the
+            # forced height mode.
+            st.session_state[type_key] = "Height (H)"
         new_type = c_p1.radio(
-            "Definition Mode:", ["Inertia (I)", "Height (H)"], 
-            index=target_geom['type'], 
-            key=f"{curr}_prof_type_{sel_el}", horizontal=True, disabled=ui_locked,
+            "Definition Mode:", ["Inertia (I)", "Height (H)"],
+            index=target_geom['type'],
+            key=type_key, horizontal=True, disabled=(ui_locked or auto_sw_on),
+            help=("Auto self-weight is on: the section is defined by height; "
+                  "inertia input is disabled." if auto_sw_on else None),
             on_change=trigger_lock, args=(target_geom,)
         )
         target_geom['type'] = 0 if "Inertia" in new_type else 1
