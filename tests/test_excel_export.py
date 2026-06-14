@@ -56,7 +56,7 @@ def _beam_params(name="Sys", **overrides):
 
 def test_system_has_case_checks_each_load_case():
     p = _beam_params()
-    assert export.system_has_case(p, "Selfweight")
+    assert export.system_has_case(p, "Dead Load")
     assert export.system_has_case(p, "Traffic UDL")
     assert export.system_has_case(p, "Vehicle Envelope")
     assert not export.system_has_case(p, "Soil")
@@ -64,7 +64,7 @@ def test_system_has_case_checks_each_load_case():
 
     p_none = _beam_params(sw_list=[0.0] * 10, udl_q=0.0,
                           vehicle={"loads": [], "spacing": []})
-    assert not export.system_has_case(p_none, "Selfweight")
+    assert not export.system_has_case(p_none, "Dead Load")
     assert not export.system_has_case(p_none, "Traffic UDL")
     assert not export.system_has_case(p_none, "Vehicle Envelope")
 
@@ -77,7 +77,7 @@ def test_total_envelope_export_sheets_match_applied_cases_and_modes():
     settings, sheets = export.total_envelope_export(pA, raw, _beam_params(), None, False)
 
     assert list(sheets.keys()) == [
-        "Selfweight (Unfactored)",
+        "Dead Load (Unfactored)",
         "Traffic UDL (Unfactored)",
         "Vehicle Envelope (Unfactored)",
         "Total Envelope (ULS)",
@@ -111,7 +111,7 @@ def test_one_sided_load_case_exports_only_the_loaded_system():
     udl = sheets["Traffic UDL (Unfactored)"]
     assert set(udl["System"]) == {"Alpha"}
     # Both systems appear where both carry the case.
-    assert set(sheets["Selfweight (Unfactored)"]["System"]) == {"Alpha", "Beta"}
+    assert set(sheets["Dead Load (Unfactored)"]["System"]) == {"Alpha", "Beta"}
 
 
 def test_envelope_sheet_values_equal_combined_results():

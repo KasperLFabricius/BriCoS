@@ -118,7 +118,7 @@ def _combine_raw(phi_members, phi_calc=1.25):
         "S2": {**{k: env_a for k in env_keys}, "base": dict(base)},
     }
     return {
-        "Selfweight": {}, "Soil": {}, "Surcharge": {},
+        "Dead Load": {}, "Soil": {}, "Surcharge": {},
         "Vehicle Envelope A": env, "Vehicle Envelope B": {},
         "phi_calc": phi_calc, "phi_log": [],
         "Phi Members": phi_members,

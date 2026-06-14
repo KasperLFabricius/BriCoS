@@ -55,7 +55,7 @@ def test_inclined_udl_develops_axial_force_and_stays_finite():
 
     raw, _, _ = _run(params)
     results = solver.combine_results(raw, params, "Characteristic (No Dynamic Factor)")
-    span = results["Selfweight"]["S1"]
+    span = results["Dead Load"]["S1"]
 
     assert np.max(np.abs(span["N"])) > 1e-6
     assert np.max(np.abs(span["V"])) > 1e-6
@@ -103,6 +103,6 @@ def test_horizontal_selfweight_has_no_gravity_axial_component():
 
     raw, _, _ = _run(params)
     results = solver.combine_results(raw, params, "Characteristic (No Dynamic Factor)")
-    span = results["Selfweight"]["S1"]
+    span = results["Dead Load"]["S1"]
 
     assert np.max(np.abs(span["N"])) == pytest.approx(0.0, abs=1e-6)

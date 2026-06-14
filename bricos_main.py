@@ -100,7 +100,7 @@ def render_uls_factors(p, curr, ui_locked):
     idx_gg = gg_opts.index(gg_val) if gg_val in gg_opts else len(gg_opts)
 
     help_gg = (
-        "Partial factor for permanent loads (Self-weight). Applied to the 'Selfweight' load case. "
+        "Partial factor for permanent loads (Self-weight). Applied to the 'Dead Load' load case. "
         "Note: this single factor is applied to both maximum and minimum results - favorable/unfavorable "
         "permanent-load combinations are not evaluated automatically. For checks where self-weight is "
         "favorable (e.g. uplift), re-run with the favorable factor (e.g. 0.9 or 1.0)."
@@ -189,7 +189,7 @@ def render_sls_factors(p, curr, ui_locked):
 
     c_s1, c_s2 = st.columns(2)
     _sls_factor_input(c_s1, "Self-weight (SLS)", 'sls_g', list(data_mod.SLS_G_PRESETS), 1.0,
-                      "SLS factor on the Selfweight load case. Fig. B3.2: 1.0.", "slsg")
+                      "SLS factor on the Dead Load load case. Fig. B3.2: 1.0.", "slsg")
     _sls_factor_input(c_s2, "Soil (SLS)", 'sls_j', list(data_mod.SLS_J_PRESETS), 1.0,
                       "SLS factor on the Soil load case. Fig. B3.2: 1.0.", "slsj")
     c_s3, c_s4 = st.columns(2)
@@ -705,7 +705,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         # Tooltip Help Strings (Only show on first iteration)
         help_L = "Span length [m]" if i == 0 else None
         help_H = "Section Height/Depth [m]. Used to calculate stiffness I." if i == 0 else None
-        help_SW = "Load from selfweight and other permanent loads, such as soil and surfacing [kN/m]." if i == 0 else None
+        help_DL = "Permanent dead load as a line load [kN/m] - self-weight and other permanent actions such as surfacing and soil cover." if i == 0 else None
         help_Mat = "Characteristic concrete cylinder strength [MPa]" if (i==0 and is_ec) else ("Young's Modulus [GPa]" if i==0 else None)
 
         c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
@@ -726,7 +726,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         else:
             c2.text_input(f"H{i+1} [m]", "See Profiler", disabled=True, key=f"{curr}_i{i}_dis", help="Controlled by Section Profiler")
 
-        p['sw_list'][i] = c3.number_input(f"SW{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", disabled=ui_locked, help=help_SW)
+        p['sw_list'][i] = c3.number_input(f"DL{i+1} [kN/m]", value=float(p['sw_list'][i]), key=f"{curr}_s{i}", disabled=ui_locked, help=help_DL)
         
         if is_ec:
             val_in = c4.number_input(f"{lbl_mat}", value=float(p['fck_span_list'][i]), key=f"{curr}_fck_s{i}", disabled=ui_locked, help=help_Mat)

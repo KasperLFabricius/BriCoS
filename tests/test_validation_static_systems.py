@@ -60,7 +60,7 @@ def _run(params):
     return raw, nodes, props
 
 
-def _static_case(params, case="Selfweight"):
+def _static_case(params, case="Dead Load"):
     raw, _, _ = _run(params)
     res = solver.combine_results(raw, params, "Unfactored")
     return raw, res[case]
@@ -591,8 +591,8 @@ def test_uls_partial_factors_scale_components_linearly():
     unf = solver.combine_results(raw, params, "Unfactored")
 
     np.testing.assert_allclose(
-        uls["Selfweight"]["S1"]["M_max"],
-        np.asarray(unf["Selfweight"]["S1"]["M_max"]) * 1.1 * 1.35, atol=1e-9)
+        uls["Dead Load"]["S1"]["M_max"],
+        np.asarray(unf["Dead Load"]["S1"]["M_max"]) * 1.1 * 1.35, atol=1e-9)
     np.testing.assert_allclose(
         uls["Vehicle Envelope"]["S1"]["M_max"],
         np.asarray(unf["Vehicle Envelope"]["S1"]["M_max"]) * 1.1 * 1.4 * 1.25,
@@ -612,5 +612,5 @@ def test_manual_phi_multiplies_vehicle_term_only():
         r2["Vehicle Envelope"]["S1"]["M_max"],
         np.asarray(r1["Vehicle Envelope"]["S1"]["M_max"]) * 1.3, atol=1e-9)
     np.testing.assert_allclose(
-        r2["Selfweight"]["S1"]["M_max"], r1["Selfweight"]["S1"]["M_max"],
+        r2["Dead Load"]["S1"]["M_max"], r1["Dead Load"]["S1"]["M_max"],
         atol=1e-9)

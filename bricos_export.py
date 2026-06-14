@@ -25,14 +25,14 @@ import bricos_data as data_mod
 import bricos_solver as solver
 
 # Load cases exported as unfactored result sheets, in report order.
-EXPORT_CASES = ("Selfweight", "Soil", "Surcharge", "Traffic UDL", "Vehicle Envelope")
+EXPORT_CASES = ("Dead Load", "Soil", "Surcharge", "Traffic UDL", "Vehicle Envelope")
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def system_has_case(params, case_key):
     """Whether a load case is validly applied in the given system."""
-    if case_key == "Selfweight":
+    if case_key == "Dead Load":
         return any(v > 0 for v in params.get('sw_list', []))
     if case_key == "Soil":
         return bool(params.get('soil'))
@@ -211,14 +211,14 @@ def settings_dataframe(params_A, params_B, raw_A, raw_B, valid_B):
             "Surcharge interaction": surch_int,
             "Limit states analyzed": ls_txt,
             "KFI (consequence class)": kfi,
-            "γ_g - Selfweight (ULS)": p.get('gamma_g', 1.0),
+            "γ_g - Dead Load (ULS)": p.get('gamma_g', 1.0),
             # Presets by label: the '1.0 (No KFI)' option must never leak
             # its raw stored value (1/KFI).
             "γ_j - Soil (ULS)": data_mod.soil_gamma_display(p.get('gamma_j', 1.0), kfi),
             "γ_veh,A - Vehicle A (ULS)": p.get('gamma_veh', 1.0),
             "γ_veh,B - Vehicle B (ULS)": p.get('gamma_vehB', 1.0),
             "γ_UDL - Traffic UDL (ULS)": p.get('gamma_udl', 0.56),
-            "Selfweight (SLS)": p.get('sls_g', 1.0),
+            "Dead Load (SLS)": p.get('sls_g', 1.0),
             "Soil (SLS)": p.get('sls_j', 1.0),
             "Vehicle A (SLS)": p.get('sls_veh', 1.0),
             "Vehicle B (SLS)": p.get('sls_vehB', 1.0),
