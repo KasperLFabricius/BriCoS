@@ -875,16 +875,56 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         
         # NOTE: We attach 'trigger_lock' to on_change events below to catch explicit edits.
 
-        # Auto self-weight forces a height-defined section. Every profile was
-        # already converted to height when the toggle was enabled (see the
-        # Analysis & Result Settings block), so here we only lock the
-        # Definition Mode to Height and disable the Inertia option.
+        # DESYNC GUARD (per system + per element): the geometry dict is the
+        # SINGLE source of truth for the Section Profiler. Streamlit keeps
+        # widget state by key and only falls back to the index=/value=
+        # argument when a key is ABSENT - so a key left over from another
+        # system or element, or from an out-of-band dict change (load, copy,
+        # auto-self-weight conversion), is both displayed AND written back,
+        # bleeding one profile onto another (e.g. System A span 1 set to a
+        # 3-point taper showing up on System B's spans). Re-seed the shape,
+        # type and value widgets from the dict whenever it changed through
+        # anything other than these widgets, or a key is missing. The
+        # signature check leaves a genuine in-widget edit alone: on that rerun
+        # the dict still matches the last agreed signature (the radios below
+        # have not written back yet), so the user's change is preserved.
         auto_sw_on = bool(p.get('auto_selfweight', False))
+        shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
+        shape_map_rev = {v: k for k, v in shape_map.items()}
+        type_map_rev = {0: "Inertia (I)", 1: "Height (H)"}
+        align_map_rev = {0: "Straight (Horizontal)", 1: "Inclined"}
+        inc_mode_rev = {0: "Slope (%)", 1: "Delta Height (End - Start) [m]"}
         type_key = f"{curr}_prof_type_{sel_el}"
+        shape_key = f"{curr}_prof_shape_{sel_el}"
+        prof_val_keys = [f"{curr}_prof_v{j}_{sel_el}" for j in (1, 2, 3)]
+        prof_sig_key = f"{curr}_prof_sig_{sel_el}"
+        prof_sig = (target_geom['type'], target_geom['shape'],
+                    tuple(float(v) for v in target_geom['vals']),
+                    target_geom.get('align_type', 0),
+                    target_geom.get('incline_mode', 0),
+                    float(target_geom.get('incline_val', 0.0)))
+        if (st.session_state.get(prof_sig_key) != prof_sig
+                or any(k not in st.session_state for k in [type_key, shape_key] + prof_val_keys)):
+            st.session_state[type_key] = type_map_rev.get(target_geom['type'], "Height (H)")
+            st.session_state[shape_key] = shape_map_rev.get(target_geom['shape'], "Constant")
+            for k, v in zip(prof_val_keys, target_geom['vals']):
+                st.session_state[k] = float(v)
+            # The span Alignment widgets share the same bleed risk and are in
+            # the signature too, so an out-of-band alignment change - e.g.
+            # pressing Reset on an otherwise-constant but Inclined span, which
+            # leaves type/shape/vals unchanged - still trips this re-seed and
+            # clears the stale widget. A genuine in-widget alignment edit is
+            # preserved because the signature is re-recorded AFTER the
+            # alignment widgets below (so the dict still matches the last
+            # agreed signature on the edit's rerun).
+            st.session_state[f"{curr}_align_t_{sel_el}"] = align_map_rev.get(target_geom.get('align_type', 0), "Straight (Horizontal)")
+            st.session_state[f"{curr}_inc_m_{sel_el}"] = inc_mode_rev.get(target_geom.get('incline_mode', 0), "Slope (%)")
+            st.session_state[f"{curr}_inc_v_{sel_el}"] = float(target_geom.get('incline_val', 0.0))
+
+        # Auto self-weight forces a height-defined section (every profile was
+        # converted when the toggle was enabled); lock the radio to Height.
         c_p1, c_p2 = st.columns(2)
         if auto_sw_on:
-            # Keep the disabled radio's displayed value consistent with the
-            # forced height mode.
             st.session_state[type_key] = "Height (H)"
         new_type = c_p1.radio(
             "Definition Mode:", ["Inertia (I)", "Height (H)"],
@@ -895,31 +935,14 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             on_change=trigger_lock, args=(target_geom,)
         )
         target_geom['type'] = 0 if "Inertia" in new_type else 1
-        
+
         new_shape = c_p2.radio(
-            "Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"], 
-            index=target_geom['shape'], 
-            key=f"{curr}_prof_shape_{sel_el}", horizontal=True, disabled=ui_locked,
+            "Profile Shape:", ["Constant", "Linear (Taper)", "3-Point (Start/Mid/End)"],
+            index=target_geom['shape'],
+            key=shape_key, horizontal=True, disabled=ui_locked,
             on_change=trigger_lock, args=(target_geom,)
         )
-        shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
         target_geom['shape'] = shape_map[new_shape]
-        
-        # DESYNC GUARD: the geometry dict is the source of truth. Widget keys
-        # outlive the dict state they were seeded from (force_ui_update
-        # pre-seeds keys for elements that are not rendered, and switching
-        # shape attaches Mid/End inputs to whatever the keys last held), and
-        # the write-back below would push such stale values into the dict.
-        # Re-seed the value widgets whenever the dict changed through
-        # anything other than these widgets, or when the keys are missing.
-        prof_val_keys = [f"{curr}_prof_v{j}_{sel_el}" for j in (1, 2, 3)]
-        prof_sig_key = f"{curr}_prof_sig_{sel_el}"
-        prof_sig = (target_geom['type'], target_geom['shape'],
-                    tuple(float(v) for v in target_geom['vals']))
-        if (st.session_state.get(prof_sig_key) != prof_sig
-                or any(k not in st.session_state for k in prof_val_keys)):
-            for k, v in zip(prof_val_keys, target_geom['vals']):
-                st.session_state[k] = float(v)
 
         vals = target_geom['vals']
         c_v1, c_v2, c_v3 = st.columns(3)
@@ -952,10 +975,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             )
             
         target_geom['vals'] = [v1, v2, v3]
-        # Record the state the widgets and the dict now agree on, so the
-        # guard above only fires on out-of-band changes.
-        st.session_state[prof_sig_key] = (target_geom['type'], target_geom['shape'],
-                                          tuple(float(v) for v in target_geom['vals']))
 
         # If in simple mode (just height constant), sync back to simple list for legacy logic
         if target_geom['type'] == 1:
@@ -986,10 +1005,22 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
                 
                 lbl_inc = "Slope [%]" if target_geom['incline_mode'] == 0 else "Delta H [m]"
                 target_geom['incline_val'] = st.number_input(
-                    lbl_inc, value=float(target_geom['incline_val']), format="%.2f", 
+                    lbl_inc, value=float(target_geom['incline_val']), format="%.2f",
                     key=f"{curr}_inc_v_{sel_el}", disabled=ui_locked,
                     on_change=trigger_lock, args=(target_geom,)
                 )
+
+        # Record the full profiler state - section AND alignment - that the
+        # widgets and the dict now agree on, AFTER the alignment widgets have
+        # written back, so the guard above only fires on out-of-band changes
+        # (and a genuine alignment edit on this rerun is not reverted).
+        st.session_state[prof_sig_key] = (
+            target_geom['type'], target_geom['shape'],
+            tuple(float(v) for v in target_geom['vals']),
+            target_geom.get('align_type', 0),
+            target_geom.get('incline_mode', 0),
+            float(target_geom.get('incline_val', 0.0)),
+        )
 
 # --- BOUNDARY CONDITIONS TAB ---
 with st.sidebar.expander("Boundary Conditions", expanded=False):
