@@ -72,6 +72,135 @@ def trigger_lock(geom_data):
     """Callback to lock a geometry element when modified via Profiler."""
     geom_data['locked'] = True
 
+
+def render_uls_factors(p, curr, ui_locked):
+    """ULS partial-factor inputs (KFI, gamma_g/j/veh,A/veh,B/udl). Rendered
+    only when ULS analysis is enabled - the factors feed only the Design
+    (ULS) combination, so there is no reason to show them otherwise."""
+    st.markdown("---")
+    st.markdown("**ULS partial factors**")
+    st.caption(
+        "Applied in the Design (ULS) result mode, multiplied by KFI. Defaults follow "
+        "Vejledning til belastnings- og beregningsgrundlag for broer, Fig. B3.1."
+    )
+    kfi_opts = list(data_mod.KFI_PRESETS)
+    curr_kfi = p.get('KFI', 1.0)
+    idx_kfi = kfi_opts.index(curr_kfi) if curr_kfi in kfi_opts else 1
+    help_KFI = (
+        "Partial factor for consequence class. Applied to all loads in ULS (not in SLS). "
+        "Exception: for permanent soil loads KFI can be negated by selecting the soil "
+        "factor '1.0 (No KFI)' below, as permitted for earth pressure (Vejledning til "
+        "belastnings- og beregningsgrundlag for broer)."
+    )
+    p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", disabled=ui_locked, help=help_KFI)
+
+    gg_opts = list(data_mod.GAMMA_G_PRESETS)
+    c_gg, c_gj = st.columns(2)
+    gg_val = p.get('gamma_g', 1.0)
+    idx_gg = gg_opts.index(gg_val) if gg_val in gg_opts else len(gg_opts)
+
+    help_gg = (
+        "Partial factor for permanent loads (Self-weight). Applied to the 'Selfweight' load case. "
+        "Note: this single factor is applied to both maximum and minimum results - favorable/unfavorable "
+        "permanent-load combinations are not evaluated automatically. For checks where self-weight is "
+        "favorable (e.g. uplift), re-run with the favorable factor (e.g. 0.9 or 1.0)."
+    )
+    gg_sel = c_gg.selectbox(r"$\gamma_{g}$ (Self-weight)", gg_opts + ["Custom"], index=min(idx_gg, len(gg_opts)), key=f"{curr}_gg_sel", disabled=ui_locked, help=help_gg)
+    if gg_sel == "Custom": p['gamma_g'] = c_gg.number_input(r"Custom $\gamma_{g}$", value=float(gg_val), key=f"{curr}_gg_cust", disabled=ui_locked)
+    else: p['gamma_g'] = float(gg_sel)
+
+    gj_val = p.get('gamma_j', 1.0)
+    gj_opts = [data_mod.SOIL_GAMMA_NO_KFI_LABEL] + list(data_mod.SOIL_GAMMA_PRESETS) + ["Custom"]
+    gj_label = data_mod.soil_gamma_preset_label(gj_val, p['KFI'])
+    idx_gj = gj_opts.index(gj_label) if gj_label in gj_opts else len(gj_opts) - 1
+
+    help_gj = (
+        "Partial factor for permanent soil loads (Earth Pressure). Applied to the 'Soil' load case. "
+        "'1.0 (No KFI)' gives an effective factor of exactly 1.0 with KFI negated for the soil case, "
+        "as permitted for earth pressure (Vejledning til belastnings- og beregningsgrundlag for broer). "
+        "Note: this single factor is applied to both maximum and minimum results - favorable/unfavorable "
+        "permanent-load combinations are not evaluated automatically. Re-run with the favorable factor "
+        "where earth pressure acts favorably."
+    )
+    gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts, index=idx_gj, key=f"{curr}_gj_sel", disabled=ui_locked, help=help_gj)
+    if gj_sel == "Custom":
+        p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust", disabled=ui_locked)
+    elif gj_sel == data_mod.SOIL_GAMMA_NO_KFI_LABEL:
+        # Tracks the active KFI so the cancellation stays exact.
+        p['gamma_j'] = data_mod.soil_gamma_no_kfi_value(p['KFI'])
+    else:
+        p['gamma_j'] = float(gj_sel)
+
+    gam_opts = list(data_mod.GAMMA_VEH_PRESETS)
+    c_ga, c_gb = st.columns(2)
+    gam_valA = p.get('gamma_veh', 1.0)
+    idx_gamA = gam_opts.index(gam_valA) if gam_valA in gam_opts else len(gam_opts)
+
+    help_ga = "Partial factor for variable traffic Load Model A. Applied to 'Vehicle A' (with Dynamic Factor) and 'Surcharge' (static)."
+    gam_selA = c_ga.selectbox(r"$\gamma_{veh,A}$", gam_opts + ["Custom"], index=min(idx_gamA, len(gam_opts)), key=f"{curr}_gamA_sel", disabled=ui_locked, help=help_ga)
+    if gam_selA == "Custom": p['gamma_veh'] = c_ga.number_input(r"Custom $\gamma_{A}$", value=float(gam_valA), key=f"{curr}_gamA_cust", disabled=ui_locked)
+    else: p['gamma_veh'] = float(gam_selA)
+
+    gam_valB = p.get('gamma_vehB', 1.0)
+    idx_gamB = gam_opts.index(gam_valB) if gam_valB in gam_opts else len(gam_opts)
+
+    help_gb = "Partial factor for variable traffic Load Model B. Applied to 'Vehicle B' (with Dynamic Factor)."
+    gam_selB = c_gb.selectbox(r"$\gamma_{veh,B}$", gam_opts + ["Custom"], index=min(idx_gamB, len(gam_opts)), key=f"{curr}_gamB_sel", disabled=ui_locked, help=help_gb)
+    if gam_selB == "Custom": p['gamma_vehB'] = c_gb.number_input(r"Custom $\gamma_{B}$", value=float(gam_valB), key=f"{curr}_gamB_cust", disabled=ui_locked)
+    else: p['gamma_vehB'] = float(gam_selB)
+
+    gudl_opts = list(data_mod.GAMMA_UDL_PRESETS)
+    c_gu, _c_spare = st.columns(2)
+    gudl_val = p.get('gamma_udl', 0.56)
+    idx_gudl = gudl_opts.index(gudl_val) if gudl_val in gudl_opts else len(gudl_opts)
+    help_gudl = (
+        "Partial factor for the Traffic UDL in ULS (with KFI). Vejledning til "
+        "belastnings- og beregningsgrundlag for broer, Fig. B3.1: 0.56 as companion to the "
+        "standard vehicles (LC 1); 1.40 for the large-bridge UDL-alone combination (LC 3). "
+        "The UDL itself is defined under Vehicle Definitions. Phi is never applied to it "
+        "(intensity includes the dynamic increment, DK NA A.2.3.2)."
+    )
+    gudl_sel = c_gu.selectbox(r"$\gamma_{UDL}$", gudl_opts + ["Custom"], index=min(idx_gudl, len(gudl_opts)), key=f"{curr}_gudl_sel", disabled=ui_locked, help=help_gudl)
+    if gudl_sel == "Custom":
+        p['gamma_udl'] = c_gu.number_input(r"Custom $\gamma_{UDL}$", value=float(gudl_val), min_value=0.0, key=f"{curr}_gudl_cust", disabled=ui_locked)
+    else:
+        p['gamma_udl'] = float(gudl_sel)
+
+
+def render_sls_factors(p, curr, ui_locked):
+    """SLS combination-factor inputs. Rendered only when SLS analysis is
+    enabled - the factors feed only the Characteristic (SLS) combination."""
+    st.markdown("---")
+    st.markdown("**SLS combination factors**")
+    st.caption(
+        "Applied in the Characteristic (SLS) result mode. Defaults follow the characteristic "
+        "combination of Vejledning til belastnings- og beregningsgrundlag for broer, Fig. B3.2. "
+        "KFI is not applied in SLS."
+    )
+
+    def _sls_factor_input(col, label, param_key, options, default, help_txt, widget_tag):
+        val = p.get(param_key, default)
+        idx = options.index(val) if val in options else len(options)
+        sel = col.selectbox(label, options + ["Custom"], index=min(idx, len(options)), key=f"{curr}_{widget_tag}_sel", disabled=ui_locked, help=help_txt)
+        if sel == "Custom":
+            p[param_key] = col.number_input(f"Custom {label}", value=float(val), min_value=0.0, key=f"{curr}_{widget_tag}_cust", disabled=ui_locked)
+        else:
+            p[param_key] = float(sel)
+
+    c_s1, c_s2 = st.columns(2)
+    _sls_factor_input(c_s1, "Self-weight (SLS)", 'sls_g', list(data_mod.SLS_G_PRESETS), 1.0,
+                      "SLS factor on the Selfweight load case. Fig. B3.2: 1.0.", "slsg")
+    _sls_factor_input(c_s2, "Soil (SLS)", 'sls_j', list(data_mod.SLS_J_PRESETS), 1.0,
+                      "SLS factor on the Soil load case. Fig. B3.2: 1.0.", "slsj")
+    c_s3, c_s4 = st.columns(2)
+    _sls_factor_input(c_s3, "Vehicle A (SLS)", 'sls_veh', list(data_mod.SLS_VEH_PRESETS), 1.0,
+                      "SLS factor on Vehicle A (with the SLS Phi treatment) and the Surcharge. Fig. B3.2: 1.00.", "slsA")
+    _sls_factor_input(c_s4, "Vehicle B (SLS)", 'sls_vehB', list(data_mod.SLS_VEHB_PRESETS), 0.75,
+                      "SLS factor on Vehicle B (with the SLS Phi treatment). Fig. B3.2: 0.75.", "slsB")
+    c_s5, _c_s6 = st.columns(2)
+    _sls_factor_input(c_s5, "Traffic UDL (SLS)", 'sls_udl', list(data_mod.SLS_UDL_PRESETS), 0.40,
+                      "SLS factor on the Traffic UDL (Phi never applies to it). Fig. B3.2: 0.40.", "slsudl")
+
 # ==========================================
 # INITIALIZATION & AUTOSAVE
 # ==========================================
@@ -476,125 +605,15 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     e_mode = st.radio("Material Definition", ["Eurocode (f_ck)", "Manual (E-Modulus)"], horizontal=True, index=0 if p['e_mode']=='Eurocode' else 1, key=f"{curr}_emode", help=help_mat, disabled=ui_locked)
     p['e_mode'] = "Eurocode" if "Eurocode" in e_mode else "Manual"
 
-    st.markdown("---")
-    st.markdown("**ULS partial factors**")
-    st.caption(
-        "Applied in the Design (ULS) result mode, multiplied by KFI. Defaults follow "
-        "Vejledning til belastnings- og beregningsgrundlag for broer, Fig. B3.1."
-    )
-    kfi_opts = list(data_mod.KFI_PRESETS)
-    curr_kfi = p.get('KFI', 1.0)
-    idx_kfi = kfi_opts.index(curr_kfi) if curr_kfi in kfi_opts else 1
-    help_KFI = (
-        "Partial factor for consequence class. Applied to all loads in ULS (not in SLS). "
-        "Exception: for permanent soil loads KFI can be negated by selecting the soil "
-        "factor '1.0 (No KFI)' below, as permitted for earth pressure (Vejledning til "
-        "belastnings- og beregningsgrundlag for broer)."
-    )
-    p['KFI'] = st.selectbox("KFI (Consequence Class)", kfi_opts, index=idx_kfi, key=f"{curr}_kfi", disabled=ui_locked, help=help_KFI)
-    
-    gg_opts = list(data_mod.GAMMA_G_PRESETS)
-    c_gg, c_gj = st.columns(2)
-    gg_val = p.get('gamma_g', 1.0)
-    idx_gg = gg_opts.index(gg_val) if gg_val in gg_opts else len(gg_opts)
-    
-    help_gg = (
-        "Partial factor for permanent loads (Self-weight). Applied to the 'Selfweight' load case. "
-        "Note: this single factor is applied to both maximum and minimum results - favorable/unfavorable "
-        "permanent-load combinations are not evaluated automatically. For checks where self-weight is "
-        "favorable (e.g. uplift), re-run with the favorable factor (e.g. 0.9 or 1.0)."
-    )
-    gg_sel = c_gg.selectbox(r"$\gamma_{g}$ (Self-weight)", gg_opts + ["Custom"], index=min(idx_gg, len(gg_opts)), key=f"{curr}_gg_sel", disabled=ui_locked, help=help_gg)
-    if gg_sel == "Custom": p['gamma_g'] = c_gg.number_input(r"Custom $\gamma_{g}$", value=float(gg_val), key=f"{curr}_gg_cust", disabled=ui_locked)
-    else: p['gamma_g'] = float(gg_sel)
-
-    gj_val = p.get('gamma_j', 1.0)
-    gj_opts = [data_mod.SOIL_GAMMA_NO_KFI_LABEL] + list(data_mod.SOIL_GAMMA_PRESETS) + ["Custom"]
-    gj_label = data_mod.soil_gamma_preset_label(gj_val, p['KFI'])
-    idx_gj = gj_opts.index(gj_label) if gj_label in gj_opts else len(gj_opts) - 1
-
-    help_gj = (
-        "Partial factor for permanent soil loads (Earth Pressure). Applied to the 'Soil' load case. "
-        "'1.0 (No KFI)' gives an effective factor of exactly 1.0 with KFI negated for the soil case, "
-        "as permitted for earth pressure (Vejledning til belastnings- og beregningsgrundlag for broer). "
-        "Note: this single factor is applied to both maximum and minimum results - favorable/unfavorable "
-        "permanent-load combinations are not evaluated automatically. Re-run with the favorable factor "
-        "where earth pressure acts favorably."
-    )
-    gj_sel = c_gj.selectbox(r"$\gamma_{j}$ (Soil)", gj_opts, index=idx_gj, key=f"{curr}_gj_sel", disabled=ui_locked, help=help_gj)
-    if gj_sel == "Custom":
-        p['gamma_j'] = c_gj.number_input(r"Custom $\gamma_{j}$", value=float(gj_val), key=f"{curr}_gj_cust", disabled=ui_locked)
-    elif gj_sel == data_mod.SOIL_GAMMA_NO_KFI_LABEL:
-        # Tracks the active KFI so the cancellation stays exact.
-        p['gamma_j'] = data_mod.soil_gamma_no_kfi_value(p['KFI'])
-    else:
-        p['gamma_j'] = float(gj_sel)
-
-    gam_opts = list(data_mod.GAMMA_VEH_PRESETS)
-    c_ga, c_gb = st.columns(2)
-    gam_valA = p.get('gamma_veh', 1.0)
-    idx_gamA = gam_opts.index(gam_valA) if gam_valA in gam_opts else len(gam_opts)
-    
-    help_ga = "Partial factor for variable traffic Load Model A. Applied to 'Vehicle A' (with Dynamic Factor) and 'Surcharge' (static)."
-    gam_selA = c_ga.selectbox(r"$\gamma_{veh,A}$", gam_opts + ["Custom"], index=min(idx_gamA, len(gam_opts)), key=f"{curr}_gamA_sel", disabled=ui_locked, help=help_ga)
-    if gam_selA == "Custom": p['gamma_veh'] = c_ga.number_input(r"Custom $\gamma_{A}$", value=float(gam_valA), key=f"{curr}_gamA_cust", disabled=ui_locked)
-    else: p['gamma_veh'] = float(gam_selA)
-
-    gam_valB = p.get('gamma_vehB', 1.0)
-    idx_gamB = gam_opts.index(gam_valB) if gam_valB in gam_opts else len(gam_opts)
-    
-    help_gb = "Partial factor for variable traffic Load Model B. Applied to 'Vehicle B' (with Dynamic Factor)."
-    gam_selB = c_gb.selectbox(r"$\gamma_{veh,B}$", gam_opts + ["Custom"], index=min(idx_gamB, len(gam_opts)), key=f"{curr}_gamB_sel", disabled=ui_locked, help=help_gb)
-    if gam_selB == "Custom": p['gamma_vehB'] = c_gb.number_input(r"Custom $\gamma_{B}$", value=float(gam_valB), key=f"{curr}_gamB_cust", disabled=ui_locked)
-    else: p['gamma_vehB'] = float(gam_selB)
-
-    gudl_opts = list(data_mod.GAMMA_UDL_PRESETS)
-    c_gu, _c_spare = st.columns(2)
-    gudl_val = p.get('gamma_udl', 0.56)
-    idx_gudl = gudl_opts.index(gudl_val) if gudl_val in gudl_opts else len(gudl_opts)
-    help_gudl = (
-        "Partial factor for the Traffic UDL in ULS (with KFI). Vejledning til "
-        "belastnings- og beregningsgrundlag for broer, Fig. B3.1: 0.56 as companion to the "
-        "standard vehicles (LC 1); 1.40 for the large-bridge UDL-alone combination (LC 3). "
-        "The UDL itself is defined under Vehicle Definitions. Phi is never applied to it "
-        "(intensity includes the dynamic increment, DK NA A.2.3.2)."
-    )
-    gudl_sel = c_gu.selectbox(r"$\gamma_{UDL}$", gudl_opts + ["Custom"], index=min(idx_gudl, len(gudl_opts)), key=f"{curr}_gudl_sel", disabled=ui_locked, help=help_gudl)
-    if gudl_sel == "Custom":
-        p['gamma_udl'] = c_gu.number_input(r"Custom $\gamma_{UDL}$", value=float(gudl_val), min_value=0.0, key=f"{curr}_gudl_cust", disabled=ui_locked)
-    else:
-        p['gamma_udl'] = float(gudl_sel)
-
-    st.markdown("---")
-    st.markdown("**SLS combination factors**")
-    st.caption(
-        "Applied in the Characteristic (SLS) result mode. Defaults follow the characteristic "
-        "combination of Vejledning til belastnings- og beregningsgrundlag for broer, Fig. B3.2. "
-        "KFI is not applied in SLS."
-    )
-
-    def _sls_factor_input(col, label, param_key, options, default, help_txt, widget_tag):
-        val = p.get(param_key, default)
-        idx = options.index(val) if val in options else len(options)
-        sel = col.selectbox(label, options + ["Custom"], index=min(idx, len(options)), key=f"{curr}_{widget_tag}_sel", disabled=ui_locked, help=help_txt)
-        if sel == "Custom":
-            p[param_key] = col.number_input(f"Custom {label}", value=float(val), min_value=0.0, key=f"{curr}_{widget_tag}_cust", disabled=ui_locked)
-        else:
-            p[param_key] = float(sel)
-
-    c_s1, c_s2 = st.columns(2)
-    _sls_factor_input(c_s1, "Self-weight (SLS)", 'sls_g', list(data_mod.SLS_G_PRESETS), 1.0,
-                      "SLS factor on the Selfweight load case. Fig. B3.2: 1.0.", "slsg")
-    _sls_factor_input(c_s2, "Soil (SLS)", 'sls_j', list(data_mod.SLS_J_PRESETS), 1.0,
-                      "SLS factor on the Soil load case. Fig. B3.2: 1.0.", "slsj")
-    c_s3, c_s4 = st.columns(2)
-    _sls_factor_input(c_s3, "Vehicle A (SLS)", 'sls_veh', list(data_mod.SLS_VEH_PRESETS), 1.0,
-                      "SLS factor on Vehicle A (with the SLS Phi treatment) and the Surcharge. Fig. B3.2: 1.00.", "slsA")
-    _sls_factor_input(c_s4, "Vehicle B (SLS)", 'sls_vehB', list(data_mod.SLS_VEHB_PRESETS), 0.75,
-                      "SLS factor on Vehicle B (with the SLS Phi treatment). Fig. B3.2: 0.75.", "slsB")
-    c_s5, _c_s6 = st.columns(2)
-    _sls_factor_input(c_s5, "Traffic UDL (SLS)", 'sls_udl', list(data_mod.SLS_UDL_PRESETS), 0.40,
-                      "SLS factor on the Traffic UDL (Phi never applies to it). Fig. B3.2: 0.40.", "slsudl")
+    # Only show the partial factors for the limit states actually analyzed;
+    # the others feed no combination, so they would be dead inputs. The
+    # analyze_uls/analyze_sls toggles render above (Analysis & Result
+    # Settings), so p already holds the current values here; re-enabling a
+    # limit state brings its factor inputs back.
+    if p.get('analyze_uls', True):
+        render_uls_factors(p, curr, ui_locked)
+    if p.get('analyze_sls', True):
+        render_sls_factors(p, curr, ui_locked)
 
     st.markdown("---")
     phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", disabled=ui_locked)
