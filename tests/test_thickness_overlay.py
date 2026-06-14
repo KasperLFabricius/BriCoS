@@ -31,6 +31,7 @@ def test_inertia_span_or_wall_flags_model():
     assert data.model_uses_inertia_sections(p) is True
 
     p2 = _clear_height_params()
+    p2["h_list"] = [6.0, 6.0, 6.0] + [0.0] * 8  # wall 1 is an active member
     p2["wall_geom_1"] = {"type": 0, "shape": 0, "vals": [0.1, 0.1, 0.1]}
     assert data.model_uses_inertia_sections(p2) is True
 
@@ -41,9 +42,31 @@ def test_inertia_section_beyond_active_spans_is_ignored():
     assert data.model_uses_inertia_sections(p) is False
 
 
+def test_inertia_on_inactive_zero_height_wall_is_ignored():
+    # A Frame wall with an inertia profiler setting but a zero member height is
+    # not an actual member (the solver skips it), so it must not gate off the
+    # overlay; raising its height to an active value does.
+    p = _clear_height_params()
+    p["h_list"] = [0.0] * 11
+    p["wall_geom_0"] = {"type": 0, "shape": 0, "vals": [0.1, 0.1, 0.1]}
+    assert data.model_uses_inertia_sections(p) is False
+
+    p["h_list"][0] = 6.0
+    assert data.model_uses_inertia_sections(p) is True
+
+
 def test_superstructure_ignores_inertia_walls():
     p = data.get_clear("A", "Superstructure")
     p["num_spans"] = 1
+    p["wall_geom_0"] = {"type": 0, "shape": 0, "vals": [0.1, 0.1, 0.1]}
+    assert data.model_uses_inertia_sections(p) is False
+
+
+def test_beam_mode_ignores_inertia_walls():
+    # Beam mode has no wall members even with stored heights/profiles.
+    p = data.get_clear("A", "Beam")
+    p["num_spans"] = 1
+    p["h_list"] = [6.0] * 11
     p["wall_geom_0"] = {"type": 0, "shape": 0, "vals": [0.1, 0.1, 0.1]}
     assert data.model_uses_inertia_sections(p) is False
 

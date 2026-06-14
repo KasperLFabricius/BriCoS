@@ -351,10 +351,19 @@ def model_uses_inertia_sections(params) -> bool:
         g = params.get(f'span_geom_{i}')
         if isinstance(g, dict) and g.get('type', 1) == 0:
             return True
-    if params.get('mode', 'Frame') != 'Superstructure':
+    # Walls exist only in Frame mode, and only where the member height clears
+    # the active-wall tolerance (the solver skips zero-height walls and never
+    # creates a W member for them; validation checks the same). Mirror that
+    # test so a stale profiler setting on an inactive wall does not gate the
+    # overlay off when every actual member is height-defined.
+    if params.get('mode', 'Frame') == 'Frame':
+        h_list = params.get('h_list', [])
         for i in range(max(num_spans, 0) + 1):
             g = params.get(f'wall_geom_{i}')
-            if isinstance(g, dict) and g.get('type', 1) == 0:
+            if not (isinstance(g, dict) and g.get('type', 1) == 0):
+                continue
+            h = _as_float(_list_value(h_list, i, 0.0), 0.0)
+            if h > ACTIVE_WALL_TOLERANCE_M:
                 return True
     return False
 
