@@ -25,13 +25,15 @@ import bricos_data as data_mod
 import bricos_solver as solver
 
 # Load cases exported as unfactored result sheets, in report order.
-EXPORT_CASES = ("Dead Load", "Soil", "Surcharge", "Traffic UDL", "Vehicle Envelope")
+EXPORT_CASES = ("Self-weight", "Dead Load", "Soil", "Surcharge", "Traffic UDL", "Vehicle Envelope")
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def system_has_case(params, case_key):
     """Whether a load case is validly applied in the given system."""
+    if case_key == "Self-weight":
+        return bool(params.get('auto_selfweight', False))
     if case_key == "Dead Load":
         return any(v > 0 for v in params.get('sw_list', []))
     if case_key == "Soil":
@@ -208,6 +210,8 @@ def settings_dataframe(params_A, params_B, raw_A, raw_B, valid_B):
             "Vehicle direction": p.get('vehicle_direction', 'Forward'),
             "Shear deformation": shear,
             "Effective width b_eff [m]": p.get('b_eff', 1.0),
+            "Auto self-weight": "On" if p.get('auto_selfweight', False) else "Off",
+            "Unit weight γ [kN/m³]": p.get('density', 25.0) if p.get('auto_selfweight', False) else "-",
             "Surcharge interaction": surch_int,
             "Limit states analyzed": ls_txt,
             "KFI (consequence class)": kfi,

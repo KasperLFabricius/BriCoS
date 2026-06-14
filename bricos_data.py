@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.69"
+APP_VERSION = "0.70"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -826,6 +826,12 @@ def get_def():
         # Independent analysis toggles. Both off -> only the unfactored
         # combination is available.
         'analyze_uls': True, 'analyze_sls': True,
+        # Auto self-weight: when on, the structural weight is computed from
+        # the unit weight (density), b_eff and section height as a separate
+        # "Self-weight" load case (sw_list then carries only superimposed
+        # Dead Load). Off by default; existing sessions are unaffected.
+        'auto_selfweight': False,
+        'density': 25.0,  # unit weight [kN/m3] (reinforced concrete)
 
         # 0.5 m mesh keeps the (undocumented before v0.48) deflection
         # interpolation error negligible; affordable since the v0.47
@@ -885,8 +891,10 @@ def get_clear(name_suffix, current_mode):
         'sls_veh': 1.0, 'sls_vehB': 1.0,
         'sls_udl': 1.0,
         'analyze_uls': True, 'analyze_sls': True,
+        'auto_selfweight': False,
+        'density': 25.0,
 
-        'scale_manual': 2.0, 
+        'scale_manual': 2.0,
         'mesh_size': 0.5, 'step_size': 0.5,
         'name': f"System {name_suffix}",
         'last_mode': current_mode,
@@ -980,6 +988,9 @@ def force_ui_update(sys_key, data):
     if sys_key == "sysA":
         st.session_state["uls_toggle_sidebar"] = bool(data.get('analyze_uls', True))
         st.session_state["sls_toggle_sidebar"] = bool(data.get('analyze_sls', True))
+        # Shared auto self-weight controls (Analysis & Result Settings).
+        st.session_state["auto_sw_toggle_sidebar"] = bool(data.get('auto_selfweight', False))
+        st.session_state["density_input_sidebar"] = float(data.get('density', 25.0))
     st.session_state[f"{sys_key}_nsp"] = data.get('num_spans', 1)
     
     # 2. Shear Deformation Keys & Analysis Settings

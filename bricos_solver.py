@@ -128,6 +128,10 @@ class FrameElement:
         self.eff_vals = np.array(eff_vals, dtype=np.float64)
         self.b_eff = float(b_eff)
         self.As_avg = float(As_avg)
+        # Axial (gross) area b_eff x h, on the same interpolated section the
+        # stiffness uses. The auto self-weight load reads this so the
+        # computed weight and the stiffness model never disagree.
+        self.A_avg = float(A_approx)
         self.G_val = float(G_val)
 
         # --- KERNEL SELECTION ---
@@ -440,7 +444,8 @@ def calculate_reactions(nodes, detailed_results):
 def get_safe_error_result():
     empty_dict = {} 
     return {
-        'Dead Load': empty_dict, 'Soil': empty_dict, 'Surcharge': empty_dict,
+        'Dead Load': empty_dict, 'Self-weight': empty_dict,
+        'Soil': empty_dict, 'Surcharge': empty_dict,
         'Vehicle Envelope A': empty_dict, 'Vehicle Envelope B': empty_dict,
         'Vehicle Steps A': [], 'Vehicle Steps B': [],
         'phi_calc': 1.0, 'phi_log': ["System Unstable or Empty"],
@@ -957,6 +962,34 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                     'params': [val, val, 0, el_L]
                 })
 
+    # 1b. Self-weight (auto). When enabled, the structural weight of every
+    # member (decks AND walls) is computed as density x A per unit length,
+    # using each sub-element's own interpolated gross area A_avg = b_eff x h
+    # - the SAME section the stiffness uses, so weight and stiffness can
+    # never disagree. Variable sections (taper/3-point) emerge from the
+    # per-sub-element area differences and converge with mesh refinement.
+    # Vertical walls resolve gravity to pure axial via the is_gravity path.
+    sw_auto_loads_map = {}
+    sw_auto_global_loads = {}
+    auto_sw = bool(params.get('auto_selfweight'))
+    try:
+        density = float(params.get('density', 25.0))
+    except (TypeError, ValueError):
+        density = 25.0
+    if auto_sw and density != 0.0:
+        for idx, el_data in enumerate(elems_base):
+            w = density * elem_objects[idx].A_avg
+            if w == 0.0:
+                continue
+            el_L = elem_objects[idx].L
+            entry = {'type': 'distributed_trapezoid', 'is_gravity': True,
+                     'params': [w, w, 0, el_L]}
+            sw_auto_loads_map.setdefault(idx, []).append(entry)
+            # Per-sub-element entries in the parent's equilibrium list make
+            # the applied total exact for variable sections (a single
+            # parent trapezoid would miss a 3-point mid bulge).
+            sw_auto_global_loads.setdefault(el_data['parent'], []).append(dict(entry))
+
     # 2. Soil
     soil_loads_map = {}
     soil_global_loads = {}
@@ -992,12 +1025,17 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                                 [sign*sur['q'], sign*sur['q'], 0.0, sur['h']])
 
     # Static load case RHS. Solved further below together with all vehicle
-    # step RHS against a SINGLE factorization of K.
-    F_static = np.column_stack([
+    # step RHS against a SINGLE factorization of K. Column order is fixed
+    # (Dead Load, Soil, Surcharge); the auto Self-weight column is appended
+    # only when enabled, so existing column indices never shift.
+    F_cols = [
         assemble_F(sw_loads_map),
         assemble_F(soil_loads_map),
         assemble_F(surch_loads_map),
-    ])
+    ]
+    if auto_sw:
+        F_cols.append(assemble_F(sw_auto_loads_map))
+    F_static = np.column_stack(F_cols)
 
     def get_empty_env():
         # The unloaded case has D = 0 identically; recover the result
@@ -1222,6 +1260,12 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     res_sw = aggregate_member_results(recover_results(sw_loads_map, D_static[:, 0]), sw_global_loads)
     res_soil = aggregate_member_results(recover_results(soil_loads_map, D_static[:, 1]), soil_global_loads)
     res_surch = aggregate_member_results(recover_results(surch_loads_map, D_static[:, 2]), surch_global_loads)
+    # Auto self-weight occupies static column 3 when enabled. No global
+    # load override - its arrows are not drawn - so the real per-sub-element
+    # loads attach to the result; the equilibrium total uses the dedicated
+    # per-parent map built above.
+    res_sw_auto = (aggregate_member_results(recover_results(sw_auto_loads_map, D_static[:, 3]))
+                   if auto_sw else {})
 
     # --- GLOBAL EQUILIBRIUM CHECK (static load cases) ---
     # Applied totals are computed from the parent-level load definitions by
@@ -1280,11 +1324,14 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         return rx, ry
 
     equilibrium = {}
-    for case_name, loads_map_g, col in (
+    eq_cases = [
         ('Dead Load', sw_global_loads, 0),
         ('Soil', soil_global_loads, 1),
         ('Surcharge', surch_global_loads, 2),
-    ):
+    ]
+    if auto_sw:
+        eq_cases.append(('Self-weight', sw_auto_global_loads, 3))
+    for case_name, loads_map_g, col in eq_cases:
         a_x, a_y, a_x_pos, a_x_neg, a_y_pos, a_y_neg = case_applied_totals(loads_map_g)
         r_x, r_y = case_spring_reactions(D_static[:, col])
         equilibrium[case_name] = {
@@ -1682,6 +1729,9 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
 
     return {
         'Dead Load': res_sw,
+        # Auto-computed structural self-weight; empty dict when the toggle
+        # is off (the case then has no presence in the UI/report/export).
+        'Self-weight': res_sw_auto,
         'Soil': res_soil,
         'Surcharge': res_surch,
         'Vehicle Envelope A': veh_env_A,
@@ -1909,8 +1959,12 @@ def _combine_results_impl(raw_res, params, result_mode):
         return out
 
     out_sw = factor_res(raw_res['Dead Load'], f_sw)
+    # Auto self-weight is a permanent action: same factor as dead load
+    # (KFI*gamma_g in ULS, sls_g in SLS, 1.0 unfactored). Empty when the
+    # toggle is off, contributing nothing to the permanent total.
+    out_swa = factor_res(raw_res.get('Self-weight') or {}, f_sw)
     out_soil = factor_res(raw_res['Soil'], f_soil)
-    out_surch = factor_res(raw_res['Surcharge'], f_surch) 
+    out_surch = factor_res(raw_res['Surcharge'], f_surch)
     
     raw_env_A = raw_res['Vehicle Envelope A']
     raw_env_B = raw_res['Vehicle Envelope B']
@@ -1981,30 +2035,34 @@ def _combine_results_impl(raw_res, params, result_mode):
         coupled_B = coupled_vehicle_udl_envelope(steps_B_all, f_vehB_map, f_vehB, f_udl)
 
     out_total = {}
-    all_ids = set(out_sw.keys()) | set(out_veh_env.keys()) | set(out_soil.keys()) | set(out_surch.keys()) | set(out_udl.keys())
+    all_ids = set(out_sw.keys()) | set(out_swa.keys()) | set(out_veh_env.keys()) | set(out_soil.keys()) | set(out_surch.keys()) | set(out_udl.keys())
     combine_surcharge_vehicle = params.get('combine_surcharge_vehicle', False)
 
     for eid in all_ids:
-        ref = out_sw.get(eid) or out_soil.get(eid) or out_veh_env.get(eid) or out_surch.get(eid)
+        ref = out_sw.get(eid) or out_swa.get(eid) or out_soil.get(eid) or out_veh_env.get(eid) or out_surch.get(eid)
         if not ref: continue
         n_p = len(ref['M_max'])
         z = np.zeros(n_p)
-        sw = out_sw.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
-        sl = out_soil.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
-        ve = out_veh_env.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
-        su = out_surch.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
-        ud = out_udl.get(eid, {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z})
+        _zero = {'M_max':z, 'M_min':z, 'V_max':z, 'V_min':z, 'N_max':z, 'N_min':z, 'def_x_max':z, 'def_x_min':z, 'def_y_max':z, 'def_y_min':z}
+        sw = out_sw.get(eid, _zero)
+        swa = out_swa.get(eid, _zero)
+        sl = out_soil.get(eid, _zero)
+        ve = out_veh_env.get(eid, _zero)
+        su = out_surch.get(eid, _zero)
+        ud = out_udl.get(eid, _zero)
 
-        M_perm_max = sw['M_max'] + sl['M_max']
-        M_perm_min = sw['M_min'] + sl['M_min']
-        V_perm_max = sw['V_max'] + sl['V_max']
-        V_perm_min = sw['V_min'] + sl['V_min']
-        N_perm_max = sw['N_max'] + sl['N_max']
-        N_perm_min = sw['N_min'] + sl['N_min']
-        def_x_perm_max = sw['def_x_max'] + sl['def_x_max']
-        def_x_perm_min = sw['def_x_min'] + sl['def_x_min']
-        def_y_perm_max = sw['def_y_max'] + sl['def_y_max']
-        def_y_perm_min = sw['def_y_min'] + sl['def_y_min']
+        # Permanent term = dead load + auto self-weight + soil (all share
+        # the gamma_g/sls_g factor, so they simply sum).
+        M_perm_max = sw['M_max'] + swa['M_max'] + sl['M_max']
+        M_perm_min = sw['M_min'] + swa['M_min'] + sl['M_min']
+        V_perm_max = sw['V_max'] + swa['V_max'] + sl['V_max']
+        V_perm_min = sw['V_min'] + swa['V_min'] + sl['V_min']
+        N_perm_max = sw['N_max'] + swa['N_max'] + sl['N_max']
+        N_perm_min = sw['N_min'] + swa['N_min'] + sl['N_min']
+        def_x_perm_max = sw['def_x_max'] + swa['def_x_max'] + sl['def_x_max']
+        def_x_perm_min = sw['def_x_min'] + swa['def_x_min'] + sl['def_x_min']
+        def_y_perm_max = sw['def_y_max'] + swa['def_y_max'] + sl['def_y_max']
+        def_y_perm_min = sw['def_y_min'] + swa['def_y_min'] + sl['def_y_min']
 
         # The traffic term is vehicle + accompanying UDL (same load
         # combination per Vejledning Fig. B3.1). With the UDL active it is
@@ -2065,7 +2123,8 @@ def _combine_results_impl(raw_res, params, result_mode):
         }
     
     return {
-        'Dead Load': out_sw, 'Soil': out_soil, 'Surcharge': out_surch,
+        'Dead Load': out_sw, 'Self-weight': out_swa,
+        'Soil': out_soil, 'Surcharge': out_surch,
         'Vehicle Envelope': out_veh_env, 'Traffic UDL': out_udl,
         'Total Envelope': out_total,
         'f_udl': f_udl,
