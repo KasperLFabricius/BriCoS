@@ -4,6 +4,7 @@ import numpy as np
 import bricos_solver as solver
 import bricos_viz as viz
 import bricos_export as export_mod
+import bricos_data as data_mod
 
 # ==========================================
 # HELPER FUNCTIONS (MATH & FORMATTING)
@@ -261,6 +262,23 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
     with r2_col2:
         show_supports = st.checkbox("Show Supports", value=True, disabled=ui_locked)
 
+    # Section-depth overlay: each member's true depth drawn to scale on the
+    # centreline. Gated off when any section is inertia-defined (the depth
+    # would be an assumed rectangular value, not a real one). Off by default.
+    inertia_in_use = (data_mod.model_uses_inertia_sections(sysA)
+                      or data_mod.model_uses_inertia_sections(sysB))
+    r3_col1, r3_col2 = st.columns([3, 1])
+    with r3_col1:
+        if inertia_in_use:
+            st.caption("ℹ️ Section depth overlay is unavailable while a section is defined by inertia.")
+    with r3_col2:
+        show_thickness = st.checkbox(
+            "Section Depth", value=False, disabled=(ui_locked or inertia_in_use),
+            help=("Overlay each member's true section depth, drawn to scale along the "
+                  "centreline. Toggle off if it clutters the diagrams. Unavailable while "
+                  "any section is defined by inertia rather than height."))
+    show_thickness = bool(show_thickness) and not inertia_in_use
+
     # Persist Visual Settings
     sysA['scale_manual'] = man_scale
     sysB['scale_manual'] = man_scale
@@ -514,10 +532,10 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             if not has_vis_content:
                  st.info("No visualization available for selected system/vehicle combination.")
             else:
-                _render_viz_chart("Bending Moment [kNm]", nodes_A, nodes_B, rA, rB, 'M', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
-                _render_viz_chart("Shear Force [kN]", nodes_A, nodes_B, rA, rB, 'V', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
-                _render_viz_chart("Normal Force [kN]", nodes_A, nodes_B, rA, rB, 'N', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
-                _render_viz_chart("Deformation [mm]", nodes_A, nodes_B, rA, rB, 'Def', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
+                _render_viz_chart("Bending Moment [kNm]", nodes_A, nodes_B, rA, rB, 'M', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness)
+                _render_viz_chart("Shear Force [kN]", nodes_A, nodes_B, rA, rB, 'V', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness)
+                _render_viz_chart("Normal Force [kN]", nodes_A, nodes_B, rA, rB, 'N', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness)
+                _render_viz_chart("Deformation [mm]", nodes_A, nodes_B, rA, rB, 'Def', man_scale, show_A_step, show_B_step, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness)
         else:
             show_A = (show_sys_mode == "Both" or show_sys_mode == "System A")
             show_B = (valid_B and (show_sys_mode == "Both" or show_sys_mode == "System B"))
@@ -530,10 +548,10 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
             else:
                  if (not rA) and (not rB): st.warning(f"⚠️ No results found for **{view_case}**.")
 
-                 _render_viz_chart("Bending Moment [kNm]", nodes_A, nodes_B, rA, rB, 'M', man_scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
-                 _render_viz_chart("Shear Force [kN]", nodes_A, nodes_B, rA, rB, 'V', man_scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
-                 _render_viz_chart("Normal Force [kN]", nodes_A, nodes_B, rA, rB, 'N', man_scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
-                 _render_viz_chart("Deformation [mm]", nodes_A, nodes_B, rA, rB, 'Def', man_scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size)
+                 _render_viz_chart("Bending Moment [kNm]", nodes_A, nodes_B, rA, rB, 'M', man_scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness)
+                 _render_viz_chart("Shear Force [kN]", nodes_A, nodes_B, rA, rB, 'V', man_scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness)
+                 _render_viz_chart("Normal Force [kN]", nodes_A, nodes_B, rA, rB, 'N', man_scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness)
+                 _render_viz_chart("Deformation [mm]", nodes_A, nodes_B, rA, rB, 'Def', man_scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness)
 
     # --- TAB 2: DETAILED DATA ---
     with t2:
@@ -705,7 +723,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
         else:
             st.info("No reaction data found (check supports).")
 
-def _render_viz_chart(title, nodes_A, nodes_B, rA, rB, type_base, scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size):
+def _render_viz_chart(title, nodes_A, nodes_B, rA, rB, type_base, scale, show_A, show_B, show_labels, view_case, name_A, name_B, res_A, res_B, sysA, sysB, show_supports, support_size, show_thickness=False):
     st.subheader(title)
     st.plotly_chart(viz.create_plotly_fig(
         nodes_A, rA, rB, type_base, scale, "",
@@ -714,7 +732,8 @@ def _render_viz_chart(title, nodes_A, nodes_B, rA, rB, type_base, scale, show_A,
         geom_A=res_A.get('Dead Load'), geom_B=res_B.get('Dead Load'),
         params_A=sysA, params_B=sysB,
         show_supports=show_supports, support_size=support_size,
-        nodes_A=nodes_A, nodes_B=nodes_B
+        nodes_A=nodes_A, nodes_B=nodes_B,
+        show_thickness=show_thickness
     ), width='stretch', key=f"chart_{type_base}")
 
 def _render_summary_table(title, metrics_list, all_elems, rA, rB, valid_B):

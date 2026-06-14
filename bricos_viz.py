@@ -161,6 +161,95 @@ def _add_support_icon(fig, x, y, supp_type, size, color='black'):
         ))
 
 # ==========================================
+# SECTION-DEPTH (THICKNESS) OVERLAY
+# ==========================================
+
+def _section_height_at(value, val_type, b_eff):
+    """Section depth h at a sampled section value. Height input is used
+    directly; an inertia input is mapped to the equivalent rectangular depth
+    h = (12 I / b_eff)^(1/3) (only reached defensively - the UI gates the
+    overlay off whenever any section is inertia-defined)."""
+    v = max(float(value), 0.0)
+    if val_type == 0:
+        be = b_eff if b_eff > 1e-6 else 1.0
+        return (12.0 * v / be) ** (1.0 / 3.0)
+    return v
+
+
+def section_band_polygon(ni, nj, L, val_type, shape, vals, b_eff, n_samples=3):
+    """Closed polygon (xs, ys) of a member's true section depth, centred on the
+    member axis ni->nj. The depth h(x) is offset +-h/2 along the member normal,
+    so the band follows the centreline and is drawn to real geometric scale
+    (the figure uses equal aspect). Returns ([], []) for a degenerate member.
+    Pure helper - no Plotly - so it is unit-testable.
+    """
+    L = float(L)
+    if L <= 1e-9:
+        return [], []
+    dx, dy = (nj[0] - ni[0]) / L, (nj[1] - ni[1]) / L
+    nx, ny = -dy, dx  # unit normal to the member axis
+    n = max(int(n_samples), 2)
+    # Typed array matches the solver's call convention (a Python list triggers
+    # Numba's reflected-list deprecation warning).
+    vals_arr = np.asarray(vals, dtype=np.float64)
+    top_x, top_y, bot_x, bot_y = [], [], [], []
+    for i in range(n):
+        f = i / (n - 1)
+        h = _section_height_at(
+            kernels.get_section_value_at_x(f * L, L, vals_arr, int(shape)),
+            val_type, b_eff)
+        px = ni[0] + (nj[0] - ni[0]) * f
+        py = ni[1] + (nj[1] - ni[1]) * f
+        top_x.append(px + nx * h / 2.0); top_y.append(py + ny * h / 2.0)
+        bot_x.append(px - nx * h / 2.0); bot_y.append(py - ny * h / 2.0)
+    xs = top_x + bot_x[::-1] + [top_x[0]]
+    ys = top_y + bot_y[::-1] + [top_y[0]]
+    return xs, ys
+
+
+def _section_profile_for(params, eid):
+    """(val_type, shape, vals) for a parent element id (e.g. 'S1', 'W2') from
+    the system params, falling back to the simple height list when no Section
+    Profiler geometry is stored."""
+    idx = int(eid[1:]) - 1
+    if eid.startswith('S'):
+        geom, fallback = params.get(f'span_geom_{idx}'), params.get('Is_list', [])
+    else:
+        geom, fallback = params.get(f'wall_geom_{idx}'), params.get('Iw_list', [])
+    if isinstance(geom, dict) and geom.get('vals'):
+        return int(geom.get('type', 1)), int(geom.get('shape', 0)), [float(v) for v in geom['vals']]
+    fv = float(fallback[idx]) if 0 <= idx < len(fallback) else 0.0
+    return 1, 0, [fv, fv, fv]
+
+
+def _draw_thickness_bands(fig, geom_source, params, is_sys_A, legend_flags):
+    """Overlay each member's true section depth as a tinted greyscale band,
+    drawn beneath the result diagrams. Geometry (axis, length) comes from the
+    Dead Load result; the depth profile from the system params."""
+    if not geom_source or not params:
+        return
+    b_eff = float(params.get('b_eff', 1.0) or 1.0)
+    # System A slightly darker than B so overlapping bands stay distinguishable.
+    fillcolor = 'rgba(60,60,60,0.16)' if is_sys_A else 'rgba(130,130,130,0.16)'
+    for eid in sorted(geom_source.keys(), key=lambda x: (x[0], int(x[1:]))):
+        dat = geom_source[eid]
+        if 'ni' not in dat or 'nj' not in dat:
+            continue
+        val_type, shape, vals = _section_profile_for(params, eid)
+        xs, ys = section_band_polygon(
+            dat['ni'], dat['nj'], dat.get('L', 0.0), val_type, shape, vals, b_eff)
+        if not xs:
+            continue
+        show_legend = not legend_flags.get('thickness', False)
+        legend_flags['thickness'] = True
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, fill='toself', fillcolor=fillcolor,
+            line=dict(width=0), mode='none', hoverinfo='skip',
+            name="Section depth", showlegend=show_legend
+        ))
+
+
+# ==========================================
 # MAIN PLOTTING FUNCTION
 # ==========================================
 
@@ -172,7 +261,8 @@ def create_plotly_fig(
     params_A=None, params_B=None,
     show_supports=False, support_size=0.5,
     font_scale=1.0,
-    nodes_A=None, nodes_B=None
+    nodes_A=None, nodes_B=None,
+    show_thickness=False
 ):
     fig = go.Figure()
     
@@ -233,7 +323,7 @@ def create_plotly_fig(
     unit = unit_map.get(type_base, '')
     
     ann_candidates = []
-    legend_flags = {'struct': False, 'A': False, 'B': False}
+    legend_flags = {'struct': False, 'A': False, 'B': False, 'thickness': False}
 
     # --- FONT SIZING & LAYOUT ADJUSTMENTS ---
     base_font_size = 10 * font_scale
@@ -627,6 +717,11 @@ def create_plotly_fig(
                     name=f"{sys_name}", showlegend=show_leg,
                     customdata=C_pos_all, hovertemplate=htemp_step
                 ))
+
+    # Section-depth overlay first, so the bands sit beneath every diagram.
+    if show_thickness:
+        if show_A: _draw_thickness_bands(fig, geom_A, params_A, True, legend_flags)
+        if show_B: _draw_thickness_bands(fig, geom_B, params_B, False, legend_flags)
 
     if show_A: add_traces(sysA_data, name_A, "blue", "solid")
     if show_B: add_traces(sysB_data, name_B, "red", "dash")
