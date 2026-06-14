@@ -201,6 +201,86 @@ def render_sls_factors(p, curr, ui_locked):
     _sls_factor_input(c_s5, "Traffic UDL (SLS)", 'sls_udl', list(data_mod.SLS_UDL_PRESETS), 0.40,
                       "SLS factor on the Traffic UDL (Phi never applies to it). Fig. B3.2: 0.40.", "slsudl")
 
+
+def render_dynamic_factor(p, curr, ui_locked, show_sls):
+    """Dynamic factor (Phi) inputs. Rendered only when a factored limit state
+    is analyzed - the unfactored combination never applies Phi. The SLS-only
+    Phi treatment (show_sls) is shown only when SLS analysis is enabled."""
+    st.markdown("---")
+    phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", disabled=ui_locked)
+    p['phi_mode'] = phi_mode
+    if phi_mode == "Manual":
+        help_scope = (
+            "Global: one manual Phi for all members. Per span: a manual Phi per span; "
+            "walls take the max of the adjacent spans' Phi (same convention as the "
+            "calculated per-span methodology)."
+        )
+        scope_opts = ["Global", "Per span"]
+        idx_scope = 1 if p.get('phi_manual_scope') == 'Per span' else 0
+        scope_sel = st.radio("Manual Phi scope:", scope_opts, index=idx_scope, horizontal=True, key=f"{curr}_phiscope", disabled=ui_locked, help=help_scope)
+        p['phi_manual_scope'] = 'Per span' if scope_sel == "Per span" else 'Global'
+
+        if p['phi_manual_scope'] == 'Per span':
+            if 'phi_span_list' not in p or not isinstance(p.get('phi_span_list'), list):
+                p['phi_span_list'] = [1.0] * 10
+            while len(p['phi_span_list']) < 10:
+                p['phi_span_list'].append(1.0)
+            phi_cols = st.columns(min(3, max(1, p.get('num_spans', 1))))
+            for i in range(p.get('num_spans', 1)):
+                col = phi_cols[i % len(phi_cols)]
+                p['phi_span_list'][i] = col.number_input(
+                    f"Phi S{i+1}", value=float(p['phi_span_list'][i]),
+                    min_value=1.0, max_value=2.0, step=0.005, format="%.3f",
+                    key=f"{curr}_phiv_s{i}", disabled=ui_locked
+                )
+        else:
+            p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv", disabled=ui_locked)
+    else:
+        help_linf = (
+            "How the influence length L_inf for the dynamic factor (DK NA A.2.3.5(2)) is determined.\n"
+            "- Combined system: one determinant length for the whole structure per DS/EN 1991-2:2003, "
+            "Table 6.2 Case 5.1/5.2/5.3 (frame treated as equivalent continuous beam; renumbered "
+            "Table 8.2 in the 2023 edition). Generally gives a lower Phi for short spans.\n"
+            "- Per span: the DK NA simplification L_inf = actual span, evaluated per span. "
+            "Walls take the max of the adjacent spans' Phi (the NA gives no rule for substructure)."
+        )
+        linf_opts = ["Combined system (EN 1991-2 Tab. 6.2)", "Per span (DK NA A.2.3.5(2))"]
+        idx_linf = 1 if p.get('phi_linf_mode') == 'Span' else 0
+        linf_sel = st.radio("Influence length $L_{inf}$:", linf_opts, index=idx_linf, key=f"{curr}_philinf", disabled=ui_locked, help=help_linf)
+        p['phi_linf_mode'] = 'Span' if "Per span" in linf_sel else 'Determinant'
+
+        if p['phi_linf_mode'] == 'Span':
+            help_app = (
+                "Per member: each span uses its own Phi; walls use the max of adjacent spans. "
+                "Governing: the largest Phi of all spans is applied to every member (conservative)."
+            )
+            app_opts = ["Per member", "Governing value for all members"]
+            idx_app = 1 if p.get('phi_application') == 'Governing' else 0
+            app_sel = st.radio("Phi application:", app_opts, index=idx_app, key=f"{curr}_phiapp", disabled=ui_locked, help=help_app)
+            p['phi_application'] = 'Governing' if "Governing" in app_sel else 'Per member'
+
+    # SLS-specific Phi treatment: only relevant when SLS is analyzed.
+    if show_sls:
+        help_sls = (
+            "Phi applied in the Characteristic (SLS) result mode. ULS results are unaffected.\n"
+            "- Same as ULS: no reduction (default, conservative).\n"
+            "- Reduced: phi_SLS = 1 + (phi_ULS - 1)/2 per 'Vejledning til belastnings- og "
+            "beregningsgrundlag for broer' 5.4.2; applies per member to calculated and manual Phi.\n"
+            "- Manual SLS value: a user-defined uniform phi_SLS replaces all member values in SLS."
+        )
+        sls_opts = ["Same as ULS", "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)", "Manual SLS value"]
+        sls_mode_map = {"Same as ULS": 'Same', sls_opts[1]: 'Reduced', "Manual SLS value": 'Manual'}
+        curr_sls = p.get('phi_sls_mode', 'Same')
+        idx_sls = {'Same': 0, 'Reduced': 1, 'Manual': 2}.get(curr_sls, 0)
+        sls_sel = st.selectbox(r"$\varphi$ in SLS:", sls_opts, index=idx_sls, key=f"{curr}_phisls", disabled=ui_locked, help=help_sls)
+        p['phi_sls_mode'] = sls_mode_map.get(sls_sel, 'Same')
+        if p['phi_sls_mode'] == 'Manual':
+            p['phi_sls'] = st.number_input(
+                r"Manual $\varphi_{SLS}$", value=float(p.get('phi_sls', 1.0)),
+                min_value=1.0, max_value=2.0, step=0.005, format="%.3f",
+                key=f"{curr}_phislsv", disabled=ui_locked
+            )
+
 # ==========================================
 # INITIALIZATION & AUTOSAVE
 # ==========================================
@@ -643,78 +723,12 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     if p.get('analyze_sls', True):
         render_sls_factors(p, curr, ui_locked)
 
-    st.markdown("---")
-    phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", disabled=ui_locked)
-    p['phi_mode'] = phi_mode
-    if phi_mode == "Manual":
-        help_scope = (
-            "Global: one manual Phi for all members. Per span: a manual Phi per span; "
-            "walls take the max of the adjacent spans' Phi (same convention as the "
-            "calculated per-span methodology)."
-        )
-        scope_opts = ["Global", "Per span"]
-        idx_scope = 1 if p.get('phi_manual_scope') == 'Per span' else 0
-        scope_sel = st.radio("Manual Phi scope:", scope_opts, index=idx_scope, horizontal=True, key=f"{curr}_phiscope", disabled=ui_locked, help=help_scope)
-        p['phi_manual_scope'] = 'Per span' if scope_sel == "Per span" else 'Global'
-
-        if p['phi_manual_scope'] == 'Per span':
-            if 'phi_span_list' not in p or not isinstance(p.get('phi_span_list'), list):
-                p['phi_span_list'] = [1.0] * 10
-            while len(p['phi_span_list']) < 10:
-                p['phi_span_list'].append(1.0)
-            phi_cols = st.columns(min(3, max(1, p.get('num_spans', 1))))
-            for i in range(p.get('num_spans', 1)):
-                col = phi_cols[i % len(phi_cols)]
-                p['phi_span_list'][i] = col.number_input(
-                    f"Phi S{i+1}", value=float(p['phi_span_list'][i]),
-                    min_value=1.0, max_value=2.0, step=0.005, format="%.3f",
-                    key=f"{curr}_phiv_s{i}", disabled=ui_locked
-                )
-        else:
-            p['phi'] = st.number_input("Phi Value", value=p.get('phi', 1.0), key=f"{curr}_phiv", disabled=ui_locked)
-    else:
-        help_linf = (
-            "How the influence length L_inf for the dynamic factor (DK NA A.2.3.5(2)) is determined.\n"
-            "- Combined system: one determinant length for the whole structure per DS/EN 1991-2:2003, "
-            "Table 6.2 Case 5.1/5.2/5.3 (frame treated as equivalent continuous beam; renumbered "
-            "Table 8.2 in the 2023 edition). Generally gives a lower Phi for short spans.\n"
-            "- Per span: the DK NA simplification L_inf = actual span, evaluated per span. "
-            "Walls take the max of the adjacent spans' Phi (the NA gives no rule for substructure)."
-        )
-        linf_opts = ["Combined system (EN 1991-2 Tab. 6.2)", "Per span (DK NA A.2.3.5(2))"]
-        idx_linf = 1 if p.get('phi_linf_mode') == 'Span' else 0
-        linf_sel = st.radio("Influence length $L_{inf}$:", linf_opts, index=idx_linf, key=f"{curr}_philinf", disabled=ui_locked, help=help_linf)
-        p['phi_linf_mode'] = 'Span' if "Per span" in linf_sel else 'Determinant'
-
-        if p['phi_linf_mode'] == 'Span':
-            help_app = (
-                "Per member: each span uses its own Phi; walls use the max of adjacent spans. "
-                "Governing: the largest Phi of all spans is applied to every member (conservative)."
-            )
-            app_opts = ["Per member", "Governing value for all members"]
-            idx_app = 1 if p.get('phi_application') == 'Governing' else 0
-            app_sel = st.radio("Phi application:", app_opts, index=idx_app, key=f"{curr}_phiapp", disabled=ui_locked, help=help_app)
-            p['phi_application'] = 'Governing' if "Governing" in app_sel else 'Per member'
-
-    help_sls = (
-        "Phi applied in the Characteristic (SLS) result mode. ULS results are unaffected.\n"
-        "- Same as ULS: no reduction (default, conservative).\n"
-        "- Reduced: phi_SLS = 1 + (phi_ULS - 1)/2 per 'Vejledning til belastnings- og "
-        "beregningsgrundlag for broer' 5.4.2; applies per member to calculated and manual Phi.\n"
-        "- Manual SLS value: a user-defined uniform phi_SLS replaces all member values in SLS."
-    )
-    sls_opts = ["Same as ULS", "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)", "Manual SLS value"]
-    sls_mode_map = {"Same as ULS": 'Same', sls_opts[1]: 'Reduced', "Manual SLS value": 'Manual'}
-    curr_sls = p.get('phi_sls_mode', 'Same')
-    idx_sls = {'Same': 0, 'Reduced': 1, 'Manual': 2}.get(curr_sls, 0)
-    sls_sel = st.selectbox(r"$\varphi$ in SLS:", sls_opts, index=idx_sls, key=f"{curr}_phisls", disabled=ui_locked, help=help_sls)
-    p['phi_sls_mode'] = sls_mode_map.get(sls_sel, 'Same')
-    if p['phi_sls_mode'] == 'Manual':
-        p['phi_sls'] = st.number_input(
-            r"Manual $\varphi_{SLS}$", value=float(p.get('phi_sls', 1.0)),
-            min_value=1.0, max_value=2.0, step=0.005, format="%.3f",
-            key=f"{curr}_phislsv", disabled=ui_locked
-        )
+    # The dynamic factor (Phi) only enters the ULS and SLS combinations; the
+    # unfactored combination never applies it. Hide the whole block when
+    # neither limit state is analyzed, and the SLS-only treatment when SLS is
+    # off (analyze_uls/analyze_sls render earlier, so p is current here).
+    if p.get('analyze_uls', True) or p.get('analyze_sls', True):
+        render_dynamic_factor(p, curr, ui_locked, show_sls=p.get('analyze_sls', True))
 
     phi_log_placeholder = st.empty()
 
@@ -1262,9 +1276,11 @@ if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
 if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
 
 # Show the phi log whenever the ACTIVE system solved; previously it
-# disappeared for system A whenever system B had a validation error.
+# disappeared for system A whenever system B had a validation error. The
+# dynamic factor is not applied in the unfactored combination, so the log
+# is suppressed when neither limit state is analyzed.
 active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
-if active_raw_res:
+if active_raw_res and (p.get('analyze_uls', True) or p.get('analyze_sls', True)):
     phi_val = active_raw_res.get('phi_calc', 1.0)
     phi_members_ui = active_raw_res.get('Phi Members') or {}
     is_calc = p.get('phi_mode') == 'Calculate'

@@ -982,21 +982,29 @@ class BricosReportGenerator:
         else:
             scope = "per span" if p.get('phi_manual_scope') == 'Per span' else "global"
             phi_txt = f"{self._phi_display_text(p, raw_res)} (Manual, {scope})"
-        sls_mode = p.get('phi_sls_mode', 'Same')
-        if sys_has_vehicle and sls_mode == 'Reduced':
-            phi_txt += " | SLS reduced per Vejl. 5.4.2"
-        elif sys_has_vehicle and sls_mode == 'Manual':
-            phi_txt += f" | SLS manual = {p.get('phi_sls', 1.0):.3f}"
-
         analyze_uls = bool(p.get('analyze_uls', True))
         analyze_sls = bool(p.get('analyze_sls', True))
+        sls_mode = p.get('phi_sls_mode', 'Same')
+        # The SLS Phi treatment only matters when SLS is analyzed.
+        if sys_has_vehicle and analyze_sls and sls_mode == 'Reduced':
+            phi_txt += " | SLS reduced per Vejl. 5.4.2"
+        elif sys_has_vehicle and analyze_sls and sls_mode == 'Manual':
+            phi_txt += f" | SLS manual = {p.get('phi_sls', 1.0):.3f}"
+
         ls_txt = ("ULS and SLS" if analyze_uls and analyze_sls else
                   "ULS only" if analyze_uls else
                   "SLS only" if analyze_sls else
                   "none (unfactored combination only)")
-        self.elements.append(Paragraph(
-            f"<b>Limit states analyzed:</b> {ls_txt} | <b>Φ:</b> {phi_txt}",
-            self.styles['SwecoBody']))
+        # Phi is not applied in the unfactored combination, so the dynamic
+        # factor is omitted from the line when neither limit state is analyzed.
+        if analyze_uls or analyze_sls:
+            self.elements.append(Paragraph(
+                f"<b>Limit states analyzed:</b> {ls_txt} | <b>Φ:</b> {phi_txt}",
+                self.styles['SwecoBody']))
+        else:
+            self.elements.append(Paragraph(
+                f"<b>Limit states analyzed:</b> {ls_txt}",
+                self.styles['SwecoBody']))
 
         # Combination factor table: one row per load component, the ULS
         # partial factor (multiplied by KFI) and the SLS combination factor.
@@ -1183,10 +1191,12 @@ class BricosReportGenerator:
                     self.styles['SwecoBody']))
                 self.elements.append(Spacer(1, 0.2*cm))
 
-        # 6. DYNAMIC FACTOR (PHI)
-        if raw_res:
+        # 6. DYNAMIC FACTOR (PHI). Only ULS/SLS apply Phi; the unfactored
+        # combination never does, so the whole section is omitted when neither
+        # limit state is analyzed.
+        if raw_res and (analyze_uls or analyze_sls):
             if sys_has_vehicle:
-                self._add_dynamic_factor_section(p, raw_res)
+                self._add_dynamic_factor_section(p, raw_res, analyze_sls)
             else:
                 self.elements.append(Spacer(1, 0.2*cm))
                 self.elements.append(Paragraph(
@@ -1269,9 +1279,10 @@ class BricosReportGenerator:
         # cannot strand them at the bottom of the previous page.
         self.elements.append(KeepTogether([heading, explanation, t]))
 
-    def _add_dynamic_factor_section(self, p, raw_res):
-        """Methodology statement, per-member phi table (ULS and SLS values),
-        and the calculation log for the dynamic factor."""
+    def _add_dynamic_factor_section(self, p, raw_res, analyze_sls=True):
+        """Methodology statement, per-member phi table and the calculation log
+        for the dynamic factor. The SLS column and the SLS-treatment note are
+        shown only when SLS analysis is enabled."""
         self.elements.append(Spacer(1, 0.2*cm))
         self.elements.append(Paragraph("Dynamic Factor (<i>Φ</i>):", self.styles['SwecoSmall']))
 
@@ -1299,12 +1310,12 @@ class BricosReportGenerator:
         self.elements.append(Paragraph(method_txt, self.styles['SwecoFormula']))
 
         sls_mode = p.get('phi_sls_mode', 'Same')
-        if sls_mode == 'Reduced':
+        if analyze_sls and sls_mode == 'Reduced':
             self.elements.append(Paragraph(
                 "SLS reduction enabled: <i>Φ<sub>SLS</sub></i> = 1 + (<i>Φ<sub>ULS</sub></i> - 1)/2 "
                 "per Vejledning til belastnings- og beregningsgrundlag for broer, 5.4.2.",
                 self.styles['SwecoFormula']))
-        elif sls_mode == 'Manual':
+        elif analyze_sls and sls_mode == 'Manual':
             self.elements.append(Paragraph(
                 f"SLS: user-defined uniform <i>Φ<sub>SLS</sub></i> = {p.get('phi_sls', 1.0):.3f} "
                 "replaces all member values in the Characteristic (SLS) result mode.",
@@ -1318,21 +1329,25 @@ class BricosReportGenerator:
         members = raw_res.get('Phi Members') or {}
 
         def fmt_row(label, val):
-            if sls_mode == 'Reduced':
-                sls_note = f"{1.0 + (val - 1.0) / 2.0:.3f}"
-            elif sls_mode == 'Manual':
-                sls_note = f"{p.get('phi_sls', 1.0):.3f} (manual)"
-            else:
-                sls_note = f"{val:.3f} (no reduction)"
-            return [label, f"{val:.3f}", sls_note]
+            row = [label, f"{val:.3f}"]
+            if analyze_sls:
+                if sls_mode == 'Reduced':
+                    sls_note = f"{1.0 + (val - 1.0) / 2.0:.3f}"
+                elif sls_mode == 'Manual':
+                    sls_note = f"{p.get('phi_sls', 1.0):.3f} (manual)"
+                else:
+                    sls_note = f"{val:.3f} (no reduction)"
+                row.append(sls_note)
+            return row
 
-        phi_table = [["Member", "Φ (ULS)", "Φ (SLS)"]]
+        phi_table = [["Member", "Φ (ULS)"] + (["Φ (SLS)"] if analyze_sls else [])]
         if members:
             for eid in sorted(members.keys(), key=lambda x: (x[0], int(x[1:]))):
                 phi_table.append(fmt_row(eid, members[eid]))
         else:
             phi_table.append(fmt_row("All members", phi_uniform))
-        t = self._make_std_table(phi_table, [4*cm, 3.5*cm, 4.5*cm], font_size=8)
+        col_widths = [4*cm, 3.5*cm, 4.5*cm] if analyze_sls else [6*cm, 4*cm]
+        t = self._make_std_table(phi_table, col_widths, font_size=8)
         self.elements.append(KeepTogether([t]))
 
         # Calculation log.

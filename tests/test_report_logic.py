@@ -564,3 +564,84 @@ def test_system_has_component_checks_each_load_case():
     assert not BricosReportGenerator._system_has_component(p, "Traffic UDL")
     p["udl_q"] = 4.0
     assert BricosReportGenerator._system_has_component(p, "Traffic UDL")
+
+
+# --- Dynamic factor (Phi) visibility vs. analyzed limit states (v0.72) ---
+
+def _flatten_report_text(gen):
+    """All rendered text in gen.elements: Paragraph text plus table cells."""
+    from reportlab.platypus import Paragraph, KeepTogether, Table
+    out = []
+
+    def walk(e):
+        if isinstance(e, Paragraph):
+            out.append(e.text)
+        elif isinstance(e, KeepTogether):
+            for c in e._content:
+                walk(c)
+        elif isinstance(e, Table):
+            for row in e._cellvalues:
+                for c in row:
+                    walk(c)
+        elif isinstance(e, str):
+            out.append(e)
+
+    for e in gen.elements:
+        walk(e)
+    return " || ".join(out)
+
+
+def _phi_params(**overrides):
+    p = _params(vehicle={"loads": [10.0], "spacing": [0.0]}, num_spans=1)
+    p.update({"phi_mode": "Manual", "phi": 1.20})
+    p.update(overrides)
+    return p
+
+
+def test_dynamic_factor_section_shows_sls_when_sls_analyzed():
+    gen = _generator(_phi_params())
+    gen._add_dynamic_factor_section(
+        _phi_params(phi_sls_mode="Reduced"),
+        {"phi_calc": 1.20, "Phi Members": {}},
+        analyze_sls=True,
+    )
+    txt = _flatten_report_text(gen)
+    assert "Φ (ULS)" in txt
+    assert "Φ (SLS)" in txt
+    assert "SLS reduction enabled" in txt
+
+
+def test_dynamic_factor_section_hides_sls_when_sls_not_analyzed():
+    gen = _generator(_phi_params())
+    gen._add_dynamic_factor_section(
+        _phi_params(phi_sls_mode="Reduced"),
+        {"phi_calc": 1.20, "Phi Members": {}},
+        analyze_sls=False,
+    )
+    txt = _flatten_report_text(gen)
+    assert "Φ (ULS)" in txt           # base/ULS column stays
+    assert "Φ (SLS)" not in txt       # SLS column dropped
+    assert "SLS reduction" not in txt  # SLS treatment note dropped
+
+
+def test_input_summary_omits_phi_when_no_limit_state_analyzed():
+    # Unfactored-only: Phi is never applied, so the settings line drops the
+    # dynamic factor and no Dynamic Factor section is added.
+    p = _phi_params(analyze_uls=False, analyze_sls=False)
+    gen = _generator(p)
+    gen._add_system_input_summary("System A", p, {"phi_calc": 1.20, "Phi Members": {}},
+                                  {"Spans": {}, "Walls": {}}, "sysA")
+    txt = _flatten_report_text(gen)
+    assert "none (unfactored combination only)" in txt
+    assert "Φ:" not in txt
+    assert "Dynamic Factor" not in txt
+
+
+def test_input_summary_keeps_phi_when_a_limit_state_analyzed():
+    p = _phi_params(analyze_uls=True, analyze_sls=False)
+    gen = _generator(p)
+    gen._add_system_input_summary("System A", p, {"phi_calc": 1.20, "Phi Members": {}},
+                                  {"Spans": {}, "Walls": {}}, "sysA")
+    txt = _flatten_report_text(gen)
+    assert "Φ:" in txt
+    assert "Dynamic Factor" in txt
