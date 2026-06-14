@@ -308,6 +308,35 @@ def udl_line_load(params) -> float:
     return q
 
 
+def convert_inertia_geoms_to_height(params) -> bool:
+    """Convert every inertia-mode Section Profiler geometry to height in place.
+
+    Auto self-weight needs a physical thickness, so the section must be
+    height-defined. This normalises ALL stored span/wall profiles still in
+    inertia mode (type 0) at once - not just the one currently shown in the
+    profiler - so enabling auto self-weight gives a deterministic, fully
+    height-locked model regardless of which member was last viewed. Each
+    inertia value I is mapped to the equivalent rectangular height
+    h = (12 I / b_eff)^(1/3). Returns True if anything changed.
+    """
+    b_eff = _as_float(params.get('b_eff', 1.0), 1.0)
+    if b_eff is None or b_eff < 0.01:
+        b_eff = 1.0
+    changed = False
+    for key, geom in params.items():
+        if not (isinstance(key, str) and (key.startswith('span_geom_') or key.startswith('wall_geom_'))):
+            continue
+        if not isinstance(geom, dict) or geom.get('type', 1) != 0:
+            continue
+        geom['vals'] = [
+            (12.0 * float(v) / b_eff) ** (1.0 / 3.0) if (v and float(v) > 0) else 0.0
+            for v in geom.get('vals', [])
+        ]
+        geom['type'] = 1
+        changed = True
+    return changed
+
+
 # Selectbox presets for the vehicle-to-UDL clear distance. Single source of
 # truth for the UI selectbox and for force_ui_update, which must restore the
 # selector to the label matching the stored value (a stale selector silently

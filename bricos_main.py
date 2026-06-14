@@ -486,6 +486,11 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
             help="Material unit weight (specific weight). Reinforced concrete is approx. 25 kN/m³.")
         st.session_state['sysA']['density'] = new_dens
         st.session_state['sysB']['density'] = new_dens
+        # Height-only lockout: convert EVERY stored inertia-mode profile in
+        # both systems now, so the auto self-weight solve never depends on
+        # which Section Profiler member happened to be viewed.
+        data_mod.convert_inertia_geoms_to_height(st.session_state['sysA'])
+        data_mod.convert_inertia_geoms_to_height(st.session_state['sysB'])
 
     st.markdown("---")
     st.markdown("**Shear Deformations (Timoshenko)**")
@@ -870,20 +875,14 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         
         # NOTE: We attach 'trigger_lock' to on_change events below to catch explicit edits.
 
-        # Auto self-weight needs a physical thickness, so the section must be
-        # height-defined: convert any stored inertia value to an equivalent
-        # rectangular height and lock the Definition Mode to Height.
+        # Auto self-weight forces a height-defined section. Every profile was
+        # already converted to height when the toggle was enabled (see the
+        # Analysis & Result Settings block), so here we only lock the
+        # Definition Mode to Height and disable the Inertia option.
         auto_sw_on = bool(p.get('auto_selfweight', False))
         type_key = f"{curr}_prof_type_{sel_el}"
         c_p1, c_p2 = st.columns(2)
         if auto_sw_on:
-            if target_geom['type'] == 0:
-                b_eff_cur = max(float(p.get('b_eff', 1.0)) or 1.0, 0.01)
-                target_geom['vals'] = [
-                    (12.0 * float(v) / b_eff_cur) ** (1.0 / 3.0) if (v and float(v) > 0) else 0.0
-                    for v in target_geom['vals']
-                ]
-                target_geom['type'] = 1
             # Keep the disabled radio's displayed value consistent with the
             # forced height mode.
             st.session_state[type_key] = "Height (H)"

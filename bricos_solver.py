@@ -109,6 +109,20 @@ class FrameElement:
         if v_start < 1e-6: v_start = 1e-6
         if v_end < 1e-6: v_end = 1e-6
 
+        # Gross area at the sub-element ends (same section convention as
+        # A_approx). The auto self-weight reads these so a tapered member is
+        # loaded with a true trapezoid - resultant at the section centroid -
+        # rather than a midpoint-lumped uniform load, keeping reactions and
+        # M/V diagrams mesh-independent for linear tapers.
+        if v_type == 1:
+            A_start = b_eff * v_start
+            A_end = b_eff * v_end
+        else:
+            A_start = b_eff * (12.0 * v_start / b_eff) ** (1.0 / 3.0)
+            A_end = b_eff * (12.0 * v_end / b_eff) ** (1.0 / 3.0)
+        if A_start < MIN_A: A_start = MIN_A
+        if A_end < MIN_A: A_end = MIN_A
+
         # --- SHEAR DEFORMATION LOGIC ---
         phi_s = 0.0
         G_val = 0.0
@@ -132,6 +146,9 @@ class FrameElement:
         # stiffness uses. The auto self-weight load reads this so the
         # computed weight and the stiffness model never disagree.
         self.A_avg = float(A_approx)
+        # End areas for the trapezoidal auto self-weight (see above).
+        self.A_start = float(A_start)
+        self.A_end = float(A_end)
         self.G_val = float(G_val)
 
         # --- KERNEL SELECTION ---
@@ -964,11 +981,13 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
 
     # 1b. Self-weight (auto). When enabled, the structural weight of every
     # member (decks AND walls) is computed as density x A per unit length,
-    # using each sub-element's own interpolated gross area A_avg = b_eff x h
-    # - the SAME section the stiffness uses, so weight and stiffness can
-    # never disagree. Variable sections (taper/3-point) emerge from the
-    # per-sub-element area differences and converge with mesh refinement.
-    # Vertical walls resolve gravity to pure axial via the is_gravity path.
+    # using each sub-element's own interpolated gross area b_eff x h - the
+    # SAME section the stiffness uses, so weight and stiffness can never
+    # disagree. The load is a true trapezoid from the start-area to the
+    # end-area, so a tapered member's resultant sits at the section centroid
+    # (mesh-independent reactions/M/V for linear tapers); 3-point profiles
+    # converge with mesh refinement. Vertical walls resolve gravity to pure
+    # axial via the is_gravity path.
     sw_auto_loads_map = {}
     sw_auto_global_loads = {}
     auto_sw = bool(params.get('auto_selfweight'))
@@ -978,12 +997,13 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         density = 25.0
     if auto_sw and density != 0.0:
         for idx, el_data in enumerate(elems_base):
-            w = density * elem_objects[idx].A_avg
-            if w == 0.0:
+            w_s = density * elem_objects[idx].A_start
+            w_e = density * elem_objects[idx].A_end
+            if w_s == 0.0 and w_e == 0.0:
                 continue
             el_L = elem_objects[idx].L
             entry = {'type': 'distributed_trapezoid', 'is_gravity': True,
-                     'params': [w, w, 0, el_L]}
+                     'params': [w_s, w_e, 0, el_L]}
             sw_auto_loads_map.setdefault(idx, []).append(entry)
             # Per-sub-element entries in the parent's equilibrium list make
             # the applied total exact for variable sections (a single

@@ -192,6 +192,31 @@ def test_linear_taper_total_weight_exact():
     assert abs(eq["residual_y"]) <= 1e-6 * scale + 1e-6
 
 
+def test_linear_taper_reactions_are_mesh_independent():
+    # Simply supported beam, asymmetric linear taper h0 -> h1. Statically
+    # determinate, so the self-weight end shear equals the exact trapezoidal
+    # reaction regardless of mesh: the load is a true trapezoid placing the
+    # resultant at the section centroid. A midpoint-lumped uniform load would
+    # be mesh-dependent here.
+    h0, h1 = 1.5, 0.5
+    w0, w1 = DENSITY * B_EFF * h0, DENSITY * B_EFF * h1
+    W = (w0 + w1) / 2.0 * L
+    x_c = L * (w0 + 2.0 * w1) / (3.0 * (w0 + w1))  # centroid from left end
+    R_left = W * (L - x_c) / L
+    geom = {'type': 1, 'shape': 1, 'vals': [h0, (h0 + h1) / 2.0, h1]}
+
+    def left_shear(mesh):
+        _, res = _combined(_beam(span_geom_0=geom, mesh_size=mesh))
+        s1 = res["Self-weight"]["S1"]
+        x = np.asarray(s1["x"])
+        return np.asarray(s1["V"])[np.argmin(x)]  # V(0) = left reaction
+
+    v_coarse = left_shear(2.5)   # 4 elements
+    v_fine = left_shear(0.25)    # 40 elements
+    assert v_coarse == pytest.approx(R_left, rel=1e-6)
+    assert v_coarse == pytest.approx(v_fine, rel=1e-6)
+
+
 # ==========================================
 # 5. WALL SELF-WEIGHT (PORTAL)
 # ==========================================
@@ -252,6 +277,30 @@ def test_cache_key_includes_auto_sw_inputs():
     filtered = solver.solver_cache_params(data.get_def())
     assert "auto_selfweight" in filtered
     assert "density" in filtered
+
+
+def test_convert_inertia_geoms_to_height_normalizes_all_profiles():
+    # Enabling auto self-weight must height-normalize EVERY stored profile,
+    # not just the one shown in the Section Profiler.
+    b = 2.0
+    I = 0.5
+    h_exp = (12.0 * I / b) ** (1.0 / 3.0)
+    params = {
+        'b_eff': b,
+        'span_geom_0': {'type': 0, 'shape': 0, 'vals': [I, I, I]},
+        'wall_geom_1': {'type': 0, 'shape': 1, 'vals': [I, 0.0, I]},
+        'span_geom_2': {'type': 1, 'shape': 0, 'vals': [0.8, 0.8, 0.8]},  # already height
+        'unrelated': 123,
+    }
+    assert data.convert_inertia_geoms_to_height(params) is True
+    assert params['span_geom_0']['type'] == 1
+    np.testing.assert_allclose(params['span_geom_0']['vals'], [h_exp] * 3, rtol=1e-9)
+    assert params['wall_geom_1']['type'] == 1
+    np.testing.assert_allclose(params['wall_geom_1']['vals'], [h_exp, 0.0, h_exp], rtol=1e-9)
+    # A height-mode profile is left untouched.
+    assert params['span_geom_2']['vals'] == [0.8, 0.8, 0.8]
+    # Idempotent: a second pass changes nothing.
+    assert data.convert_inertia_geoms_to_height(params) is False
 
 
 def test_report_and_export_recognize_self_weight_case():
