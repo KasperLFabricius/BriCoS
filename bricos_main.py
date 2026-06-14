@@ -302,6 +302,19 @@ def render_dynamic_factor(p, curr, ui_locked, show_sls):
 
 data_mod.initialize_session_state()
 
+# Active-system persistence. Streamlit resets a widget's value to its default
+# whenever the widget is NOT instantiated during a run, and several paths
+# rerun before the Active System radio renders (the Reset/Clear confirm at the
+# top of the sidebar, and report generation). That reverted the active system
+# to System A - blue background, System A edited - while the radio still showed
+# System B. Keep the choice in a plain key that Streamlit never garbage-
+# collects and reassert the widget key from it each run, before the radio
+# renders. The radio's on_change callback records genuine user selections at
+# the start of the rerun, so this restore never overwrites a fresh click.
+if "active_system" not in st.session_state:
+    st.session_state["active_system"] = st.session_state.get("active_system_radio_sidebar", "sysA")
+st.session_state["active_system_radio_sidebar"] = st.session_state["active_system"]
+
 # Show the outcome of any autosave/configuration load. Stored in session
 # state because loads are followed by st.rerun(), which would wipe a
 # directly rendered message.
@@ -686,8 +699,14 @@ with st.sidebar.container():
     st.session_state['sysB']['name'] = c_nB.text_input("Name Sys B", st.session_state['sysB']['name'], disabled=ui_locked)
 
     sys_map = {"sysA": f"{st.session_state['sysA']['name']} (Blue)", "sysB": f"{st.session_state['sysB']['name']} (Red)"}
-    # FIXED: Added persistent key to prevent reset during report generation
-    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True, disabled=ui_locked, key="active_system_radio_sidebar")
+
+    # Record genuine user selections into the persistent 'active_system' key.
+    # The callback runs at the start of the rerun (before the top-of-script
+    # restore), so the restore reasserts the choice without clobbering a click.
+    def _sync_active_system():
+        st.session_state["active_system"] = st.session_state["active_system_radio_sidebar"]
+
+    active_sys_key = st.radio("Active System:", ["sysA", "sysB"], format_func=lambda x: sys_map[x], horizontal=True, disabled=ui_locked, key="active_system_radio_sidebar", on_change=_sync_active_system)
 
     if active_sys_key == 'sysA':
         st.markdown("""<style>[data-testid="stSidebar"] { background-color: #F0F8FF; }</style>""", unsafe_allow_html=True)
