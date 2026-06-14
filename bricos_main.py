@@ -892,6 +892,8 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         shape_map = {"Constant": 0, "Linear (Taper)": 1, "3-Point (Start/Mid/End)": 2}
         shape_map_rev = {v: k for k, v in shape_map.items()}
         type_map_rev = {0: "Inertia (I)", 1: "Height (H)"}
+        align_map_rev = {0: "Straight (Horizontal)", 1: "Inclined"}
+        inc_mode_rev = {0: "Slope (%)", 1: "Delta Height (End - Start) [m]"}
         type_key = f"{curr}_prof_type_{sel_el}"
         shape_key = f"{curr}_prof_shape_{sel_el}"
         prof_val_keys = [f"{curr}_prof_v{j}_{sel_el}" for j in (1, 2, 3)]
@@ -904,6 +906,14 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             st.session_state[shape_key] = shape_map_rev.get(target_geom['shape'], "Constant")
             for k, v in zip(prof_val_keys, target_geom['vals']):
                 st.session_state[k] = float(v)
+            # Alignment widgets (spans) share the same bleed risk; re-seed them
+            # too. They are deliberately kept OUT of the signature, so an
+            # alignment edit (which leaves type/shape/vals unchanged) is never
+            # reverted, while a system/element switch - which trips the
+            # signature - snaps them back to the dict alongside the section.
+            st.session_state[f"{curr}_align_t_{sel_el}"] = align_map_rev.get(target_geom.get('align_type', 0), "Straight (Horizontal)")
+            st.session_state[f"{curr}_inc_m_{sel_el}"] = inc_mode_rev.get(target_geom.get('incline_mode', 0), "Slope (%)")
+            st.session_state[f"{curr}_inc_v_{sel_el}"] = float(target_geom.get('incline_val', 0.0))
 
         # Auto self-weight forces a height-defined section (every profile was
         # converted when the toggle was enabled); lock the radio to Height.
