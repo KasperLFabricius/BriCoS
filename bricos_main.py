@@ -899,18 +899,24 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
         prof_val_keys = [f"{curr}_prof_v{j}_{sel_el}" for j in (1, 2, 3)]
         prof_sig_key = f"{curr}_prof_sig_{sel_el}"
         prof_sig = (target_geom['type'], target_geom['shape'],
-                    tuple(float(v) for v in target_geom['vals']))
+                    tuple(float(v) for v in target_geom['vals']),
+                    target_geom.get('align_type', 0),
+                    target_geom.get('incline_mode', 0),
+                    float(target_geom.get('incline_val', 0.0)))
         if (st.session_state.get(prof_sig_key) != prof_sig
                 or any(k not in st.session_state for k in [type_key, shape_key] + prof_val_keys)):
             st.session_state[type_key] = type_map_rev.get(target_geom['type'], "Height (H)")
             st.session_state[shape_key] = shape_map_rev.get(target_geom['shape'], "Constant")
             for k, v in zip(prof_val_keys, target_geom['vals']):
                 st.session_state[k] = float(v)
-            # Alignment widgets (spans) share the same bleed risk; re-seed them
-            # too. They are deliberately kept OUT of the signature, so an
-            # alignment edit (which leaves type/shape/vals unchanged) is never
-            # reverted, while a system/element switch - which trips the
-            # signature - snaps them back to the dict alongside the section.
+            # The span Alignment widgets share the same bleed risk and are in
+            # the signature too, so an out-of-band alignment change - e.g.
+            # pressing Reset on an otherwise-constant but Inclined span, which
+            # leaves type/shape/vals unchanged - still trips this re-seed and
+            # clears the stale widget. A genuine in-widget alignment edit is
+            # preserved because the signature is re-recorded AFTER the
+            # alignment widgets below (so the dict still matches the last
+            # agreed signature on the edit's rerun).
             st.session_state[f"{curr}_align_t_{sel_el}"] = align_map_rev.get(target_geom.get('align_type', 0), "Straight (Horizontal)")
             st.session_state[f"{curr}_inc_m_{sel_el}"] = inc_mode_rev.get(target_geom.get('incline_mode', 0), "Slope (%)")
             st.session_state[f"{curr}_inc_v_{sel_el}"] = float(target_geom.get('incline_val', 0.0))
@@ -969,10 +975,6 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             )
             
         target_geom['vals'] = [v1, v2, v3]
-        # Record the state the widgets and the dict now agree on, so the
-        # guard above only fires on out-of-band changes.
-        st.session_state[prof_sig_key] = (target_geom['type'], target_geom['shape'],
-                                          tuple(float(v) for v in target_geom['vals']))
 
         # If in simple mode (just height constant), sync back to simple list for legacy logic
         if target_geom['type'] == 1:
@@ -1003,10 +1005,22 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
                 
                 lbl_inc = "Slope [%]" if target_geom['incline_mode'] == 0 else "Delta H [m]"
                 target_geom['incline_val'] = st.number_input(
-                    lbl_inc, value=float(target_geom['incline_val']), format="%.2f", 
+                    lbl_inc, value=float(target_geom['incline_val']), format="%.2f",
                     key=f"{curr}_inc_v_{sel_el}", disabled=ui_locked,
                     on_change=trigger_lock, args=(target_geom,)
                 )
+
+        # Record the full profiler state - section AND alignment - that the
+        # widgets and the dict now agree on, AFTER the alignment widgets have
+        # written back, so the guard above only fires on out-of-band changes
+        # (and a genuine alignment edit on this rerun is not reverted).
+        st.session_state[prof_sig_key] = (
+            target_geom['type'], target_geom['shape'],
+            tuple(float(v) for v in target_geom['vals']),
+            target_geom.get('align_type', 0),
+            target_geom.get('incline_mode', 0),
+            float(target_geom.get('incline_val', 0.0)),
+        )
 
 # --- BOUNDARY CONDITIONS TAB ---
 with st.sidebar.expander("Boundary Conditions", expanded=False):
