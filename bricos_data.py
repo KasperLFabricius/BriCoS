@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.76"
+APP_VERSION = "0.77"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -366,6 +366,62 @@ def model_uses_inertia_sections(params) -> bool:
             if h > ACTIVE_WALL_TOLERANCE_M:
                 return True
     return False
+
+
+def phi_base_values(params, raw):
+    """Sorted, unique base (ULS-basis) dynamic factor value(s) for a system.
+
+    Per-member values (calculated span-based, or manual per-span) arrive via
+    the raw result's 'Phi Members'; otherwise the single calculated 'phi_calc'
+    (Calculate mode) or the manual 'phi' applies uniformly.
+    """
+    raw = raw or {}
+    members = raw.get('Phi Members') or {}
+    if members:
+        return sorted({round(float(v), 3) for v in members.values()})
+    if params.get('phi_mode') == 'Calculate' and raw:
+        return [round(float(raw.get('phi_calc', 1.0)), 3)]
+    return [round(float(params.get('phi', 1.0)), 3)]
+
+
+def phi_sls_from_base(phi_base, params):
+    """SLS dynamic factor from a base value per the SLS treatment: 'Manual' ->
+    the user value, 'Reduced' -> 1 + (phi-1)/2 (Vejledning 5.4.2), otherwise
+    ('Same'/'No reduction') the base value unchanged."""
+    mode = params.get('phi_sls_mode', 'Same')
+    if mode == 'Manual':
+        return float(params.get('phi_sls', 1.0))
+    if mode == 'Reduced':
+        return 1.0 + (float(phi_base) - 1.0) / 2.0
+    return float(phi_base)
+
+
+def _format_phi_range(vals):
+    uniq = sorted({round(float(v), 3) for v in vals})
+    if len(uniq) <= 1:
+        return f"{(uniq[0] if uniq else 1.0):.3f}"
+    return f"{uniq[0]:.3f}–{uniq[-1]:.3f}"
+
+
+def phi_summary(params, raw, analyze_uls, analyze_sls):
+    """Formatted dynamic-factor readout per analyzed limit state.
+
+    Returns {'uls': str|None, 'sls': str|None}; each is a single value or a
+    min-max range (when per-member phi values exist). The SLS value applies
+    the SLS treatment to the base phi. An entry is None when that limit state
+    is not analyzed (or, implicitly, in the unfactored combination).
+    """
+    base = phi_base_values(params, raw)
+    out = {'uls': None, 'sls': None}
+    if analyze_uls:
+        out['uls'] = _format_phi_range(base)
+    if analyze_sls:
+        if params.get('phi_sls_mode', 'Same') == 'Manual':
+            sls_vals = [float(params.get('phi_sls', 1.0))]
+        else:
+            sls_vals = [phi_sls_from_base(v, params) for v in base]
+        out['sls'] = _format_phi_range(sls_vals)
+    return out
 
 
 # Selectbox presets for the vehicle-to-UDL clear distance. Single source of

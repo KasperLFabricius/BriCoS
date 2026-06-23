@@ -973,23 +973,25 @@ class BricosReportGenerator:
         self.elements.append(Paragraph(f"<b>{sys_label} ({p.get('name', '')})</b> - {p['mode']}", self.styles['Heading3']))
 
         sys_has_vehicle = self._has_vehicle_loads(p)
+        analyze_uls = bool(p.get('analyze_uls', True))
+        analyze_sls = bool(p.get('analyze_sls', True))
         if not sys_has_vehicle:
             # Phi only multiplies vehicle effects; a value would be noise here.
             phi_txt = "n/a (no vehicle load model in this system)"
-        elif p.get('phi_mode') == 'Calculate' and raw_res:
-            method = "per span" if p.get('phi_linf_mode') == 'Span' else "combined system"
-            phi_txt = f"{self._phi_display_text(p, raw_res)} (Calc, {method})"
         else:
-            scope = "per span" if p.get('phi_manual_scope') == 'Per span' else "global"
-            phi_txt = f"{self._phi_display_text(p, raw_res)} (Manual, {scope})"
-        analyze_uls = bool(p.get('analyze_uls', True))
-        analyze_sls = bool(p.get('analyze_sls', True))
-        sls_mode = p.get('phi_sls_mode', 'Same')
-        # The SLS Phi treatment only matters when SLS is analyzed.
-        if sys_has_vehicle and analyze_sls and sls_mode == 'Reduced':
-            phi_txt += " | SLS reduced per Vejl. 5.4.2"
-        elif sys_has_vehicle and analyze_sls and sls_mode == 'Manual':
-            phi_txt += f" | SLS manual = {p.get('phi_sls', 1.0):.3f}"
+            if p.get('phi_mode') == 'Calculate' and raw_res:
+                method = "Calc, " + ("per span" if p.get('phi_linf_mode') == 'Span' else "combined system")
+            else:
+                method = "Manual, " + ("per span" if p.get('phi_manual_scope') == 'Per span' else "global")
+            # One value per analyzed limit state (the SLS value already
+            # reflects the SLS treatment of the base phi).
+            summary = data_mod.phi_summary(p, raw_res, analyze_uls, analyze_sls)
+            phi_parts = []
+            if summary['uls'] is not None:
+                phi_parts.append(f"ULS {summary['uls']}")
+            if summary['sls'] is not None:
+                phi_parts.append(f"SLS {summary['sls']}")
+            phi_txt = ", ".join(phi_parts) + f" ({method})"
 
         ls_txt = ("ULS and SLS" if analyze_uls and analyze_sls else
                   "ULS only" if analyze_uls else
@@ -1218,7 +1220,7 @@ class BricosReportGenerator:
         # limit state is analyzed.
         if raw_res and (analyze_uls or analyze_sls):
             if sys_has_vehicle:
-                self._add_dynamic_factor_section(p, raw_res, analyze_sls)
+                self._add_dynamic_factor_section(p, raw_res, analyze_uls, analyze_sls)
             else:
                 self.elements.append(Spacer(1, 0.2*cm))
                 self.elements.append(Paragraph(
@@ -1301,10 +1303,11 @@ class BricosReportGenerator:
         # cannot strand them at the bottom of the previous page.
         self.elements.append(KeepTogether([heading, explanation, t]))
 
-    def _add_dynamic_factor_section(self, p, raw_res, analyze_sls=True):
+    def _add_dynamic_factor_section(self, p, raw_res, analyze_uls=True, analyze_sls=True):
         """Methodology statement, per-member phi table and the calculation log
-        for the dynamic factor. The SLS column and the SLS-treatment note are
-        shown only when SLS analysis is enabled."""
+        for the dynamic factor. The Φ (ULS) and Φ (SLS) columns (and the
+        SLS-treatment note) are each shown only when that limit state is
+        analyzed."""
         self.elements.append(Spacer(1, 0.2*cm))
         self.elements.append(Paragraph("Dynamic Factor (<i>Φ</i>):", self.styles['SwecoSmall']))
 
@@ -1334,7 +1337,7 @@ class BricosReportGenerator:
         sls_mode = p.get('phi_sls_mode', 'Same')
         if analyze_sls and sls_mode == 'Reduced':
             self.elements.append(Paragraph(
-                "SLS reduction enabled: <i>Φ<sub>SLS</sub></i> = 1 + (<i>Φ<sub>ULS</sub></i> - 1)/2 "
+                "SLS reduction enabled: <i>Φ<sub>SLS</sub></i> = 1 + (<i>Φ</i> - 1)/2 "
                 "per Vejledning til belastnings- og beregningsgrundlag for broer, 5.4.2.",
                 self.styles['SwecoFormula']))
         elif analyze_sls and sls_mode == 'Manual':
@@ -1351,7 +1354,9 @@ class BricosReportGenerator:
         members = raw_res.get('Phi Members') or {}
 
         def fmt_row(label, val):
-            row = [label, f"{val:.3f}"]
+            row = [label]
+            if analyze_uls:
+                row.append(f"{val:.3f}")
             if analyze_sls:
                 if sls_mode == 'Reduced':
                     sls_note = f"{1.0 + (val - 1.0) / 2.0:.3f}"
@@ -1362,13 +1367,16 @@ class BricosReportGenerator:
                 row.append(sls_note)
             return row
 
-        phi_table = [["Member", "Φ (ULS)"] + (["Φ (SLS)"] if analyze_sls else [])]
+        header = (["Member"] + (["Φ (ULS)"] if analyze_uls else [])
+                  + (["Φ (SLS)"] if analyze_sls else []))
+        phi_table = [header]
         if members:
             for eid in sorted(members.keys(), key=lambda x: (x[0], int(x[1:]))):
                 phi_table.append(fmt_row(eid, members[eid]))
         else:
             phi_table.append(fmt_row("All members", phi_uniform))
-        col_widths = [4*cm, 3.5*cm, 4.5*cm] if analyze_sls else [6*cm, 4*cm]
+        col_widths = ([4*cm, 3.5*cm, 4.5*cm] if (analyze_uls and analyze_sls)
+                      else [6*cm, 4*cm])
         t = self._make_std_table(phi_table, col_widths, font_size=8)
         self.elements.append(KeepTogether([t]))
 
