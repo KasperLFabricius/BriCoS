@@ -598,8 +598,15 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
         "factor) is always available; if neither limit state is selected it is the only one."
     )
     c_uls, c_sls = st.columns(2)
-    uls_on = c_uls.checkbox("ULS (Design)", value=bool(st.session_state['sysA'].get('analyze_uls', True)), key="uls_toggle_sidebar", help=help_ls, disabled=ui_locked)
-    sls_on = c_sls.checkbox("SLS (Characteristic)", value=bool(st.session_state['sysA'].get('analyze_sls', True)), key="sls_toggle_sidebar", help=help_ls, disabled=ui_locked)
+    # These shared Analysis-Settings widgets are also written programmatically
+    # by force_ui_update (on load/reset/copy/switch). Seed each widget key once
+    # from the stored config and let the key be the single source of truth -
+    # passing value= as well triggers Streamlit's "created with a default value
+    # but also had its value set via the Session State API" warning.
+    st.session_state.setdefault("uls_toggle_sidebar", bool(st.session_state['sysA'].get('analyze_uls', True)))
+    st.session_state.setdefault("sls_toggle_sidebar", bool(st.session_state['sysA'].get('analyze_sls', True)))
+    uls_on = c_uls.checkbox("ULS (Design)", key="uls_toggle_sidebar", help=help_ls, disabled=ui_locked)
+    sls_on = c_sls.checkbox("SLS (Characteristic)", key="sls_toggle_sidebar", help=help_ls, disabled=ui_locked)
     st.session_state['sysA']['analyze_uls'] = uls_on
     st.session_state['sysB']['analyze_uls'] = uls_on
     st.session_state['sysA']['analyze_sls'] = sls_on
@@ -616,13 +623,15 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
         "disabled - and b_eff is treated as the physical cross-section width. The Dead Load "
         "input then carries only superimposed permanent actions (surfacing, ballast, parapets)."
     )
-    auto_sw_on = st.checkbox("Auto-calculate self-weight", value=bool(st.session_state['sysA'].get('auto_selfweight', False)), key="auto_sw_toggle_sidebar", help=help_autosw, disabled=ui_locked)
+    st.session_state.setdefault("auto_sw_toggle_sidebar", bool(st.session_state['sysA'].get('auto_selfweight', False)))
+    auto_sw_on = st.checkbox("Auto-calculate self-weight", key="auto_sw_toggle_sidebar", help=help_autosw, disabled=ui_locked)
     st.session_state['sysA']['auto_selfweight'] = auto_sw_on
     st.session_state['sysB']['auto_selfweight'] = auto_sw_on
     if auto_sw_on:
         dens_val = st.session_state['sysA'].get('density', 25.0)
+        st.session_state.setdefault("density_input_sidebar", float(dens_val))
         new_dens = st.number_input(
-            r"Unit weight $\gamma$ [kN/m³]", value=float(dens_val), min_value=0.0, step=1.0,
+            r"Unit weight $\gamma$ [kN/m³]", min_value=0.0, step=1.0,
             key="density_input_sidebar", disabled=ui_locked,
             help="Material unit weight (specific weight). Reinforced concrete is approx. 25 kN/m³.")
         st.session_state['sysA']['density'] = new_dens
@@ -641,7 +650,8 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
         "Recommended for deep beams and piers. For non-prismatic members, shear deformation "
         "is currently not included in the stiffness formulation."
     )
-    use_shear = st.checkbox("Enable Shear Deformations", value=st.session_state['sysA'].get('use_shear_def', False), key="shear_toggle_sidebar", help=help_shear, disabled=ui_locked)
+    st.session_state.setdefault("shear_toggle_sidebar", bool(st.session_state['sysA'].get('use_shear_def', False)))
+    use_shear = st.checkbox("Enable Shear Deformations", key="shear_toggle_sidebar", help=help_shear, disabled=ui_locked)
     st.session_state['sysA']['use_shear_def'] = use_shear
     st.session_state['sysB']['use_shear_def'] = use_shear
 
@@ -649,15 +659,17 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
     # dead input when shear deformations are disabled - show it only then.
     # b_eff is always relevant (shear area, axial area and auto self-weight).
     val_beff = st.session_state['sysA'].get('b_eff', 1.0)
+    st.session_state.setdefault("beff_input_sidebar", float(val_beff))
     help_beff = "Effective width: shear area, axial area and auto self-weight."
     if use_shear:
         col_beff, col_nu = st.columns(2)
-        new_beff = col_beff.number_input(r"$b_{eff}$ [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
+        new_beff = col_beff.number_input(r"$b_{eff}$ [m]", min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
         val_nu = st.session_state['sysA'].get('nu', 0.2)
-        new_nu = col_nu.number_input(r"Poisson's Ratio ($\nu$)", value=float(val_nu), min_value=0.0, max_value=0.5, step=0.05, key="nu_input_sidebar", disabled=ui_locked, help="Used only for the Timoshenko shear modulus G.")
+        st.session_state.setdefault("nu_input_sidebar", float(val_nu))
+        new_nu = col_nu.number_input(r"Poisson's Ratio ($\nu$)", min_value=0.0, max_value=0.5, step=0.05, key="nu_input_sidebar", disabled=ui_locked, help="Used only for the Timoshenko shear modulus G.")
         st.session_state['sysA']['nu'] = new_nu; st.session_state['sysB']['nu'] = new_nu
     else:
-        new_beff = st.number_input(r"$b_{eff}$ [m]", value=float(val_beff), min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
+        new_beff = st.number_input(r"$b_{eff}$ [m]", min_value=0.01, step=0.1, help=help_beff, key="beff_input_sidebar", disabled=ui_locked)
 
     st.session_state['sysA']['b_eff'] = new_beff; st.session_state['sysB']['b_eff'] = new_beff
 
@@ -672,8 +684,10 @@ with st.sidebar.expander("Analysis & Result Settings", expanded=False):
         "with finer mesh. The 0.5 m default keeps the interpolation error negligible."
     )
     help_step = "Vehicle moving-load increment. Smaller steps sample the envelopes more densely."
-    m_val = c_mesh.slider("Mesh Size [m]", 0.1, 5.0, def_mesh, 0.1, key="common_mesh_slider", disabled=ui_locked, help=help_mesh)
-    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, def_step, 0.01, key="common_step_slider", disabled=ui_locked, help=help_step)
+    st.session_state.setdefault("common_mesh_slider", float(def_mesh))
+    st.session_state.setdefault("common_step_slider", float(def_step))
+    m_val = c_mesh.slider("Mesh Size [m]", 0.1, 5.0, step=0.1, key="common_mesh_slider", disabled=ui_locked, help=help_mesh)
+    s_val = c_step.slider("Vehicle Step [m]", 0.01, 2.0, step=0.01, key="common_step_slider", disabled=ui_locked, help=help_step)
 
 if "common_mesh_slider" in st.session_state:
     st.session_state['sysA']['mesh_size'] = m_val
