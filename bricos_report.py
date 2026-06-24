@@ -1001,6 +1001,35 @@ class BricosReportGenerator:
     def _add_system_input_summary(self, sys_label, p, raw_res, props, sys_key_id):
         self.elements.append(Paragraph(f"<b>{sys_label} ({p.get('name', '')})</b> - {p['mode']}", self.styles['Heading3']))
 
+        # Labelled element-layout diagram for QA, drawn in the system colour
+        # (blue = System A, red = System B). Structure only, no result diagram.
+        dl_geom = raw_res.get('Dead Load') if raw_res else None
+        if dl_geom:
+            is_id_A = (sys_key_id == 'sysA')
+            node_src = self.nodes_A if sys_key_id == self.key_A else self.nodes_B
+            layout_png = self._render_plot_task({
+                'nodes': node_src or {},
+                'sysA_data': dl_geom if is_id_A else {},
+                'sysB_data': {} if is_id_A else dl_geom,
+                'type_base': 'M', 'target_height': 2.0, 'title': '',
+                'name_A': p.get('name', 'System A'), 'name_B': p.get('name', 'System B'),
+                'geom_A': dl_geom if is_id_A else None,
+                'geom_B': None if is_id_A else dl_geom,
+                'params_A': p if is_id_A else {}, 'params_B': {} if is_id_A else p,
+                'show_A': is_id_A, 'show_B': not is_id_A,
+                'show_supports': True, 'show_element_names': True,
+                'structure_only': True, 'font_scale': 1.5, 'export_scale': 1.5,
+            })
+            if layout_png:
+                try:
+                    self.elements.append(KeepTogether([
+                        Paragraph("Element layout (S = span, W = wall)", self.styles['SwecoSmall']),
+                        Image(layout_png, width=16*cm, height=6*cm),
+                    ]))
+                    self.elements.append(Spacer(1, 0.2*cm))
+                except Exception:
+                    pass
+
         sys_has_vehicle = self._has_vehicle_loads(p)
         analyze_uls = bool(p.get('analyze_uls', True))
         analyze_sls = bool(p.get('analyze_sls', True))

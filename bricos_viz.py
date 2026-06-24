@@ -249,6 +249,52 @@ def _draw_thickness_bands(fig, geom_source, params, is_sys_A, legend_flags):
         ))
 
 
+def _geoms_match(geom_a, geom_b, tol=1e-6):
+    """True when both systems define the same element ids at the same node
+    coordinates, so a single set of element-name labels suffices for an
+    overlaid A/B plot (two identical labels would otherwise stack)."""
+    if not geom_a or not geom_b:
+        return False
+    if set(geom_a.keys()) != set(geom_b.keys()):
+        return False
+    for eid, da in geom_a.items():
+        db = geom_b.get(eid, {})
+        for key in ('ni', 'nj'):
+            pa, pb = da.get(key), db.get(key)
+            if pa is None or pb is None:
+                return False
+            if abs(pa[0] - pb[0]) > tol or abs(pa[1] - pb[1]) > tol:
+                return False
+    return True
+
+
+def _draw_element_labels(fig, geom_source, color, font_size):
+    """Annotate each element with its id (S1, S2, W1, ...) at the element
+    midpoint, in the system colour, with a semi-opaque background box so the id
+    stays legible over the structure and diagram lines. Spans are nudged just
+    above their axis and walls just to the side so the label does not sit
+    directly on the member line. A QA aid toggled from the UI."""
+    if not geom_source:
+        return
+    nudge = max(6.0, 0.9 * font_size)
+    for eid in sorted(geom_source.keys(), key=lambda x: (x[0], int(x[1:]))):
+        dat = geom_source[eid]
+        if 'ni' not in dat or 'nj' not in dat:
+            continue
+        ni, nj = dat['ni'], dat['nj']
+        mx = (ni[0] + nj[0]) / 2.0
+        my = (ni[1] + nj[1]) / 2.0
+        is_wall = eid.startswith('W')
+        fig.add_annotation(
+            x=mx, y=my, text=eid, showarrow=False,
+            xshift=(nudge if is_wall else 0.0),
+            yshift=(0.0 if is_wall else nudge),
+            font=dict(color=color, size=font_size, family="Arial", weight="bold"),
+            bgcolor="rgba(255,255,255,0.75)", bordercolor=color,
+            borderwidth=1, borderpad=2
+        )
+
+
 # ==========================================
 # MAIN PLOTTING FUNCTION
 # ==========================================
@@ -262,7 +308,9 @@ def create_plotly_fig(
     show_supports=False, support_size=0.5,
     font_scale=1.0,
     nodes_A=None, nodes_B=None,
-    show_thickness=False
+    show_thickness=False,
+    show_element_names=False,
+    structure_only=False
 ):
     fig = go.Figure()
     
@@ -408,9 +456,14 @@ def create_plotly_fig(
             x=x_struct, y=y_struct, mode='lines+markers', 
             line=dict(color='grey', width=3 if is_sys_A else 1.5),
             marker=dict(size=4, color='grey'),
-            name="Structure Geometry", opacity=0.5, 
+            name="Structure Geometry", opacity=0.5,
             hoverinfo='skip', showlegend=show_struct
         ))
+
+        # Structure-only mode (e.g. the report's element-layout diagram): draw
+        # the geometry and stop before any result diagram or load arrows.
+        if structure_only:
+            return
 
         # 2. Result Traces Aggregation
         # We accumulate all coordinates into single lists (separated by None) to create ONE trace per type.
@@ -745,6 +798,22 @@ def create_plotly_fig(
             font=dict(color=ann['color'], size=base_font_size, family="Arial", weight="bold"), 
             bgcolor="rgba(255,255,255,0.7)", bordercolor=ann['color'], borderwidth=1, borderpad=2
         )
+
+    # Element-name labels (S1, W2, ...): a QA aid sized to the chosen diagram
+    # height. When A and B share identical geometry on an overlaid plot, a
+    # single neutral label per element is enough; otherwise each system's
+    # labels take its own colour (blue = A, red = B).
+    if show_element_names:
+        elem_font = float(np.clip(11.0 * (float(target_height) / 2.0) ** 0.5 * font_scale, 9.0, 26.0))
+        gsrc_A = geom_A if geom_A else sysA_data
+        gsrc_B = geom_B if geom_B else sysB_data
+        if show_A and show_B and _geoms_match(gsrc_A, gsrc_B):
+            _draw_element_labels(fig, gsrc_A, '#333333', elem_font)
+        else:
+            if show_A:
+                _draw_element_labels(fig, gsrc_A, 'blue', elem_font)
+            if show_B:
+                _draw_element_labels(fig, gsrc_B, 'red', elem_font)
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=14*font_scale)),
