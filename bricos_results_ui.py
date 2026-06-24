@@ -289,7 +289,14 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
     view_options = ["Total Envelope"]
     if sysA.get('auto_selfweight', False):
         view_options.append("Self-weight")
-    view_options += ["Dead Load", "Soil", "Surcharge", "Vehicle Envelope", "Traffic UDL", "Vehicle Steps"]
+    view_options += ["Dead Load", "Soil", "Surcharge", "Vehicle Envelope"]
+    # The Traffic UDL case is only offered when a UDL is validly defined
+    # (positive intensity) in at least one shown system; otherwise its result
+    # is all zeros and would be a dead view option. Mirrors the report, which
+    # already gates its UDL chapter/factor rows on the same udl_line_load > 0.
+    if data_mod.udl_line_load(sysA) > 0.0 or (valid_B and data_mod.udl_line_load(sysB) > 0.0):
+        view_options.append("Traffic UDL")
+    view_options.append("Vehicle Steps")
     
     # Ensure session state for selector persistence
     if 'view_case_selector' not in st.session_state: st.session_state.view_case_selector = "Total Envelope"
