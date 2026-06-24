@@ -260,6 +260,12 @@ _CALLOUT = {
 }
 
 
+def _strip_num(text):
+    """Drop a leading hardcoded section number so headings can be auto-numbered
+    (lets a section be inserted without renumbering every following heading)."""
+    return re.sub(r'^\s*\d+(?:\.\d+)*\.?\s+', '', text)
+
+
 def manual_blocks():
     B = []
     h1 = lambda t: B.append(('h1', t))
@@ -292,6 +298,25 @@ def manual_blocks():
          "to both the maximum and minimum of each permanent action - favourable/unfavourable "
          "permanent-load cases are not split automatically (verify those separately).")
 
+    h2("What BriCoS does - at a glance")
+    md("- **Two structures side by side (System A vs System B).** The core workflow: model two "
+       "variants and read their results on the same diagrams - System A in blue, System B in "
+       "red - to compare them directly.\n"
+       "- **Fast moving-load envelopes.** Vehicles are stepped across the structure "
+       "automatically and BriCoS returns the absolute maximum/minimum $M$, $V$, $N$ and "
+       "deflection envelopes, so the governing design effects come back without positioning "
+       "loads by hand or building a full FE model.\n"
+       "- **Built-in bridge load combinations.** ULS/SLS partial factors, the dynamic factor "
+       "$\\Phi$, and the coupled vehicle + Traffic UDL Total Envelope, per DS/EN 1991-2 + DK NA "
+       "and the VD *Vejledning til belastnings- og beregningsgrundlag for broer*.\n"
+       "- **2D frame / beam / superstructure** modelling with non-prismatic sections, soil and "
+       "surcharge on walls, and flexible supports.\n"
+       "- **Reports & export.** A one-click PDF report and an Excel/CSV data package.")
+    call('concept', "Speed is the point. Because BriCoS envelopes the moving loads and the load "
+         "combinations for you, the governing design forces come back in seconds - which is "
+         "what makes it practical for side-by-side comparisons and for judging how much "
+         "analysis a job actually needs (see Common use cases).")
+
     # ---- 2. Quick start --------------------------------------------------
     h1("2. Quick start (5 minutes)")
     md("1. **Define the structure.** In the sidebar open *Geometry, Stiffness & Static Loads*, "
@@ -310,6 +335,40 @@ def manual_blocks():
     call('tip', "Everything updates as you type - there is no separate 'run' button. If a "
          "system is incompletely defined it is reported as a warning and excluded, so you can "
          "still work on the other system.")
+
+    # ---- Common use cases (auto-numbered) -------------------------------
+    h1("Common use cases")
+    md("These workflows all use the same idea: put one structure (or one set of assumptions) "
+       "in **System A** and a variant in **System B**, then read the governing envelopes side "
+       "by side.")
+    h2("Conservative design forces for a simple static system")
+    md("Get bending, shear, axial and deflection **envelopes** for a simple beam or frame under "
+       "the governing permanent and traffic actions - quickly, without setting up a full FE "
+       "model. The 2D linear-elastic model, the adverse-only Traffic UDL (DS/EN 1991-2, "
+       "4.3.2(1)(b)) and the full moving-load envelopes are inherently on the safe side, so "
+       "this suits preliminary sizing or an independent check of another analysis.")
+    h2("Comparing alternative static systems")
+    md("Put two arrangements in A and B - for example simply-supported vs continuous, or the "
+       "effect of making a joint/support continuous or adding a support - and compare the "
+       "envelopes directly to see how much the static system drives the load effects.")
+    h2("Normal vs conditional passage")
+    md("Model the same structure twice and vary **only the partial factors and the dynamic "
+       "factor $\\Phi$** between System A (normal passage) and System B (conditional or "
+       "restricted passage - for example reduced speed, giving a lower $\\Phi$, or an escorted, "
+       "centred single-vehicle passage). The side-by-side envelopes show what the passage "
+       "conditions are worth in design terms.")
+    call('standard', "The dynamic factor follows DS/EN 1991-2 + DK NA; the classification load "
+         "model and partial factors follow the VD *Vejledning til belastnings- og "
+         "beregningsgrundlag for broer*. Set the factors per system under *Design Factors & "
+         "Type*.")
+    h2("Classification vehicle vs special vehicle")
+    md("Compare a standard **classification vehicle** (a built-in class) in System A against a "
+       "**special / permit vehicle** (custom axle loads and spacings) in System B, to see "
+       "whether and by how much the special transport governs the design.")
+    call('tip', "A comparison is itself a decision tool: how much the result changes between A "
+         "and B tells you how sensitive the design is to the modelling choice (system, vehicle, "
+         "factors), and therefore whether a quick conservative check is enough or a more "
+         "detailed analysis is warranted.")
 
     # ---- 3. Modelling concepts ------------------------------------------
     h1("3. Modelling concepts")
@@ -629,11 +688,18 @@ def build_manual_pdf(buffer):
     # Figure export shares one kaleido server (see bricos_report); the loop
     # builds the flow, rendering each Plotly figure to PNG inside the context.
     with report.persistent_image_export():
+        n1 = n2 = 0
         for block in manual_blocks():
             kind = block[0]
-            if kind in ('h1', 'h2', 'h3'):
-                style = {'h1': 'MH1', 'h2': 'MH2', 'h3': 'MH3'}[kind]
-                flow.append(Paragraph(_inline_md_to_rl(block[1]), styles[style]))
+            if kind == 'h1':
+                n1 += 1
+                n2 = 0
+                flow.append(Paragraph(f"{n1}. " + _inline_md_to_rl(_strip_num(block[1])), styles['MH1']))
+            elif kind == 'h2':
+                n2 += 1
+                flow.append(Paragraph(f"{n1}.{n2} " + _inline_md_to_rl(_strip_num(block[1])), styles['MH2']))
+            elif kind == 'h3':
+                flow.append(Paragraph(_inline_md_to_rl(_strip_num(block[1])), styles['MH3']))
             elif kind == 'md':
                 _render_md_pdf(block[1], flow, styles, Paragraph)
             elif kind == 'callout':
@@ -710,14 +776,18 @@ def render_manual_streamlit():
     st.markdown("# :books: BriCoS user manual")
     st.caption("How BriCoS works, the theory it applies, its features, and how to use it.")
 
+    n1 = n2 = 0
     for block in manual_blocks():
         kind = block[0]
         if kind == 'h1':
-            st.markdown(f"## {block[1]}")
+            n1 += 1
+            n2 = 0
+            st.markdown(f"## {n1}. {_strip_num(block[1])}")
         elif kind == 'h2':
-            st.markdown(f"### {block[1]}")
+            n2 += 1
+            st.markdown(f"### {n1}.{n2} {_strip_num(block[1])}")
         elif kind == 'h3':
-            st.markdown(f"#### {block[1]}")
+            st.markdown(f"#### {_strip_num(block[1])}")
         elif kind == 'md':
             st.markdown(block[1])
         elif kind == 'callout':
