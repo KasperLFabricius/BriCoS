@@ -252,7 +252,7 @@ def fig_phi_curve():
 #   ('table', headers, rows)
 
 _CALLOUT = {
-    'concept':  (":large_blue_diamond:", "For newcomers"),
+    'concept':  (":large_blue_diamond:", "In plain terms"),
     'theory':   (":triangular_ruler:", "Theory"),
     'standard': (":blue_book:", "Standards"),
     'tip':      (":bulb:", "Tip"),
