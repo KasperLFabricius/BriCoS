@@ -362,6 +362,18 @@ if load_status:
 # Global Lock (Report Gen)
 ui_locked = st.session_state.is_generating_report
 
+# --- USER MANUAL VIEW ---
+# Opened from the About expander; rendered full-width in place of the analysis
+# with a Back button to return. Imported lazily so it adds no startup cost, and
+# the early st.stop() skips the sidebar/solve while the manual is open.
+if st.session_state.get('show_manual', False):
+    if st.button(":arrow_left: Back to analysis", type="primary"):
+        st.session_state['show_manual'] = False
+        st.rerun()
+    import bricos_manual as manual
+    manual.render_manual_streamlit()
+    st.stop()
+
 # Autosave Logic
 current_time = time.time()
 interval_sec = st.session_state.autosave_interval * 60
@@ -390,6 +402,9 @@ with st.sidebar.expander("About", expanded=False):
     st.write("Author: Kasper Lindskov Fabricius")
     st.write("Email: Kasper.LindskovFabricius@sweco.dk")
     st.write("A specialized Finite Element Analysis (FEM) tool for rapid bridge analysis and comparison.")
+    if st.button(":book: Open User Manual", key="open_manual_btn", disabled=ui_locked):
+        st.session_state['show_manual'] = True
+        st.rerun()
 
 # --- 2. RESET DATA ---
 with st.sidebar.expander("Reset Data", expanded=False):
