@@ -279,10 +279,13 @@ def render_dynamic_factor(p, curr, ui_locked, analyze_uls, analyze_sls):
             app_sel = st.radio("Phi application:", app_opts, index=idx_app, key=f"{curr}_phiapp", disabled=ui_locked, help=help_app)
             p['phi_application'] = 'Governing' if "Governing" in app_sel else 'Per member'
 
-    # SLS-specific Phi treatment: only when SLS is analyzed. A separate widget
-    # key per option set (ULS+SLS vs SLS-only) avoids a stale selection landing
-    # outside the current options when the limit-state toggles change.
+    # SLS-specific Phi treatment: only when SLS is analyzed. One widget key is
+    # reused for both option sets (ULS+SLS vs SLS-only) so the existing
+    # force_ui_update sync of '{curr}_phisls' on load/copy keeps working; the
+    # label is re-seeded only when the stored value is not valid for the
+    # current options (avoids a stale selection landing outside them).
     if analyze_sls:
+        sls_key = f"{curr}_phisls"
         if analyze_uls:
             help_sls = (
                 "Phi applied in the Characteristic (SLS) result mode. ULS results are unaffected.\n"
@@ -293,7 +296,6 @@ def render_dynamic_factor(p, curr, ui_locked, analyze_uls, analyze_sls):
             )
             sls_opts = ["Same as ULS", "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)", "Manual SLS value"]
             sls_mode_map = {"Same as ULS": 'Same', sls_opts[1]: 'Reduced', "Manual SLS value": 'Manual'}
-            sls_key = f"{curr}_phisls"
         else:
             # SLS-only: there is no ULS to be "same as", and the Manual base Phi
             # above already serves as a manual SLS value, so only the reduction
@@ -306,13 +308,19 @@ def render_dynamic_factor(p, curr, ui_locked, analyze_uls, analyze_sls):
             )
             sls_opts = ["No reduction", "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)"]
             sls_mode_map = {"No reduction": 'Same', sls_opts[1]: 'Reduced'}
-            sls_key = f"{curr}_phisls_slsonly"
             # 'Manual' isn't offered here; fall back to the no-reduction basis.
             if p.get('phi_sls_mode', 'Same') == 'Manual':
                 p['phi_sls_mode'] = 'Same'
+        # The stored phi_sls_mode (dict) is authoritative. Re-seed the widget's
+        # label only when its current value is not in the active options - e.g.
+        # after a limit-state toggle, or when force_ui_update wrote the other
+        # option set's label for a loaded/copied config. No index= is passed,
+        # so a valid stored selection (incl. a freshly loaded 'Reduced') is
+        # never overwritten.
         label_for_mode = {v: k for k, v in sls_mode_map.items()}
-        idx_sls = sls_opts.index(label_for_mode.get(p.get('phi_sls_mode', 'Same'), sls_opts[0]))
-        sls_sel = st.selectbox(r"$\varphi$ in SLS:", sls_opts, index=idx_sls, key=sls_key, disabled=ui_locked, help=help_sls)
+        if st.session_state.get(sls_key) not in sls_opts:
+            st.session_state[sls_key] = label_for_mode.get(p.get('phi_sls_mode', 'Same'), sls_opts[0])
+        sls_sel = st.selectbox(r"$\varphi$ in SLS:", sls_opts, key=sls_key, disabled=ui_locked, help=help_sls)
         p['phi_sls_mode'] = sls_mode_map.get(sls_sel, 'Same')
         if p['phi_sls_mode'] == 'Manual':
             p['phi_sls'] = st.number_input(

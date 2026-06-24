@@ -23,6 +23,20 @@ def test_phi_base_values_manual_calculate_and_members():
     assert data.phi_base_values(_p(), {'Phi Members': {'S1': 1.25, 'S2': 1.10, 'W1': 1.25}}) == [1.10, 1.25]
 
 
+def test_phi_base_values_are_unrounded():
+    # The base value is NOT pre-rounded, so the SLS reduction is applied to the
+    # same value the solver/report table use (the report formats at display).
+    assert data.phi_base_values(_p(phi_mode='Calculate'), {'phi_calc': 1.234567}) == [1.234567]
+
+
+def test_phi_summary_sls_reduces_unrounded_base():
+    # Reduction on the unrounded base, then formatted - not rounded twice.
+    phi = 1.234567
+    s = data.phi_summary(_p(phi_mode='Calculate', phi_sls_mode='Reduced'), {'phi_calc': phi}, True, True)
+    assert s['uls'] == f"{phi:.3f}"
+    assert s['sls'] == f"{1.0 + (phi - 1.0) / 2.0:.3f}"
+
+
 def test_phi_sls_from_base_modes():
     assert data.phi_sls_from_base(1.30, _p(phi_sls_mode='Same')) == pytest.approx(1.30)
     assert data.phi_sls_from_base(1.30, _p(phi_sls_mode='Reduced')) == pytest.approx(1.15)

@@ -373,15 +373,17 @@ def phi_base_values(params, raw):
 
     Per-member values (calculated span-based, or manual per-span) arrive via
     the raw result's 'Phi Members'; otherwise the single calculated 'phi_calc'
-    (Calculate mode) or the manual 'phi' applies uniformly.
+    (Calculate mode) or the manual 'phi' applies uniformly. Values are kept
+    UNROUNDED so the SLS reduction is applied to the same value the solver and
+    the report table use; rounding happens only at display (phi_summary).
     """
     raw = raw or {}
     members = raw.get('Phi Members') or {}
     if members:
-        return sorted({round(float(v), 3) for v in members.values()})
+        return sorted({float(v) for v in members.values()})
     if params.get('phi_mode') == 'Calculate' and raw:
-        return [round(float(raw.get('phi_calc', 1.0)), 3)]
-    return [round(float(params.get('phi', 1.0)), 3)]
+        return [float(raw.get('phi_calc', 1.0))]
+    return [float(params.get('phi', 1.0))]
 
 
 def phi_sls_from_base(phi_base, params):
