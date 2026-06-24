@@ -2,6 +2,8 @@ import io
 import sys
 import types
 
+import pytest
+
 import bricos_data as data
 import bricos_report
 from bricos_report import BricosReportGenerator
@@ -688,3 +690,60 @@ def test_input_summary_phi_line_sls_only():
     txt = _flatten_report_text(gen)
     assert "SLS 1.200" in txt
     assert "ULS 1.200" not in txt
+
+
+# --- Single-system reporting: the report fills its primary slot with the first
+# system that solved, so a report can be produced for either system alone. ---
+
+_SLOT_NODES = {200: (0.0, 0.0), 201: (10.0, 0.0)}
+
+
+def _slot_state():
+    return {
+        "sysA": _params(name="Sys A model"),
+        "sysB": _params(name="Sys B model"),
+        "model_props_A": {"Spans": {}, "Walls": {}},
+        "model_props_B": {"Spans": {}, "Walls": {}},
+    }
+
+
+def test_report_keeps_system_a_primary_when_both_valid():
+    state = _slot_state()
+    gen = BricosReportGenerator(io.BytesIO(), {}, state,
+                                {"Dead Load": {}}, {"Dead Load": {}},
+                                _SLOT_NODES, _SLOT_NODES)
+    assert gen.valid_B is True
+    assert gen.label_A == "System A" and gen.key_A == "sysA"
+    assert gen.label_B == "System B" and gen.key_B == "sysB"
+    assert gen.params_A is state["sysA"]
+    assert gen.params_B is state["sysB"]
+
+
+def test_report_uses_system_a_alone_when_system_b_invalid():
+    state = _slot_state()
+    gen = BricosReportGenerator(io.BytesIO(), {}, state,
+                                {"Dead Load": {}}, None, _SLOT_NODES, None)
+    assert gen.valid_B is False
+    assert gen.label_A == "System A" and gen.key_A == "sysA"
+    assert gen.params_A is state["sysA"]
+    assert gen.nodes_A is _SLOT_NODES
+
+
+def test_report_promotes_system_b_to_primary_when_system_a_invalid():
+    state = _slot_state()
+    raw_b = {"Dead Load": {}}
+    gen = BricosReportGenerator(io.BytesIO(), {}, state,
+                                None, raw_b, None, _SLOT_NODES)
+    # Only one system is valid, so the second slot is not rendered ...
+    assert gen.valid_B is False
+    # ... but the single valid system keeps its true identity in slot A.
+    assert gen.label_A == "System B" and gen.key_A == "sysB"
+    assert gen.params_A is state["sysB"]
+    assert gen.raw_A is raw_b
+    assert gen.nodes_A is _SLOT_NODES
+
+
+def test_report_requires_at_least_one_valid_system():
+    state = _slot_state()
+    with pytest.raises(ValueError):
+        BricosReportGenerator(io.BytesIO(), {}, state, None, None, None, None)

@@ -1381,8 +1381,17 @@ raw_res_B, nodes_B, props_B, err_B = safe_solve(st.session_state['sysB'], "Syste
 st.session_state['model_props_A'] = props_A
 st.session_state['model_props_B'] = props_B
 
-if err_A and isinstance(err_A, str): st.error(f"System A Error: {err_A}")
-if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
+# A system that fails validation/analysis is treated as inactive: as long as
+# the other system is valid, the analysis and report cover the valid system
+# alone and the invalid one is surfaced as a warning rather than a blocking
+# error. Only when BOTH systems are invalid are hard errors shown.
+if err_A and err_B:
+    if isinstance(err_A, str): st.error(f"System A Error: {err_A}")
+    if isinstance(err_B, str): st.error(f"System B Error: {err_B}")
+elif err_A and isinstance(err_A, str):
+    st.warning(f"System A is not fully defined and is inactive - it is excluded from the analysis and report (only System B is active). Details: {err_A}")
+elif err_B and isinstance(err_B, str):
+    st.warning(f"System B is not fully defined and is inactive - it is excluded from the analysis and report (only System A is active). Details: {err_B}")
 
 # Show the phi log whenever the ACTIVE system solved; previously it
 # disappeared for system A whenever system B had a validation error. The
@@ -1448,8 +1457,8 @@ if active_raw_res and (analyze_uls_ui or analyze_sls_ui):
 # ==========================================
 
 if st.session_state.is_generating_report:
-    if err_A or err_B:
-        st.session_state['report_status'] = ('error', "Report generation blocked: correct the model validation/analysis errors before generating a report.")
+    if err_A and err_B:
+        st.session_state['report_status'] = ('error', "Report generation blocked: at least one system must be validly defined. Correct the model validation/analysis errors before generating a report.")
         st.session_state.is_generating_report = False
         st.rerun()
 
@@ -1480,7 +1489,9 @@ if st.session_state.is_generating_report:
         rep_gen.generate()
         buffer.seek(0)
         st.session_state['report_buffer'] = buffer
-        st.session_state['report_status'] = ('success', "Report generated. Use the download button below.")
+        excluded = "System B" if err_B else ("System A" if err_A else "")
+        excl_note = f" {excluded} was excluded (not fully defined)." if excluded else ""
+        st.session_state['report_status'] = ('success', f"Report generated. Use the download button below.{excl_note}")
 
     except Exception as e:
         import traceback
