@@ -14,6 +14,9 @@ app and, later, in the PDF.
 Source is kept ASCII-only: emoji are Streamlit shortcodes (e.g. :bulb:) and
 mathematics is LaTeX ($...$), never literal non-ASCII glyphs.
 """
+import io
+import re
+
 import numpy as np
 import plotly.graph_objects as go
 
@@ -116,30 +119,84 @@ def _blank_axes(fig, x_range=None, y_range=None, height=300):
     return fig
 
 
+def _arrow(fig, x0, y0, x1, y1, color, width=1.6):
+    """Arrow from (x0,y0) to (x1,y1) in data coordinates."""
+    fig.add_annotation(x=x1, y=y1, ax=x0, ay=y0, xref='x', yref='y', axref='x', ayref='y',
+                       showarrow=True, arrowhead=2, arrowsize=1.1, arrowwidth=width,
+                       arrowcolor=color, text="")
+
+
 def fig_sign_convention():
-    """Sagging-positive bending on the tension side, shear and axial sign."""
+    """Four-panel sign-convention reference, reproducing the report's diagram:
+    sagging-positive bending drawn on the tension side, classical shear,
+    tension-positive axial force, and global-axes deflection."""
     fig = go.Figure()
-    # member axis
-    fig.add_trace(go.Scatter(x=[0, 10], y=[0, 0], mode='lines',
-                             line=dict(color='grey', width=3), hoverinfo='skip'))
-    # sagging moment drawn on the tension (bottom) side, as the app does
-    xs = np.linspace(0, 10, 40)
-    ys = -1.4 * np.sin(np.pi * xs / 10.0)
-    fig.add_trace(go.Scatter(x=xs, y=ys, mode='lines', fill='tozeroy',
-                             line=dict(color='blue'), fillcolor='rgba(0,0,255,0.12)',
-                             hoverinfo='skip'))
-    fig.add_annotation(x=5, y=-1.55, text="+M (sagging) plotted on the tension side",
-                       showarrow=False, font=dict(color='blue', size=12))
-    # shear arrows
-    fig.add_annotation(x=0.4, y=0, ax=0.4, ay=-1.1, xref='x', yref='y',
-                       axref='x', ayref='y', showarrow=True, arrowhead=2, arrowcolor='red')
-    fig.add_annotation(x=9.6, y=-1.1, ax=9.6, ay=0, xref='x', yref='y',
-                       axref='x', ayref='y', showarrow=True, arrowhead=2, arrowcolor='red')
-    fig.add_annotation(x=1.2, y=-0.6, text="+V", showarrow=False, font=dict(color='red', size=12))
-    # axial
-    fig.add_annotation(x=5, y=0.5, text="+N = tension", showarrow=False,
-                       font=dict(color='green', size=12))
-    return _blank_axes(fig, x_range=[-1, 11], y_range=[-2.2, 1.1], height=240)
+    RED, BLUE, GREY, GREEN = 'red', 'blue', 'grey', 'rgb(33,102,64)'
+
+    def title(cx, text):
+        fig.add_annotation(x=cx, y=10.3, text=f"<b>{text}</b>", showarrow=False,
+                           font=dict(size=12, color='black'))
+
+    def label(cx, cy, text, color, size=10):
+        fig.add_annotation(x=cx, y=cy, text=text, showarrow=False, font=dict(size=size, color=color))
+
+    # --- Panel 1: Bending M (two-span beam, moment on the tension side) ---
+    title(8.0, "Bending M")
+    beam_y = 6.4
+    fig.add_trace(go.Scatter(x=[2, 14], y=[beam_y, beam_y], mode='lines',
+                             line=dict(color='black', width=2), hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=[2, 8, 14], y=[beam_y - 0.25] * 3, mode='markers',
+                             marker=dict(symbol='triangle-up', size=12, color='white',
+                                         line=dict(color='black', width=1)), hoverinfo='skip'))
+    mx, my = [], []
+    for i in range(41):
+        xi = i / 40.0 * 2.0
+        xis = xi if xi <= 1.0 else 2.0 - xi
+        m = 0.375 * xis - 0.5 * xis * xis
+        mx.append(2.0 + 6.0 * xi)
+        my.append(beam_y - 9.0 * m)
+    fig.add_trace(go.Scatter(x=mx, y=my, mode='lines', line=dict(color=RED, width=1.8), hoverinfo='skip'))
+    label(4.6, 4.6, "+M (sagging)", RED, 9)
+    label(8.0, 8.1, "-M (hogging)", RED, 9)
+
+    # --- Panel 2: Shear V (classical convention, both signs) ---
+    title(22.0, "Shear V")
+    fig.add_shape(type='rect', x0=18, y0=5.2, x1=21, y1=8.0, line=dict(color='black', width=1.2))
+    _arrow(fig, 17.5, 5.4, 17.5, 7.8, RED)
+    _arrow(fig, 21.5, 7.8, 21.5, 5.4, RED)
+    label(19.5, 4.4, "+V", RED, 9)
+    fig.add_shape(type='rect', x0=24, y0=5.2, x1=27, y1=8.0, line=dict(color='black', width=1.2))
+    _arrow(fig, 23.5, 7.8, 23.5, 5.4, BLUE)
+    _arrow(fig, 27.5, 5.4, 27.5, 7.8, BLUE)
+    label(25.5, 4.4, "-V", BLUE, 9)
+    label(22.5, 3.4, "+V: left face up, right face down", GREY, 8)
+
+    # --- Panel 3: Normal force N (tension positive) ---
+    title(34.0, "Normal force N")
+    fig.add_shape(type='rect', x0=31, y0=7.0, x1=37, y1=7.8, fillcolor='lightgrey', line=dict(color='black', width=0.8))
+    _arrow(fig, 31, 7.4, 29.3, 7.4, RED)
+    _arrow(fig, 37, 7.4, 38.7, 7.4, RED)
+    label(34.0, 6.4, "+N (tension)", RED, 9)
+    fig.add_shape(type='rect', x0=31, y0=4.4, x1=37, y1=5.2, fillcolor='lightgrey', line=dict(color='black', width=0.8))
+    _arrow(fig, 29.3, 4.8, 31, 4.8, BLUE)
+    _arrow(fig, 38.7, 4.8, 37, 4.8, BLUE)
+    label(34.0, 3.7, "-N (compression)", BLUE, 9)
+
+    # --- Panel 4: Deflection (global axes) ---
+    title(45.5, "Deflection")
+    ox, oy = 45.0, 6.0
+    _arrow(fig, ox, oy, ox, oy + 2.6, GREEN); label(ox + 0.6, oy + 2.6, "+", GREEN, 12)
+    _arrow(fig, ox, oy, ox + 3.0, oy, GREEN); label(ox + 3.2, oy + 0.5, "+", GREEN, 12)
+    _arrow(fig, ox, oy, ox, oy - 2.6, GREY); label(ox + 0.6, oy - 2.6, "-", GREY, 12)
+    _arrow(fig, ox, oy, ox - 3.0, oy, GREY); label(ox - 3.2, oy + 0.5, "-", GREY, 12)
+    label(45.0, 3.0, "up / right positive", GREY, 8)
+
+    fig.update_layout(
+        xaxis=dict(visible=False, range=[0, 50]),
+        yaxis=dict(visible=False, range=[2.5, 11]),
+        plot_bgcolor='white', margin=dict(l=10, r=10, t=10, b=10),
+        showlegend=False, height=260)
+    return fig
 
 
 def fig_section_shapes():
@@ -195,12 +252,18 @@ def fig_phi_curve():
 #   ('table', headers, rows)
 
 _CALLOUT = {
-    'concept':  (":large_blue_diamond:", "For newcomers"),
+    'concept':  (":large_blue_diamond:", "In plain terms"),
     'theory':   (":triangular_ruler:", "Theory"),
     'standard': (":blue_book:", "Standards"),
     'tip':      (":bulb:", "Tip"),
     'limit':    (":warning:", "Assumption / limitation"),
 }
+
+
+def _strip_num(text):
+    """Drop a leading hardcoded section number so headings can be auto-numbered
+    (lets a section be inserted without renumbering every following heading)."""
+    return re.sub(r'^\s*\d+(?:\.\d+)*\.?\s+', '', text)
 
 
 def manual_blocks():
@@ -235,6 +298,25 @@ def manual_blocks():
          "to both the maximum and minimum of each permanent action - favourable/unfavourable "
          "permanent-load cases are not split automatically (verify those separately).")
 
+    h2("What BriCoS does - at a glance")
+    md("- **Two structures side by side (System A vs System B).** The core workflow: model two "
+       "variants and read their results on the same diagrams - System A in blue, System B in "
+       "red - to compare them directly.\n"
+       "- **Fast moving-load envelopes.** Vehicles are stepped across the structure "
+       "automatically and BriCoS returns the absolute maximum/minimum $M$, $V$, $N$ and "
+       "deflection envelopes, so the governing design effects come back without positioning "
+       "loads by hand or building a full FE model.\n"
+       "- **Built-in bridge load combinations.** ULS/SLS partial factors, the dynamic factor "
+       "$\\Phi$, and the coupled vehicle + Traffic UDL Total Envelope, per DS/EN 1991-2 + DK NA "
+       "and the VD *Vejledning til belastnings- og beregningsgrundlag for broer*.\n"
+       "- **2D frame / beam / superstructure** modelling with non-prismatic sections, soil and "
+       "surcharge on walls, and flexible supports.\n"
+       "- **Reports & export.** A one-click PDF report and an Excel/CSV data package.")
+    call('concept', "Speed is the point. Because BriCoS envelopes the moving loads and the load "
+         "combinations for you, the governing design forces come back in seconds - which is "
+         "what makes it practical for side-by-side comparisons and for judging how much "
+         "analysis a job actually needs (see Common use cases).")
+
     # ---- 2. Quick start --------------------------------------------------
     h1("2. Quick start (5 minutes)")
     md("1. **Define the structure.** In the sidebar open *Geometry, Stiffness & Static Loads*, "
@@ -253,6 +335,40 @@ def manual_blocks():
     call('tip', "Everything updates as you type - there is no separate 'run' button. If a "
          "system is incompletely defined it is reported as a warning and excluded, so you can "
          "still work on the other system.")
+
+    # ---- Common use cases (auto-numbered) -------------------------------
+    h1("Common use cases")
+    md("These workflows all use the same idea: put one structure (or one set of assumptions) "
+       "in **System A** and a variant in **System B**, then read the governing envelopes side "
+       "by side.")
+    h2("Conservative design forces for a simple static system")
+    md("Get bending, shear, axial and deflection **envelopes** for a simple beam or frame under "
+       "the governing permanent and traffic actions - quickly, without setting up a full FE "
+       "model. The 2D linear-elastic model, the adverse-only Traffic UDL (DS/EN 1991-2, "
+       "4.3.2(1)(b)) and the full moving-load envelopes are inherently on the safe side, so "
+       "this suits preliminary sizing or an independent check of another analysis.")
+    h2("Comparing alternative static systems")
+    md("Put two arrangements in A and B - for example simply-supported vs continuous, or the "
+       "effect of making a joint/support continuous or adding a support - and compare the "
+       "envelopes directly to see how much the static system drives the load effects.")
+    h2("Normal vs conditional passage")
+    md("Model the same structure twice and vary **only the partial factors and the dynamic "
+       "factor $\\Phi$** between System A (normal passage) and System B (conditional or "
+       "restricted passage - for example reduced speed, giving a lower $\\Phi$, or an escorted, "
+       "centred single-vehicle passage). The side-by-side envelopes show what the passage "
+       "conditions are worth in design terms.")
+    call('standard', "The dynamic factor follows DS/EN 1991-2 + DK NA; the classification load "
+         "model and partial factors follow the VD *Vejledning til belastnings- og "
+         "beregningsgrundlag for broer*. Set the factors per system under *Design Factors & "
+         "Type*.")
+    h2("Classification vehicle vs special vehicle")
+    md("Compare a standard **classification vehicle** (a built-in class) in System A against a "
+       "**special / permit vehicle** (custom axle loads and spacings) in System B, to see "
+       "whether and by how much the special transport governs the design.")
+    call('tip', "A comparison is itself a decision tool: how much the result changes between A "
+         "and B tells you how sensitive the design is to the modelling choice (system, vehicle, "
+         "factors), and therefore whether a quick conservative check is enough or a more "
+         "detailed analysis is warranted.")
 
     # ---- 3. Modelling concepts ------------------------------------------
     h1("3. Modelling concepts")
@@ -451,22 +567,227 @@ def manual_blocks():
 
 
 # ==========================================================================
+# PDF RENDERER - same content blocks, rendered with ReportLab
+# ==========================================================================
+# The in-app content uses Markdown + LaTeX (great for Streamlit/KaTeX). For the
+# PDF the small, known subset used here is converted to ReportLab's HTML-like
+# inline markup. Figures are Plotly, exported to PNG (kaleido) like the report.
+
+_GREEK = {
+    '\\Phi': '&Phi;', '\\gamma': '&gamma;', '\\theta': '&theta;', '\\nu': '&nu;',
+    '\\approx': '&approx;', '\\cdot': '&middot;', '\\times': '&times;',
+    '\\le': '&le;', '\\leq': '&le;', '\\ge': '&ge;', '\\geq': '&ge;',
+}
+
+
+def _latex_to_rl(s):
+    """Convert the small LaTeX subset used in the manual to ReportLab markup."""
+    s = s.replace('\\,', ' ').replace('\\;', ' ')
+    for k, v in _GREEK.items():
+        s = s.replace(k, v)
+    s = re.sub(r'_\{([^}]*)\}', r'<sub>\1</sub>', s)
+    s = re.sub(r'\^\{([^}]*)\}', r'<super>\1</super>', s)
+    s = re.sub(r'_([A-Za-z0-9])', r'<sub>\1</sub>', s)
+    s = re.sub(r'\^([A-Za-z0-9])', r'<super>\1</super>', s)
+    return s.replace('{', '').replace('}', '').replace('\\', '')
+
+
+def _inline_md_to_rl(text):
+    """Inline Markdown (**bold**, *italic*, $math$) -> ReportLab inline markup.
+    Special characters are escaped first so the introduced tags stay valid."""
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    text = re.sub(r'\$([^$]+)\$', lambda m: _latex_to_rl(m.group(1)), text)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'<i>\1</i>', text)
+    return text
+
+
+def _png_size(png):
+    """(width, height) in pixels from a PNG byte string header."""
+    return int.from_bytes(png[16:20], 'big'), int.from_bytes(png[20:24], 'big')
+
+
+def _fig_to_png(fig_callable):
+    try:
+        buf = io.BytesIO()
+        fig_callable().write_image(buf, format='png', scale=2)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _render_md_pdf(text, flow, styles, Paragraph):
+    """Render a Markdown block (paragraphs, '- ' bullets, '1.' numbered, or a
+    standalone $$display$$ formula) to ReportLab flowables."""
+    t = text.strip()
+    if t.startswith('$$') and t.endswith('$$'):
+        flow.append(Paragraph(_latex_to_rl(t[2:-2].strip()), styles['MMath']))
+        return
+    buf = []
+
+    def flush():
+        if buf:
+            flow.append(Paragraph(_inline_md_to_rl(' '.join(buf).strip()), styles['MBody']))
+            buf.clear()
+
+    for line in text.split('\n'):
+        s = line.strip()
+        if not s:
+            flush()
+            continue
+        mb = re.match(r'^[-*]\s+(.*)', s)
+        mn = re.match(r'^(\d+)\.\s+(.*)', s)
+        if mb:
+            flush()
+            flow.append(Paragraph("&bull;&nbsp; " + _inline_md_to_rl(mb.group(1)), styles['MBody']))
+        elif mn:
+            flush()
+            flow.append(Paragraph(f"{mn.group(1)}.&nbsp; " + _inline_md_to_rl(mn.group(2)), styles['MBody']))
+        else:
+            buf.append(s)
+    flush()
+
+
+def build_manual_pdf(buffer):
+    """Render the manual to ``buffer`` as a PDF over the same content blocks."""
+    import bricos_report as report
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib import colors
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Image,
+                                    Table, TableStyle, KeepTogether)
+
+    styles = getSampleStyleSheet()
+
+    def _add(name, **kw):
+        if name not in styles.byName:
+            styles.add(ParagraphStyle(name=name, parent=styles['Normal'], **kw))
+
+    _add('MTitle', fontSize=20, spaceAfter=6, fontName='Helvetica-Bold')
+    _add('MH1', fontSize=15, spaceBefore=14, spaceAfter=6, fontName='Helvetica-Bold',
+         textColor=colors.HexColor('#1f3b66'))
+    _add('MH2', fontSize=12.5, spaceBefore=9, spaceAfter=4, fontName='Helvetica-Bold')
+    _add('MH3', fontSize=11, spaceBefore=6, spaceAfter=3, fontName='Helvetica-Bold')
+    _add('MBody', fontSize=9.5, leading=13, spaceAfter=4)
+    _add('MMath', fontSize=11, leading=15, alignment=TA_CENTER, spaceBefore=6, spaceAfter=6)
+    _add('MSmall', fontSize=8, leading=10, textColor=colors.grey)
+
+    PAGE_W = 16.5 * cm
+
+    flow = [
+        Paragraph("BriCoS User Manual", styles['MTitle']),
+        Paragraph(f"Version {data_mod.APP_VERSION}", styles['MSmall']),
+        Spacer(1, 0.3 * cm),
+        Paragraph("How BriCoS works, the theory it applies, its features and how to use it.",
+                  styles['MBody']),
+        Spacer(1, 0.4 * cm),
+    ]
+
+    # Figure export shares one kaleido server (see bricos_report); the loop
+    # builds the flow, rendering each Plotly figure to PNG inside the context.
+    with report.persistent_image_export():
+        n1 = n2 = 0
+        for block in manual_blocks():
+            kind = block[0]
+            if kind == 'h1':
+                n1 += 1
+                n2 = 0
+                flow.append(Paragraph(f"{n1}. " + _inline_md_to_rl(_strip_num(block[1])), styles['MH1']))
+            elif kind == 'h2':
+                n2 += 1
+                flow.append(Paragraph(f"{n1}.{n2} " + _inline_md_to_rl(_strip_num(block[1])), styles['MH2']))
+            elif kind == 'h3':
+                flow.append(Paragraph(_inline_md_to_rl(_strip_num(block[1])), styles['MH3']))
+            elif kind == 'md':
+                _render_md_pdf(block[1], flow, styles, Paragraph)
+            elif kind == 'callout':
+                _icon, ttl = _CALLOUT.get(block[1], ('', 'Note'))
+                inner = Paragraph(f"<b>{ttl}:</b> " + _inline_md_to_rl(block[2]), styles['MBody'])
+                t = Table([[inner]], colWidths=[PAGE_W])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#eef2f7')),
+                    ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#9fb3c8')),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 8), ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                    ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5)]))
+                flow.append(KeepTogether([t]))
+                flow.append(Spacer(1, 0.15 * cm))
+            elif kind == 'figure':
+                png = _fig_to_png(block[1])
+                if png:
+                    w, h = _png_size(png)
+                    img_w = PAGE_W
+                    img_h = img_w * (h / w) if w else 8 * cm
+                    flow.append(KeepTogether([
+                        Image(io.BytesIO(png), width=img_w, height=img_h),
+                        Paragraph(block[2], styles['MSmall'])]))
+                else:
+                    flow.append(Paragraph(f"[figure unavailable] {block[2]}", styles['MSmall']))
+                flow.append(Spacer(1, 0.2 * cm))
+            elif kind == 'table':
+                headers, rows = block[1], block[2]
+                ncol = len(headers)
+                data = [[Paragraph(f"<b>{_inline_md_to_rl(h)}</b>", styles['MSmall']) for h in headers]]
+                data += [[Paragraph(_inline_md_to_rl(str(c)), styles['MSmall']) for c in row] for row in rows]
+                t = Table(data, colWidths=[PAGE_W / ncol] * ncol)
+                t.setStyle(TableStyle([
+                    ('GRID', (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eef2f7')),
+                    ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 4), ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                    ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3)]))
+                flow.append(t)
+                flow.append(Spacer(1, 0.2 * cm))
+
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2.2 * cm, rightMargin=2.2 * cm,
+                            topMargin=2 * cm, bottomMargin=2 * cm,
+                            title=f"BriCoS User Manual v{data_mod.APP_VERSION}")
+    doc.build(flow)
+
+
+def build_manual_pdf_bytes():
+    buf = io.BytesIO()
+    build_manual_pdf(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+# ==========================================================================
 # STREAMLIT RENDERER
 # ==========================================================================
 
 def render_manual_streamlit():
     """Render the manual in the app. Called from the manual view in bricos_main."""
-    st.markdown(f"# :books: BriCoS user manual")
+    # PDF download (generated on demand) - at the top of the manual.
+    c1, c2, _c3 = st.columns([2, 2, 6])
+    if c1.button("Generate PDF manual", icon=":material/picture_as_pdf:", key="manual_gen_pdf"):
+        with st.spinner("Building the PDF manual..."):
+            try:
+                st.session_state['manual_pdf_bytes'] = build_manual_pdf_bytes()
+            except Exception as e:
+                st.session_state['manual_pdf_bytes'] = None
+                st.error(f"PDF build failed: {e}")
+    if st.session_state.get('manual_pdf_bytes'):
+        c2.download_button("Download PDF", st.session_state['manual_pdf_bytes'],
+                           file_name="BriCoS_User_Manual.pdf", mime="application/pdf",
+                           icon=":material/download:", key="manual_dl_pdf")
+
+    st.markdown("# :books: BriCoS user manual")
     st.caption("How BriCoS works, the theory it applies, its features, and how to use it.")
 
+    n1 = n2 = 0
     for block in manual_blocks():
         kind = block[0]
         if kind == 'h1':
-            st.markdown(f"## {block[1]}")
+            n1 += 1
+            n2 = 0
+            st.markdown(f"## {n1}. {_strip_num(block[1])}")
         elif kind == 'h2':
-            st.markdown(f"### {block[1]}")
+            n2 += 1
+            st.markdown(f"### {n1}.{n2} {_strip_num(block[1])}")
         elif kind == 'h3':
-            st.markdown(f"#### {block[1]}")
+            st.markdown(f"#### {_strip_num(block[1])}")
         elif kind == 'md':
             st.markdown(block[1])
         elif kind == 'callout':
