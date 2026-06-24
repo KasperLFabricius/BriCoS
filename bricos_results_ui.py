@@ -279,7 +279,7 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
                   "any section is defined by inertia rather than height."))
     show_thickness = bool(show_thickness) and not inertia_in_use
 
-    r4_col1, r4_col2 = st.columns([3, 1])
+    _, r4_col2 = st.columns([3, 1])
     with r4_col2:
         show_elem_names = st.checkbox(
             "Element Names", value=False, disabled=ui_locked,
