@@ -5,11 +5,10 @@ import logging
 import os
 import threading
 import numpy as np
-import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm, mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
@@ -18,7 +17,6 @@ from reportlab.pdfgen import canvas
 
 # Graphics Imports for Vehicle Diagram
 from reportlab.graphics.shapes import Drawing, Line, String, Polygon, PolyLine, Group
-from reportlab.graphics import renderPDF
 
 # Internal Modules
 import bricos_solver as solver

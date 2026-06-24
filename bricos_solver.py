@@ -740,8 +740,6 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         else:
             phi_log.append("Geometry invalid/empty. Phi=1.0")
 
-    phi = phi_val_override if phi_val_override is not None else calc_phi
-
     nodes = {}
     elems_base = []
     restraints = {}
@@ -764,7 +762,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
 
     next_node_id = 1000 
 
-    def create_member_mesh(start_xy, end_xy, start_node_id, end_node_id, props, member_type):
+    def create_member_mesh(start_xy, end_xy, start_node_id, end_node_id, props):
         nonlocal next_node_id
         dx = end_xy[0] - start_xy[0]
         dy = end_xy[1] - start_xy[1]
@@ -853,8 +851,8 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
             g_data = get_geom_data(i, 'Iw_list', 'wall_geom')
             
             walls_subs = create_member_mesh(
-                base_xy, top_xy, nid_b, nid_t, 
-                {'parent': f'W{i+1}', 'E': e_val, 'geom': g_data}, 'Wall'
+                base_xy, top_xy, nid_b, nid_t,
+                {'parent': f'W{i+1}', 'E': e_val, 'geom': g_data}
             )
             elems_base.extend(walls_subs)
             model_props['Walls'][f'W{i+1}'] = {'E': e_val}
@@ -882,7 +880,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         
         span_subs = create_member_mesh(
             start_xy, end_xy, nid_s, nid_e,
-            {'parent': f'S{i+1}', 'E': e_val, 'geom': g_data}, 'Span'
+            {'parent': f'S{i+1}', 'E': e_val, 'geom': g_data}
         )
         elems_base.extend(span_subs)
         model_props['Spans'][f'S{i+1}'] = {'E': e_val}
@@ -1228,7 +1226,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     udl_q_line = data_mod.udl_line_load(params)
     udl_seg_maps = []
     if udl_q_line > 0.0:
-        for (seg_start, seg_L, el_idx) in sp_elems_info:
+        for (_, seg_L, el_idx) in sp_elems_info:
             udl_seg_maps.append({el_idx: [{
                 'type': 'distributed_trapezoid', 'is_gravity': True,
                 'params': [udl_q_line, udl_q_line, 0.0, seg_L],
@@ -1718,7 +1716,7 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
                 dx_max_list, dx_min_list = [], []
                 dy_max_list, dy_min_list = [], []
                 
-                for (idx, offset, L_sub) in parts:
+                for (idx, offset, _) in parts:
                     valid_res = env_results_accum[idx, :n_pts_kernel, :]
                     M_max_list.append(valid_res[:, 0])
                     M_min_list.append(valid_res[:, 1])

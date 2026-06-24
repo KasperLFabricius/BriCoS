@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.82"
+APP_VERSION = "0.83"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -70,11 +70,6 @@ def get_legacy_writable_path(filename):
 # ==========================================
 # DATA HELPERS & CALCULATIONS
 # ==========================================
-
-def calc_I(h_mm):
-    # Legacy helper, kept for reference or potential future use.
-    # Note: Solver now handles I calculation using b_eff.
-    return (1.0 * (h_mm/1000.0)**3) / 12.0
 
 @st.cache_data
 def get_vehicle_library():
@@ -166,10 +161,7 @@ def sanitize_input_data(data):
     """
     Ensures input dictionaries are clean and devoid of placeholder zeros.
     """
-    # 1. Clean Span Lists
-    nsp = data.get('num_spans', 1)
-    
-    # 2. Geometry Defaults
+    # Geometry Defaults
     for i in range(10):
         k = f"span_geom_{i}"
         if k in data:
