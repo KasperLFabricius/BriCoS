@@ -217,10 +217,15 @@ def render_sls_factors(p, curr, ui_locked):
                       "SLS factor on the Traffic UDL (Phi never applies to it). Fig. B3.2: 0.40.", "slsudl")
 
 
-def render_dynamic_factor(p, curr, ui_locked, show_sls):
-    """Dynamic factor (Phi) inputs. Rendered only when a factored limit state
-    is analyzed - the unfactored combination never applies Phi. The SLS-only
-    Phi treatment (show_sls) is shown only when SLS analysis is enabled."""
+def render_dynamic_factor(p, curr, ui_locked, analyze_uls, analyze_sls):
+    """Dynamic factor (Phi) inputs, matched to the analyzed limit states.
+
+    The Calculate/Manual factor is the ULS-basis Phi; in an SLS-only analysis
+    it IS the SLS Phi basis directly, so it is never a dead input. The SLS
+    treatment is shown only when SLS is analyzed: with ULS also on it offers
+    Same/Reduced/Manual; in an SLS-only analysis "Same as ULS" (no ULS to
+    match) and the redundant manual option drop out, leaving the reduction
+    choice (the Manual base value already covers a manual SLS Phi)."""
     st.markdown("---")
     phi_mode = st.radio("Dynamic Factor (Phi)", ["Calculate", "Manual"], horizontal=True, index=0 if p.get('phi_mode', 'Calculate') == 'Calculate' else 1, key=f"{curr}_phim", disabled=ui_locked)
     p['phi_mode'] = phi_mode
@@ -274,20 +279,48 @@ def render_dynamic_factor(p, curr, ui_locked, show_sls):
             app_sel = st.radio("Phi application:", app_opts, index=idx_app, key=f"{curr}_phiapp", disabled=ui_locked, help=help_app)
             p['phi_application'] = 'Governing' if "Governing" in app_sel else 'Per member'
 
-    # SLS-specific Phi treatment: only relevant when SLS is analyzed.
-    if show_sls:
-        help_sls = (
-            "Phi applied in the Characteristic (SLS) result mode. ULS results are unaffected.\n"
-            "- Same as ULS: no reduction (default, conservative).\n"
-            "- Reduced: phi_SLS = 1 + (phi_ULS - 1)/2 per 'Vejledning til belastnings- og "
-            "beregningsgrundlag for broer' 5.4.2; applies per member to calculated and manual Phi.\n"
-            "- Manual SLS value: a user-defined uniform phi_SLS replaces all member values in SLS."
-        )
-        sls_opts = ["Same as ULS", "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)", "Manual SLS value"]
-        sls_mode_map = {"Same as ULS": 'Same', sls_opts[1]: 'Reduced', "Manual SLS value": 'Manual'}
-        curr_sls = p.get('phi_sls_mode', 'Same')
-        idx_sls = {'Same': 0, 'Reduced': 1, 'Manual': 2}.get(curr_sls, 0)
-        sls_sel = st.selectbox(r"$\varphi$ in SLS:", sls_opts, index=idx_sls, key=f"{curr}_phisls", disabled=ui_locked, help=help_sls)
+    # SLS-specific Phi treatment: only when SLS is analyzed. One widget key is
+    # reused for both option sets (ULS+SLS vs SLS-only) so the existing
+    # force_ui_update sync of '{curr}_phisls' on load/copy keeps working; the
+    # label is re-seeded only when the stored value is not valid for the
+    # current options (avoids a stale selection landing outside them).
+    if analyze_sls:
+        sls_key = f"{curr}_phisls"
+        if analyze_uls:
+            help_sls = (
+                "Phi applied in the Characteristic (SLS) result mode. ULS results are unaffected.\n"
+                "- Same as ULS: no reduction (default, conservative).\n"
+                "- Reduced: phi_SLS = 1 + (phi_ULS - 1)/2 per 'Vejledning til belastnings- og "
+                "beregningsgrundlag for broer' 5.4.2; applies per member to calculated and manual Phi.\n"
+                "- Manual SLS value: a user-defined uniform phi_SLS replaces all member values in SLS."
+            )
+            sls_opts = ["Same as ULS", "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)", "Manual SLS value"]
+            sls_mode_map = {"Same as ULS": 'Same', sls_opts[1]: 'Reduced', "Manual SLS value": 'Manual'}
+        else:
+            # SLS-only: there is no ULS to be "same as", and the Manual base Phi
+            # above already serves as a manual SLS value, so only the reduction
+            # choice (per Vejledning 5.4.2) remains.
+            help_sls = (
+                "Phi applied in the Characteristic (SLS) result mode.\n"
+                "- No reduction: the calculated/manual Phi above is used directly.\n"
+                "- Reduced: phi_SLS = 1 + (Phi - 1)/2 per 'Vejledning til belastnings- og "
+                "beregningsgrundlag for broer' 5.4.2; applies per member to calculated and manual Phi."
+            )
+            sls_opts = ["No reduction", "Reduced: 1+(Phi-1)/2 (Vejledning 5.4.2)"]
+            sls_mode_map = {"No reduction": 'Same', sls_opts[1]: 'Reduced'}
+            # 'Manual' isn't offered here; fall back to the no-reduction basis.
+            if p.get('phi_sls_mode', 'Same') == 'Manual':
+                p['phi_sls_mode'] = 'Same'
+        # The stored phi_sls_mode (dict) is authoritative. Re-seed the widget's
+        # label only when its current value is not in the active options - e.g.
+        # after a limit-state toggle, or when force_ui_update wrote the other
+        # option set's label for a loaded/copied config. No index= is passed,
+        # so a valid stored selection (incl. a freshly loaded 'Reduced') is
+        # never overwritten.
+        label_for_mode = {v: k for k, v in sls_mode_map.items()}
+        if st.session_state.get(sls_key) not in sls_opts:
+            st.session_state[sls_key] = label_for_mode.get(p.get('phi_sls_mode', 'Same'), sls_opts[0])
+        sls_sel = st.selectbox(r"$\varphi$ in SLS:", sls_opts, key=sls_key, disabled=ui_locked, help=help_sls)
         p['phi_sls_mode'] = sls_mode_map.get(sls_sel, 'Same')
         if p['phi_sls_mode'] == 'Manual':
             p['phi_sls'] = st.number_input(
@@ -768,7 +801,8 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     # neither limit state is analyzed, and the SLS-only treatment when SLS is
     # off (analyze_uls/analyze_sls render earlier, so p is current here).
     if p.get('analyze_uls', True) or p.get('analyze_sls', True):
-        render_dynamic_factor(p, curr, ui_locked, show_sls=p.get('analyze_sls', True))
+        render_dynamic_factor(p, curr, ui_locked,
+                              p.get('analyze_uls', True), p.get('analyze_sls', True))
 
     phi_log_placeholder = st.empty()
 
@@ -1341,21 +1375,20 @@ if err_B and isinstance(err_B, str): st.error(f"System B Error: {err_B}")
 # dynamic factor is not applied in the unfactored combination, so the log
 # is suppressed when neither limit state is analyzed.
 active_raw_res = raw_res_A if curr == 'sysA' else raw_res_B
-if active_raw_res and (p.get('analyze_uls', True) or p.get('analyze_sls', True)):
-    phi_val = active_raw_res.get('phi_calc', 1.0)
-    phi_members_ui = active_raw_res.get('Phi Members') or {}
+analyze_uls_ui = p.get('analyze_uls', True)
+analyze_sls_ui = p.get('analyze_sls', True)
+if active_raw_res and (analyze_uls_ui or analyze_sls_ui):
     is_calc = p.get('phi_mode') == 'Calculate'
-    phi_label = "Calculated Phi" if is_calc else "Manual Phi"
+    # Summarize the dynamic factor for each analyzed limit state (the SLS
+    # value reflects the SLS treatment applied to the base phi).
+    summary = data_mod.phi_summary(p, active_raw_res, analyze_uls_ui, analyze_sls_ui)
     with phi_log_placeholder.container():
-        if phi_members_ui:
-            vals = sorted(set(round(v, 3) for v in phi_members_ui.values()))
-            if len(vals) > 1:
-                st.markdown(f"**{phi_label} (per member):** {vals[0]:.3f} - {vals[-1]:.3f}")
-            else:
-                st.markdown(f"**{phi_label}:** {vals[0]:.3f}")
-        else:
-            phi_shown = phi_val if is_calc else p.get('phi', 1.0)
-            st.markdown(f"**{phi_label}:** {phi_shown:.3f}")
+        parts = []
+        if summary['uls'] is not None:
+            parts.append(f"ULS: {summary['uls']}")
+        if summary['sls'] is not None:
+            parts.append(f"SLS: {summary['sls']}")
+        st.markdown(f"**{'Calculated' if is_calc else 'Manual'} φ** — " + "  |  ".join(parts))
         with st.expander("Phi Calculation Log", expanded=False):
             if not is_calc:
                 st.markdown(
@@ -1378,17 +1411,22 @@ if active_raw_res and (p.get('analyze_uls', True) or p.get('analyze_sls', True))
                     "Annex A, A.2.3.5(2)."
                 )
             sls_mode_ui = p.get('phi_sls_mode', 'Same')
-            if sls_mode_ui == 'Reduced':
+            if analyze_sls_ui and sls_mode_ui == 'Reduced':
                 st.markdown(
                     "In the Characteristic (SLS) result mode the dynamic factor is reduced to "
-                    "phi_SLS = 1 + (phi_ULS - 1)/2 per Vejledning til belastnings- og "
+                    "phi_SLS = 1 + (phi - 1)/2 per Vejledning til belastnings- og "
                     "beregningsgrundlag for broer, 5.4.2."
                 )
-            elif sls_mode_ui == 'Manual':
+            elif analyze_sls_ui and sls_mode_ui == 'Manual':
                 st.markdown(
                     f"In the Characteristic (SLS) result mode a user-defined uniform "
                     f"phi_SLS = {p.get('phi_sls', 1.0):.3f} is applied."
                 )
+            # Explicit phi value(s) per analyzed limit state.
+            st.caption("Dynamic factor — "
+                       + "; ".join(f"φ ({ls}) = {v}" for ls, v in
+                                   (("ULS", summary['uls']), ("SLS", summary['sls'])) if v is not None)
+                       + ".")
             for log_line in active_raw_res.get('phi_log', []): st.caption(log_line)
 
 # ==========================================

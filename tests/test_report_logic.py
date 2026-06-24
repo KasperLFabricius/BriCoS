@@ -652,3 +652,39 @@ def test_input_summary_keeps_phi_when_a_limit_state_analyzed():
     assert "Φ:" in txt
     assert "Dynamic Factor" in txt
     assert "Φ applied" in txt  # the vehicle row keeps the dynamic factor note
+
+
+def test_dynamic_factor_section_sls_only_drops_uls_column():
+    # SLS-only analysis: the Φ (ULS) column is dropped, Φ (SLS) remains.
+    gen = _generator(_phi_params())
+    gen._add_dynamic_factor_section(
+        _phi_params(phi_sls_mode="Reduced"),
+        {"phi_calc": 1.20, "Phi Members": {}},
+        analyze_uls=False, analyze_sls=True,
+    )
+    txt = _flatten_report_text(gen)
+    assert "Φ (SLS)" in txt
+    assert "Φ (ULS)" not in txt
+    assert "SLS reduction enabled" in txt
+
+
+def test_input_summary_phi_line_lists_each_analyzed_limit_state():
+    # Both limit states, SLS reduced: the settings line reports a value per
+    # analyzed limit state (SLS reflecting the reduction of the base phi).
+    p = _phi_params(analyze_uls=True, analyze_sls=True, phi=1.20, phi_sls_mode="Reduced")
+    gen = _generator(p)
+    gen._add_system_input_summary("System A", p, {"phi_calc": 1.20, "Phi Members": {}},
+                                  {"Spans": {}, "Walls": {}}, "sysA")
+    txt = _flatten_report_text(gen)
+    assert "ULS 1.200" in txt
+    assert "SLS 1.100" in txt   # 1 + (1.20 - 1)/2
+
+
+def test_input_summary_phi_line_sls_only():
+    p = _phi_params(analyze_uls=False, analyze_sls=True, phi=1.20, phi_sls_mode="Same")
+    gen = _generator(p)
+    gen._add_system_input_summary("System A", p, {"phi_calc": 1.20, "Phi Members": {}},
+                                  {"Spans": {}, "Walls": {}}, "sysA")
+    txt = _flatten_report_text(gen)
+    assert "SLS 1.200" in txt
+    assert "ULS 1.200" not in txt
