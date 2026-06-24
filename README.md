@@ -37,3 +37,9 @@ streamlit run run_app.py
 pip install -r requirements-dev.txt
 pytest
 ```
+
+### Building a Standalone Executable
+
+To package BriCoS as a Windows app that runs **without a Python install**, see
+**[PACKAGING.md](PACKAGING.md)**. In short: run `build.bat` (or
+`pyinstaller bricos.spec`), then distribute the resulting `dist\BriCoS` folder.

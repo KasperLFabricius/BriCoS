@@ -45,22 +45,42 @@ def prepare_numba_cache():
     except Exception:
         return None
 
+APP_PORT = 8501
+
 if __name__ == "__main__":
     # 0. Persistent numba cache (frozen builds re-JIT every launch otherwise)
     prepare_numba_cache()
+
+    # No anonymous usage statistics from a distributed build.
+    os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 
     # 1. Resolve the path to the main application script inside the bundle
     # Note: We bundle bricos_main.py as a data file in the spec.
     app_path = resolve_path("bricos_main.py")
 
-    # 2. Construct the system arguments to mimic "streamlit run bricos_main.py"
-    # We disable development mode to hide the "Connect to..." menu items.
+    # 2. Construct the system arguments to mimic "streamlit run bricos_main.py".
+    # developmentMode=false hides the "Connect to..." menu items. headless=true
+    # is essential for a packaged build: it skips Streamlit's first-run e-mail
+    # prompt (which reads from the console and would otherwise hang a double-
+    # clicked EXE) and Streamlit's own browser launch - we open the browser
+    # ourselves below.
     sys.argv = [
         "streamlit",
         "run",
         app_path,
         "--global.developmentMode=false",
+        "--server.headless=true",
+        f"--server.port={APP_PORT}",
     ]
 
-    # 3. Execute Streamlit
+    # 3. Open the browser ourselves (headless mode does not). A short delay lets
+    # the server bind first; any failure here must never stop the app.
+    try:
+        import threading
+        import webbrowser
+        threading.Timer(2.5, lambda: webbrowser.open(f"http://localhost:{APP_PORT}")).start()
+    except Exception:
+        pass
+
+    # 4. Execute Streamlit
     sys.exit(stcli.main())
