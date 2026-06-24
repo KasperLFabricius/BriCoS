@@ -249,6 +249,72 @@ def _draw_thickness_bands(fig, geom_source, params, is_sys_A, legend_flags):
         ))
 
 
+def _element_coords_match(da, db, tol=1e-6):
+    """True when two element definitions share the same start/end node
+    coordinates, i.e. the element occupies the same place in both systems."""
+    for key in ('ni', 'nj'):
+        pa, pb = da.get(key), db.get(key)
+        if pa is None or pb is None:
+            return False
+        if abs(pa[0] - pb[0]) > tol or abs(pa[1] - pb[1]) > tol:
+            return False
+    return True
+
+
+def _label_at(fig, dat, text, color, font_size):
+    """Draw one element-name chip: white bold text on a solid colour fill. The
+    filled-chip style is deliberately distinct from the section-force value
+    labels (white box, coloured text) so the two are not confused when both are
+    shown. Spans are nudged just above their axis and walls just to the side so
+    the chip does not sit directly on the member line."""
+    if 'ni' not in dat or 'nj' not in dat:
+        return
+    ni, nj = dat['ni'], dat['nj']
+    mx = (ni[0] + nj[0]) / 2.0
+    my = (ni[1] + nj[1]) / 2.0
+    is_wall = str(text).startswith('W')
+    nudge = max(6.0, 0.9 * font_size)
+    fig.add_annotation(
+        x=mx, y=my, text=text, showarrow=False,
+        xshift=(nudge if is_wall else 0.0),
+        yshift=(0.0 if is_wall else nudge),
+        font=dict(color='white', size=font_size, family="Arial", weight="bold"),
+        bgcolor=color, bordercolor=color, borderwidth=0, borderpad=3
+    )
+
+
+def _draw_element_labels(fig, geom_source, color, font_size):
+    """Element-name chips for a single system, in its colour. A QA aid toggled
+    from the UI."""
+    if not geom_source:
+        return
+    for eid in sorted(geom_source.keys(), key=lambda x: (x[0], int(x[1:]))):
+        _label_at(fig, geom_source[eid], eid, color, font_size)
+
+
+def _draw_element_labels_overlay(fig, gsrc_a, gsrc_b, font_size, tol=1e-6):
+    """Element-name chips for an overlaid A/B plot, decided per element: an
+    element that occupies the same place in both systems gets a single neutral
+    chip (it overlaps, so one identifier is enough); an element that differs or
+    exists in only one system keeps that system's colour (blue = A, red = B).
+    This way W1 is merged when it coincides even if S1 (and hence W2) is offset
+    between the systems."""
+    gsrc_a = gsrc_a or {}
+    gsrc_b = gsrc_b or {}
+    all_ids = sorted(set(gsrc_a) | set(gsrc_b), key=lambda x: (x[0], int(x[1:])))
+    for eid in all_ids:
+        da, db = gsrc_a.get(eid), gsrc_b.get(eid)
+        a_ok = bool(da and 'ni' in da and 'nj' in da)
+        b_ok = bool(db and 'ni' in db and 'nj' in db)
+        if a_ok and b_ok and _element_coords_match(da, db, tol):
+            _label_at(fig, da, eid, '#333333', font_size)
+        else:
+            if a_ok:
+                _label_at(fig, da, eid, 'blue', font_size)
+            if b_ok:
+                _label_at(fig, db, eid, 'red', font_size)
+
+
 # ==========================================
 # MAIN PLOTTING FUNCTION
 # ==========================================
@@ -262,7 +328,9 @@ def create_plotly_fig(
     show_supports=False, support_size=0.5,
     font_scale=1.0,
     nodes_A=None, nodes_B=None,
-    show_thickness=False
+    show_thickness=False,
+    show_element_names=False,
+    structure_only=False
 ):
     fig = go.Figure()
     
@@ -408,9 +476,14 @@ def create_plotly_fig(
             x=x_struct, y=y_struct, mode='lines+markers', 
             line=dict(color='grey', width=3 if is_sys_A else 1.5),
             marker=dict(size=4, color='grey'),
-            name="Structure Geometry", opacity=0.5, 
+            name="Structure Geometry", opacity=0.5,
             hoverinfo='skip', showlegend=show_struct
         ))
+
+        # Structure-only mode (e.g. the report's element-layout diagram): draw
+        # the geometry and stop before any result diagram or load arrows.
+        if structure_only:
+            return
 
         # 2. Result Traces Aggregation
         # We accumulate all coordinates into single lists (separated by None) to create ONE trace per type.
@@ -745,6 +818,26 @@ def create_plotly_fig(
             font=dict(color=ann['color'], size=base_font_size, family="Arial", weight="bold"), 
             bgcolor="rgba(255,255,255,0.7)", bordercolor=ann['color'], borderwidth=1, borderpad=2
         )
+
+    # Element-name labels (S1, W2, ...): a QA aid sized to the chosen diagram
+    # height. Only label a system whose result is actually drawn - add_traces
+    # renders a system only when its sys_data is non-empty, regardless of the
+    # show_A/show_B UI selection (e.g. a static case defined for one system
+    # only leaves the other side's data empty). Per element, an element that
+    # overlaps in both plotted systems gets a single neutral label; otherwise
+    # each system's labels take its own colour (blue = A, red = B).
+    if show_element_names:
+        elem_font = float(np.clip(11.0 * (float(target_height) / 2.0) ** 0.5 * font_scale, 9.0, 26.0))
+        gsrc_A = geom_A if geom_A else sysA_data
+        gsrc_B = geom_B if geom_B else sysB_data
+        plot_A = bool(show_A and sysA_data)
+        plot_B = bool(show_B and sysB_data)
+        if plot_A and plot_B:
+            _draw_element_labels_overlay(fig, gsrc_A, gsrc_B, elem_font)
+        elif plot_A:
+            _draw_element_labels(fig, gsrc_A, 'blue', elem_font)
+        elif plot_B:
+            _draw_element_labels(fig, gsrc_B, 'red', elem_font)
 
     fig.update_layout(
         title=dict(text=title, font=dict(size=14*font_scale)),
