@@ -137,9 +137,9 @@ class BricosReportGenerator:
         self.version = version or data_mod.APP_VERSION
         self.progress_callback = progress_callback
         
-        # Validity Check
-        self.valid_B = (nodes_B is not None)
-        
+        # System slots (self.valid_B and the per-slot label/params/raw/nodes/
+        # props) are arranged in the block below, once raw results are bound.
+
         self.styles = getSampleStyleSheet()
         self.elements = []
         self.chapter_count = 1
@@ -161,18 +161,38 @@ class BricosReportGenerator:
         # follows (e.g. the Phi_SLS line ran into the phi table).
         self.styles.add(ParagraphStyle(name='SwecoFormula', parent=self.styles['Normal'], fontSize=8, leading=12, spaceBefore=2, spaceAfter=4))
 
-        # Use pre-calculated results passed from Main UI to avoid redundant Numba execution
-        self.params_A = self.state['sysA']
-        self.params_B = self.state['sysB']
-        
-        # Retrieve Model Properties (E-modulus) passed from Main
-        self.props_A = self.state.get('model_props_A', {'Spans':{}, 'Walls':{}})
-        self.props_B = self.state.get('model_props_B', {'Spans':{}, 'Walls':{}})
-        
-        self.raw_A = raw_res_A
-        self.nodes_A = nodes_A
-        self.raw_B = raw_res_B
-        self.nodes_B = nodes_B
+        # Use pre-calculated results passed from Main UI to avoid redundant
+        # Numba execution. The report is built around a primary slot (A) that
+        # is always rendered, plus an optional second slot (B) gated by
+        # self.valid_B. To support reporting on either system on its own, the
+        # primary slot is filled with the first system that solved successfully
+        # (its nodes are not None); the second slot holds the other system and
+        # is only rendered when it solved too. Each slot keeps its true
+        # label/key, so a System-B-only report is still labelled "System B".
+        default_props = {'Spans': {}, 'Walls': {}}
+        all_slots = [
+            ("System A", "sysA", self.state['sysA'], raw_res_A, nodes_A,
+             self.state.get('model_props_A', default_props)),
+            ("System B", "sysB", self.state['sysB'], raw_res_B, nodes_B,
+             self.state.get('model_props_B', default_props)),
+        ]
+        solved = [s for s in all_slots if s[4] is not None]  # s[4] = nodes
+        if not solved:
+            raise ValueError(
+                "Report generation requires at least one validly defined system.")
+
+        (self.label_A, self.key_A, self.params_A, self.raw_A,
+         self.nodes_A, self.props_A) = solved[0]
+
+        self.valid_B = len(solved) > 1
+        if self.valid_B:
+            secondary = solved[1]
+        else:
+            # The other (unsolved) system, kept only for safe attribute access;
+            # nothing from this slot is rendered while self.valid_B is False.
+            secondary = next(s for s in all_slots if s[1] != self.key_A)
+        (self.label_B, self.key_B, self.params_B, self.raw_B,
+         self.nodes_B, self.props_B) = secondary
         
         # Initialize ThreadPool for Parallel Rendering
         self.executor = ThreadPoolExecutor(max_workers=4)
@@ -327,14 +347,14 @@ class BricosReportGenerator:
         its governing direction instead of splitting the reporting by
         direction."""
         combos = [
-            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps A', "Vehicle A", 'vehicle'),
-            (self.params_A, self.raw_A, "System A", self.nodes_A, 'Vehicle Steps B', "Vehicle B", 'vehicleB')
+            (self.params_A, self.raw_A, self.label_A, self.nodes_A, 'Vehicle Steps A', "Vehicle A", 'vehicle'),
+            (self.params_A, self.raw_A, self.label_A, self.nodes_A, 'Vehicle Steps B', "Vehicle B", 'vehicleB')
         ]
 
         if self.valid_B:
             combos.extend([
-                (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps A', "Vehicle A", 'vehicle'),
-                (self.params_B, self.raw_B, "System B", self.nodes_B, 'Vehicle Steps B', "Vehicle B", 'vehicleB')
+                (self.params_B, self.raw_B, self.label_B, self.nodes_B, 'Vehicle Steps A', "Vehicle A", 'vehicle'),
+                (self.params_B, self.raw_B, self.label_B, self.nodes_B, 'Vehicle Steps B', "Vehicle B", 'vehicleB')
             ])
 
         for params, raw, sys_label, nodes, base_key, veh_label, veh_param_key in combos:
@@ -377,11 +397,11 @@ class BricosReportGenerator:
         # 4. Input Summary
         self.elements.append(Paragraph(f"{self.chapter_count}. System Configuration & Geometry", self.styles['SwecoSubHeader']))
         
-        self._add_system_input_summary("System A", self.params_A, self.raw_A, self.props_A, "sysA")
+        self._add_system_input_summary(self.label_A, self.params_A, self.raw_A, self.props_A, self.key_A)
         self.elements.append(PageBreak())
-        
+
         if self.valid_B:
-            self._add_system_input_summary("System B", self.params_B, self.raw_B, self.props_B, "sysB")
+            self._add_system_input_summary(self.label_B, self.params_B, self.raw_B, self.props_B, self.key_B)
             self.elements.append(PageBreak())
             
         self.chapter_count += 1
@@ -783,6 +803,15 @@ class BricosReportGenerator:
             self.elements.append(Paragraph("Comments:", self.styles['Heading3']))
             self.elements.append(Paragraph(self.meta['comments'], self.styles['SwecoBody']))
             self.elements.append(Spacer(1, 1*cm))
+
+        # When only one system solved, state up front which one the report
+        # covers so a single-system report is unambiguous.
+        if not self.valid_B:
+            self.elements.append(Paragraph(
+                f"<b>Scope:</b> this report covers {self.label_A} only. The other "
+                "system was not fully defined and is excluded from the analysis.",
+                self.styles['SwecoBody']))
+            self.elements.append(Spacer(1, 0.5*cm))
 
     def _add_global_settings_summary(self):
         p = self.params_A
@@ -1497,11 +1526,11 @@ class BricosReportGenerator:
 
         images = self._submit_parallel_plots(tasks, prog_range)
 
-        self._append_image_grid(images[0:4], heading="System A")
+        self._append_image_grid(images[0:4], heading=self.label_A)
 
         if self.valid_B:
             self.elements.append(Spacer(1, 0.3*cm))
-            self._append_image_grid(images[4:8], heading="System B")
+            self._append_image_grid(images[4:8], heading=self.label_B)
 
         self.elements.append(Spacer(1, 0.5*cm))
 
@@ -1577,16 +1606,16 @@ class BricosReportGenerator:
                 self.styles['SwecoBody'])
 
         if has_A:
-            self._append_image_grid(images[0:4], heading="System A")
+            self._append_image_grid(images[0:4], heading=self.label_A)
         else:
-            self.elements.append(absent_note("System A", self.params_A.get('name', '')))
+            self.elements.append(absent_note(self.label_A, self.params_A.get('name', '')))
 
         if self.valid_B:
             self.elements.append(Spacer(1, 0.3*cm))
             if has_B:
-                self._append_image_grid(images[4:8] if has_A else images[0:4], heading="System B")
+                self._append_image_grid(images[4:8] if has_A else images[0:4], heading=self.label_B)
             else:
-                self.elements.append(absent_note("System B", self.params_B.get('name', '')))
+                self.elements.append(absent_note(self.label_B, self.params_B.get('name', '')))
 
         self.elements.append(Spacer(1, 0.5*cm))
         self._add_force_summary_table(res_A.get(load_key, {}) if has_A else {},
@@ -1798,7 +1827,7 @@ class BricosReportGenerator:
                 title = (f"{s_short} - {v_short} - {label} | "
                          f"{dir_txt}lead axle at x = {x_loc:.2f} m")
 
-                is_A = (sys_label == "System A")
+                is_A = (sys_label == self.label_A)
 
                 config = {
                     'nodes': sys_nodes,
@@ -1808,7 +1837,8 @@ class BricosReportGenerator:
                     'title': title,
                     'load_case_name': "Vehicle Steps",
                     'name_A': self.params_A['name'], 'name_B': self.params_B['name'],
-                    'geom_A': self.raw_A.get('Dead Load'), 'geom_B': self.raw_B.get('Dead Load'),
+                    'geom_A': self.raw_A.get('Dead Load'),
+                    'geom_B': self.raw_B.get('Dead Load') if self.valid_B else None,
                     'show_A': is_A, 'show_B': (not is_A),
                     'params_A': self.params_A, 'params_B': self.params_B,
                     'show_supports': True, 'font_scale': 1.5
@@ -1940,7 +1970,7 @@ class BricosReportGenerator:
         if self.valid_B:
             self.elements.append(Paragraph("Support Reactions (Sys A / Sys B)", self.styles['SwecoTableHead']))
         else:
-            self.elements.append(Paragraph("Support Reactions (System A)", self.styles['SwecoTableHead']))
+            self.elements.append(Paragraph(f"Support Reactions ({self.label_A})", self.styles['SwecoTableHead']))
             
         reactA = self._calculate_reaction_envelope(resA_full)
         reactB = {}
