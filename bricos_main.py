@@ -373,7 +373,7 @@ if st.session_state.autosave_interval > 0 and not ui_locked:
             with open(data_mod.get_writable_path(AUTOSAVE_FILE), "wb") as f:
                 f.write(csv_data)
             st.session_state.last_autosave_time = current_time
-            st.toast("Session Autosaved 💾")
+            st.toast("Session Autosaved :floppy_disk:")
         except Exception:
             # Reset the timer so a persistent write failure surfaces once per
             # interval instead of on every rerun.
@@ -925,7 +925,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             if h_R > 0: p['soil'].append({'wall_idx':i, 'face':'R', 'q_bot':qR_bot, 'q_top':qR_top, 'h':h_R})
 
     st.markdown("---")
-    with st.sidebar.expander("🛠️ Section Profiler (Advanced)", expanded=False):
+    with st.sidebar.expander(":hammer_and_wrench: Section Profiler (Advanced)", expanded=False):
         st.caption("Configure variable stiffness, height profiles, or vertical alignment.")
         
         elem_options = [f"Span {i+1}" for i in range(n_spans)] + ([f"Wall {i+1}" for i in range(n_spans+1)] if not is_super else [])
@@ -1069,7 +1069,7 @@ with st.sidebar.expander("Geometry, Stiffness & Static Loads", expanded=False):
             target_simple_list[idx] = v1
 
         if is_span_selected:
-            st.markdown("#### 📐 Alignment (Vertical Geometry)")
+            st.markdown("#### :triangular_ruler: Alignment (Vertical Geometry)")
             if 'align_type' not in target_geom: target_geom['align_type'] = 0
             if 'incline_mode' not in target_geom: target_geom['incline_mode'] = 0
             if 'incline_val' not in target_geom: target_geom['incline_val'] = 0.0
