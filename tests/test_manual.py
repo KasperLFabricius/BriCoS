@@ -48,3 +48,28 @@ def test_every_figure_block_callable_builds():
     for b in manual.manual_blocks():
         if b[0] == 'figure':
             assert isinstance(b[1](), go.Figure)
+
+
+# --- PDF renderer (PR2) -----------------------------------------------------
+
+def test_latex_to_rl_subset():
+    assert manual._latex_to_rl('K_{FI}') == 'K<sub>FI</sub>'
+    assert manual._latex_to_rl('b_{eff}') == 'b<sub>eff</sub>'
+    assert manual._latex_to_rl('h^3') == 'h<super>3</super>'
+    assert manual._latex_to_rl('\\Phi') == '&Phi;'
+    assert manual._latex_to_rl('\\gamma_G') == '&gamma;<sub>G</sub>'
+
+
+def test_inline_md_to_rl():
+    assert manual._inline_md_to_rl('**bold**') == '<b>bold</b>'
+    assert manual._inline_md_to_rl('*it*') == '<i>it</i>'
+    assert '&Phi;' in manual._inline_md_to_rl('the $\\Phi$ factor')
+    assert '&lt;' in manual._inline_md_to_rl('a < b')  # special chars escaped
+
+
+def test_pdf_builds_a_valid_document(monkeypatch):
+    # Stub figure rasterization so the assembly is exercised without kaleido.
+    monkeypatch.setattr(manual, '_fig_to_png', lambda gen: None)
+    data = manual.build_manual_pdf_bytes()
+    assert data[:5] == b'%PDF-'
+    assert len(data) > 5000

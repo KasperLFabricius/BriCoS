@@ -363,11 +363,13 @@ if load_status:
 ui_locked = st.session_state.is_generating_report
 
 # --- USER MANUAL VIEW ---
-# Opened from the About expander; rendered full-width in place of the analysis
-# with a Back button to return. Imported lazily so it adds no startup cost, and
-# the early st.stop() skips the sidebar/solve while the manual is open.
+# Opened from the About expander; rendered full-width in place of the analysis.
+# The "Back to analysis" button sits in the sidebar (below the Sweco logo,
+# which renders earlier) so it is reachable without scrolling the manual.
+# Imported lazily so it adds no startup cost; the early st.stop() skips the
+# rest of the sidebar/solve while the manual is open.
 if st.session_state.get('show_manual', False):
-    if st.button(":arrow_left: Back to analysis", type="primary"):
+    if st.sidebar.button("Back to analysis", icon=":material/arrow_back:", type="primary"):
         st.session_state['show_manual'] = False
         st.rerun()
     import bricos_manual as manual
@@ -402,7 +404,7 @@ with st.sidebar.expander("About", expanded=False):
     st.write("Author: Kasper Lindskov Fabricius")
     st.write("Email: Kasper.LindskovFabricius@sweco.dk")
     st.write("A specialized Finite Element Analysis (FEM) tool for rapid bridge analysis and comparison.")
-    if st.button(":book: Open User Manual", key="open_manual_btn", disabled=ui_locked):
+    if st.button("Open User Manual", icon=":material/menu_book:", key="open_manual_btn", disabled=ui_locked):
         st.session_state['show_manual'] = True
         st.rerun()
 
