@@ -18,12 +18,14 @@ def test_example_model_validates_and_solves():
 def test_manual_blocks_are_well_formed():
     blocks = manual.manual_blocks()
     assert len(blocks) > 30  # a substantial manual, not a stub
-    valid = {'h1', 'h2', 'h3', 'md', 'callout', 'figure', 'table'}
+    valid = {'part', 'h1', 'h2', 'h3', 'md', 'callout', 'figure', 'table'}
     callouts = {'concept', 'theory', 'standard', 'tip', 'limit'}
     seen_types = set()
     for b in blocks:
         seen_types.add(b[0])
         assert b[0] in valid, f"unknown block type {b[0]!r}"
+        if b[0] == 'part':
+            assert isinstance(b[1], str) and b[1]
         if b[0] == 'figure':
             assert callable(b[1]) and isinstance(b[2], str)
         if b[0] == 'callout':
@@ -32,7 +34,24 @@ def test_manual_blocks_are_well_formed():
             headers, rows = b[1], b[2]
             assert headers and all(len(r) == len(headers) for r in rows)
     # the manual must actually use every structural element
-    assert {'h1', 'md', 'callout', 'figure', 'table'} <= seen_types
+    assert {'part', 'h1', 'md', 'callout', 'figure', 'table'} <= seen_types
+
+
+def test_four_part_structure():
+    blocks = manual.manual_blocks()
+    parts = [b[1] for b in blocks if b[0] == 'part']
+    assert parts == [
+        'Part A - Get started',
+        'Part B - Feature & option reference',
+        'Part C - Theory & methodology',
+        'Part D - Reference',
+    ]
+    # Part A must come first (the entry point), before any feature/theory part.
+    first_part_idx = next(i for i, b in enumerate(blocks) if b[0] == 'part')
+    assert blocks[first_part_idx][1].startswith('Part A')
+    # A substantial, stand-alone reference: a healthy number of top-level sections.
+    h1s = [b for b in blocks if b[0] == 'h1']
+    assert len(h1s) >= 20
 
 
 def test_all_figure_generators_return_figures():
@@ -40,7 +59,8 @@ def test_all_figure_generators_return_figures():
     for gen in (manual.fig_structure, manual.fig_moment_envelope,
                 manual.fig_deflection_envelope, manual.fig_soil_case,
                 manual.fig_sign_convention, manual.fig_section_shapes,
-                manual.fig_phi_curve):
+                manual.fig_phi_curve, manual.fig_support_types,
+                manual.fig_udl_coupling_window):
         assert isinstance(gen(), go.Figure), gen.__name__
 
 
