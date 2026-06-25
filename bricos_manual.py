@@ -311,6 +311,60 @@ def fig_udl_coupling_window():
     return _blank_axes(fig, x_range=[-1, 31], y_range=[0.5, 4.4], height=240)
 
 
+def fig_element_dof():
+    """A 2-node 2D frame element and its six degrees of freedom (u, v, theta each node)."""
+    fig = go.Figure()
+    xi, xj, y = 4.0, 16.0, 3.2
+    fig.add_trace(go.Scatter(x=[xi, xj], y=[y, y], mode='lines',
+                             line=dict(color='#1f3b66', width=4), hoverinfo='skip'))
+    for x, lbl in [(xi, 'i'), (xj, 'j')]:
+        fig.add_trace(go.Scatter(x=[x], y=[y], mode='markers',
+                                 marker=dict(symbol='circle', size=10, color='black'), hoverinfo='skip'))
+        _arrow(fig, x, y, x + 2.4, y, 'red', 1.8)
+        fig.add_annotation(x=x + 2.7, y=y - 0.45, text=f"u<sub>{lbl}</sub>", showarrow=False,
+                           font=dict(size=12, color='red'))
+        _arrow(fig, x, y, x, y + 2.4, 'blue', 1.8)
+        fig.add_annotation(x=x - 0.55, y=y + 2.5, text=f"v<sub>{lbl}</sub>", showarrow=False,
+                           font=dict(size=12, color='blue'))
+        th = np.linspace(0.25, 2.5, 30)
+        fig.add_trace(go.Scatter(x=x + 1.2 * np.cos(th), y=y + 1.2 * np.sin(th), mode='lines',
+                                 line=dict(color='rgb(33,102,64)', width=1.8), hoverinfo='skip'))
+        fig.add_annotation(x=x + 1.5, y=y + 1.5, text=f"&theta;<sub>{lbl}</sub>", showarrow=False,
+                           font=dict(size=12, color='rgb(33,102,64)'))
+        fig.add_annotation(x=x, y=y - 0.85, text=f"node {lbl}", showarrow=False,
+                           font=dict(size=9, color='grey'))
+    return _blank_axes(fig, x_range=[0, 22], y_range=[0.8, 7], height=240)
+
+
+def fig_transverse_spreading():
+    """A wheel/axle load spreading through surfacing and slab over an effective width, so the
+    per-strip line load - and hence the design M and V - is lower than for a narrow strip."""
+    fig = go.Figure()
+    surf_top, slab_top, slab_bot = 6.0, 5.4, 3.8
+    fig.add_shape(type='rect', x0=0, y0=slab_top, x1=20, y1=surf_top,
+                  fillcolor='rgba(150,150,150,0.25)', line=dict(width=0))
+    fig.add_shape(type='rect', x0=0, y0=slab_bot, x1=20, y1=slab_top,
+                  fillcolor='rgba(90,90,90,0.18)', line=dict(color='#555', width=1))
+    fig.add_annotation(x=19.4, y=(surf_top + slab_top) / 2, text="surfacing", showarrow=False,
+                       font=dict(size=8, color='grey'), xanchor='right')
+    fig.add_annotation(x=19.4, y=(slab_top + slab_bot) / 2, text="slab", showarrow=False,
+                       font=dict(size=8, color='grey'), xanchor='right')
+    cx = 10.0
+    _arrow(fig, cx, surf_top + 1.7, cx, surf_top, 'red', 2.6)
+    fig.add_annotation(x=cx, y=surf_top + 2.0, text="<b>wheel load P</b>", showarrow=False,
+                       font=dict(size=11, color='red'))
+    mid = (slab_top + slab_bot) / 2
+    spread = surf_top - mid  # ~45 degree spread
+    for s in (-1, 1):
+        fig.add_trace(go.Scatter(x=[cx, cx + s * spread], y=[surf_top, mid], mode='lines',
+                                 line=dict(color='red', width=1, dash='dot'), hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=[cx - spread, cx + spread], y=[mid, mid], mode='lines',
+                             line=dict(color='rgb(33,102,64)', width=2.6), hoverinfo='skip'))
+    fig.add_annotation(x=cx, y=mid - 0.7, text="effective width b<sub>eff</sub>", showarrow=False,
+                       font=dict(size=10, color='rgb(33,102,64)'))
+    return _blank_axes(fig, x_range=[-1, 21], y_range=[2.5, 8.4], height=260)
+
+
 # ==========================================================================
 # CONTENT - structured blocks (single source for app + PDF)
 # ==========================================================================
@@ -729,50 +783,110 @@ def manual_blocks():
     part("Part C - Theory & methodology")
 
     h1("Finite-element formulation")
-    md("BriCoS is a 2D **matrix-stiffness** solver. Prismatic members use the "
-       "**Euler-Bernoulli** beam element, or **Timoshenko** when shear deformation is enabled "
-       "(via $\\Phi_s = 12EI/(GA_s L^2)$). Non-prismatic members are integrated with "
-       "displacement-based Euler-Bernoulli over $EI(x)$ per sub-element. Material behaviour is "
-       "linear-elastic. The global stiffness $K$ is assembled from the element stiffnesses and "
-       "solved against the load vectors.")
-    call('theory', "For prismatic members the internal forces $M, V, N$ are **mesh-independent** "
-         "(exact fixed-end contributions are included). For non-prismatic members the section "
-         "variation is represented per sub-element, so results **converge** as the mesh is "
-         "refined rather than being exact at any mesh size.")
+    md("BriCoS is a 2D **matrix-stiffness** (displacement) solver. The structure is discretised "
+       "into beam elements connecting nodes; each node has **three degrees of freedom** - "
+       "horizontal $u$, vertical $v$ and rotation $\\theta$ - so a 2-node element has six.")
+    fig(fig_element_dof, "A 2-node 2D frame element and its six degrees of freedom (axial $u$, "
+        "transverse $v$, rotation $\\theta$ at each node).")
+    md("Each element contributes a $6 \\times 6$ stiffness matrix $k$ in its local axes, which "
+       "is rotated to global axes by the element's orientation ($T^T k\\,T$) and added into the "
+       "global stiffness $K$. The system $K\\,u = F$ is solved for the nodal displacements $u$; "
+       "element end forces follow from the local displacements, and the **internal $M, V, N$** "
+       "along each member are recovered by adding the member's distributed-load (fixed-end) "
+       "contributions. Behaviour is **linear-elastic** throughout - which is what makes the "
+       "factored-envelope superposition in the combinations valid.")
+    h2("Element stiffness: Euler-Bernoulli and Timoshenko")
+    md("A prismatic member uses the closed-form 2D frame element, with the axial stiffness "
+       "$EA/L$ decoupled from the bending-shear terms. With **shear deformation** enabled the "
+       "element becomes **Timoshenko**, governed by the shear parameter $\\Phi_s = 12EI/(G A_s "
+       "L^2)$: it scales the bending stiffness by $1/(1+\\Phi_s)$ and adjusts the rotational "
+       "terms (the $4+\\Phi_s$ and $2-\\Phi_s$ coefficients). Setting $\\Phi_s = 0$ recovers "
+       "**Euler-Bernoulli**. $G$ comes from $E$ and $\\nu$, and the shear area $A_s$ from "
+       "$b_{eff}$. Shear deformation matters when a member is short relative to its depth (deep "
+       "beams, squat piers).")
+    h2("Non-prismatic members")
+    md("A member whose depth varies (a Section Profiler taper or 3-point profile) has no single "
+       "$I$. BriCoS forms its stiffness by **displacement-based Euler-Bernoulli integration**: "
+       "the standard cubic **Hermite** shape functions are used and the bending stiffness is "
+       "obtained by integrating $B^T EI(x)\\,B$ numerically (Simpson's rule) along the element. "
+       "A constant $EI$ integrates exactly; a varying $EI$ is approximated per sub-element, so "
+       "the result **converges** as the mesh is refined. Non-prismatic **shear** deformation is "
+       "not included (this path is Euler-Bernoulli only).")
+    call('theory', "**Consistent nodal loads and mesh independence.** Distributed loads are not "
+         "lumped at the nodes - they are converted to exact equivalent nodal forces by "
+         "integrating the Hermite shape functions against the load (the fixed-end forces). "
+         "Because these are **exact** for prismatic members, the recovered $M, V, N$ are "
+         "**independent of the mesh size**; for non-prismatic members they converge with "
+         "refinement. Deflections are the exception (next).")
+
     h1("Deflections")
-    md("Deflections are interpolated between nodes from the nodal displacements with Hermite "
-       "shape functions. The local deflection of a load acting *between* nodes is not added; the "
-       "resulting underestimate is bounded by about $P\\,L_{mesh}^3/(192EI)$ per point load and "
-       "vanishes as the mesh is refined.")
+    md("Nodal displacements come straight from the solve. The deflected shape **between** nodes "
+       "is reconstructed from the nodal values with the Hermite shape functions. A load acting "
+       "between two nodes adds a local sag that this internodal interpolation does not capture; "
+       "the resulting underestimate is bounded by about $P\\,L_{mesh}^3/(192EI)$ per point load "
+       "and **vanishes as the mesh is refined** - which is why mesh size affects deflection "
+       "accuracy but not the forces.")
+
     h1("Moving loads")
-    md("Traffic is evaluated **quasi-statically**: the vehicle is stepped across the structure "
-       "and the absolute max/min envelopes of every effect are accumulated. Where both Vehicle A "
-       "and B are defined, their envelopes are superposed independently (maxima may be combined "
-       "even if they occur at different positions).")
+    md("Traffic is evaluated **quasi-statically**. The vehicle is stepped across the structure "
+       "in increments of the *vehicle step*; at each position its axle loads are placed (as "
+       "consistent nodal loads), the structure is solved, and the **absolute maximum and "
+       "minimum** of every effect at every result point is accumulated into an envelope, "
+       "tracking the governing travel direction per extreme. Where both Vehicle A and Vehicle B "
+       "are defined, their envelopes are **superposed independently** - the maximum from A may "
+       "be added to the maximum from B even if they occur at different positions, which is "
+       "conservative.")
+
     h1("Load combinations")
-    md("Design effects are built by superposing **factored envelopes**:")
+    md("Each load case is enveloped first, then the design effect is the superposition of the "
+       "**factored** envelopes:")
     md("$$E_d = K_{FI}\\,(\\gamma_G E_{SW} + \\gamma_{Soil} E_{Soil} + "
-       "\\gamma_Q \\Phi\\, E_{Veh} + \\gamma_Q E_{Surch})$$")
-    md("where $K_{FI}$ is the consequence-class factor and the $\\gamma$ are the partial "
-       "factors set per system (Part B, *Design factors*). The **Unfactored** combination (all "
-       "loads x 1.0, no dynamic factor) is always available; if neither ULS nor SLS is selected "
-       "it is the only result.")
+       "\\gamma_Q \\Phi\\, E_{Veh} + \\gamma_{UDL} E_{UDL} + \\gamma_Q E_{Surch})$$")
+    md("with the partial factors set per system (Part B). The Traffic UDL carries its own "
+       "factor $\\gamma_{UDL}$ and, unlike the vehicle term, is **not** amplified by $\\Phi$. "
+       "When both a vehicle and a UDL are present the two traffic terms ($\\gamma_Q \\Phi\\, "
+       "E_{Veh}$ and $\\gamma_{UDL} E_{UDL}$) are **not simply added** - they are combined "
+       "through the coupled Total Envelope (next). Because the model is linear, enveloping each "
+       "component and then superposing the factored envelopes is valid. The **Unfactored** "
+       "combination (all loads $\\times 1.0$, no $\\Phi$) is always available; if neither ULS "
+       "nor SLS is selected it is the only result.")
+
     h1("The dynamic factor")
-    md("Moving-vehicle effects are amplified by the dynamic factor $\\Phi$ to account for the "
-       "dynamic interaction between the vehicle and the structure. $\\Phi$ **decreases with the "
-       "influence length** $L_{inf}$ (a longer loaded length averages out the dynamic peak), and "
-       "the serviceability check uses a reduced value ($1 + (\\Phi-1)/2$) because it targets a "
-       "less severe event. The clause basis is DK NA A.2.3.5(2), EN 1991-2:2003 Table 6.2 and "
-       "*Vejledning* 5.4.2. The options that select how $L_{inf}$ and $\\Phi$ are determined - "
-       "and the $\\Phi$ vs $L_{inf}$ curve - are in Part B, *Dynamic factor*.")
+    md("The dynamic factor $\\Phi$ amplifies the moving-vehicle effects to account for the "
+       "vehicle-structure dynamic interaction. BriCoS uses the DK NA form, which decreases with "
+       "the influence length: $\\Phi = 1.25$ for $L_{inf} \\le 5$ m, then linearly "
+       "$\\Phi = 1.25 - (L_{inf}-5)/225$ for $5 < L_{inf} < 50$ m, and $\\Phi = 1.05$ for "
+       "$L_{inf} \\ge 50$ m (the curve is plotted in Part B).")
+    md("The **influence length** is taken in one of two ways (selected in Part B):\n"
+       "- **Per span** - $L_{inf}$ is the actual span length, applied per member; walls take "
+       "the larger $\\Phi$ of the adjacent spans (DK NA A.2.3.5(2)).\n"
+       "- **Combined system** - a single determinant length for the whole structure (EN "
+       "1991-2:2003, Table 6.2). From the component lengths (the spans, plus the legs for a "
+       "frame) BriCoS forms $L_{\\phi} = \\max(k\\,L_{mean}, L_{max})$, where $L_{mean}$ is "
+       "their mean and the factor $k$ is $1.2, 1.3, 1.4, 1.5$ for $2, 3, 4, \\ge 5$ components "
+       "(Case 5.1/5.2/5.3). A longer determinant length gives a lower $\\Phi$.")
+    md("In SLS the factor may be reduced to $\\Phi_{SLS} = 1 + (\\Phi-1)/2$ (*Vejledning* "
+       "5.4.2). The full per-member calculation is shown in the *Phi Calculation Log* and the "
+       "report.")
     call('standard', "The Traffic UDL is **not** amplified by $\\Phi$ - its intensity already "
          "includes the dynamic increment (DK NA A.2.3.2).")
+
     h1("The coupled Total Envelope")
     md("When a vehicle and a Traffic UDL coexist, BriCoS does not simply add their separate "
-       "envelopes. For each vehicle position it combines the factored vehicle effect with the "
-       "factored **adverse UDL outside that position's clear-distance window**, and envelopes "
-       "that together with the vehicle-absent situation (full adverse UDL alone). This coupled "
-       "result is the **Total Envelope** (see Part B for the window/clear-distance controls).")
+       "envelopes - that would double-count the deck length the vehicle itself occupies. "
+       "Instead, for **each vehicle position** it:\n"
+       "1. excludes a **window** around the vehicle - its axle footprint extended by the clear "
+       "distance on each side, snapped outward to whole mesh segments;\n"
+       "2. sums the **adverse** UDL contribution over the deck **outside** that window (via "
+       "per-segment prefix sums, so only the worsening segments are added at each result "
+       "point);\n"
+       "3. adds that to the factored vehicle effect at this position.\n"
+       "The envelope over all positions is then combined with the **vehicle-absent** situation "
+       "(the full adverse UDL alone) to give the **Total Envelope**. With the *Static* or "
+       "*footprint* application the window is empty, so the per-position UDL equals the full "
+       "adverse envelope and the result reduces to the conservative *vehicle + full UDL* "
+       "superposition (Part B sets these options).")
+
     h1("Sign convention & local axes")
     fig(fig_sign_convention, "Bending is sagging-positive and plotted on the tension side; "
         "$+N$ is tension. Internal-force signs follow the member's local axes.")
@@ -780,9 +894,38 @@ def manual_blocks():
        "and $V$ is vertical shear.\n"
        "- **Walls (vertical):** local x runs along the member, so $N$ is the vertical axial load "
        "and $V$ is the horizontal shear.")
+
     h1("Equilibrium check")
-    md("After solving, BriCoS sums the applied loads against the support reactions per load case "
-       "and reports the residual as a built-in QA check (shown in the report).")
+    md("After every solve BriCoS sums, per load case, the applied loads and the support "
+       "reactions and reports the **residual**. The reactions are the forces the supports exert "
+       "**on** the structure, so at equilibrium they cancel the applied loads: the residual "
+       "$\\sum$ applied $+ \\sum$ reactions should be at machine-zero, confirming the assembly "
+       "and solve are self-consistent. It is shown in the report as a built-in QA check. "
+       "Patterned cases such as the adverse-only UDL have no single applied total and are "
+       "excluded from this check.")
+
+    h1("Transverse load distribution on slab bridges")
+    md("BriCoS analyses a **single longitudinal strip** of width $b_{eff}$ and does not "
+       "distribute load transversely. For a beam-like deck that is exactly right. For a "
+       "**slab** it is **conservative**: a wheel or axle load does not stay on one strip - it "
+       "spreads through the surfacing and the slab, and is shared across an **effective width** "
+       "by the slab's transverse stiffness.")
+    fig(fig_transverse_spreading, "A wheel load spreads through the surfacing and slab over an "
+        "effective width $b_{eff}$. The wider that width, the lower the per-strip line load - "
+        "and hence the lower the design moment and shear.")
+    md("The design effects per strip scale with the line-load intensity - the load divided by "
+       "the width it spreads over - so modelling one narrow strip **overestimates** $M$ and $V$, "
+       "and accounting for transverse distribution can reduce them **considerably**. Two "
+       "practical ways to reflect it in BriCoS:\n"
+       "- choose $b_{eff}$ - and convert the axle/wheel loads to line loads over that width - to "
+       "represent the realistic effective width (including the roughly 45-degree spread through "
+       "the surfacing and slab to mid-depth), or\n"
+       "- compute a transverse distribution factor separately (a grillage, an influence-surface "
+       "method, or the road-directorate guidance) and apply it to the BriCoS strip result.")
+    call('tip', "Use the conservative single-strip result for a quick check or preliminary "
+         "sizing; if it governs the design, a transverse-distribution analysis is often where "
+         "the real capacity is found. The *Vejledning til belastnings- og beregningsgrundlag "
+         "for broer* covers transverse distribution for slab decks.")
 
     # =====================================================================
     # PART D - REFERENCE
@@ -794,24 +937,29 @@ def manual_blocks():
        "factor Table 6.2).\n"
        "- **EN 1991-2 DK NA:2017** - Danish National Annex, Annex A (dynamic factor A.2.3.2; "
        "per-span influence length A.2.3.5(2)).\n"
+       "- **EN 1992-1-1** - concrete: the elastic modulus $E$ used in the *Eurocode ($f_{ck}$)* "
+       "material option.\n"
        "- **Vejledning til belastnings- og beregningsgrundlag for broer** - classification "
        "factors (5.3.1), SLS dynamic-factor reduction (5.4.2), partial factors (Fig. B3.1 / "
-       "B3.2, Bilag 3).")
+       "B3.2, Bilag 3), transverse distribution for slab decks.")
     h1("Key assumptions & limitations")
-    md("- 2D, linear-elastic; rigid connections on centrelines.\n"
-       "- Single longitudinal strip ($b_{eff}$); no transverse load distribution (conservative "
-       "for slabs - see Part B, *Sections and the Section Profiler*).\n"
+    md("- 2D, linear-elastic; rigid connections on centrelines (no releases or eccentricities).\n"
+       "- Single longitudinal strip ($b_{eff}$); no transverse load distribution - conservative "
+       "for slabs (see *Transverse load distribution on slab bridges*).\n"
        "- One partial factor per permanent action (max and min); favourable/unfavourable not "
        "split automatically.\n"
-       "- Non-prismatic results converge with mesh refinement; prismatic results are "
-       "mesh-independent.\n"
+       "- Prismatic forces are mesh-independent; non-prismatic forces and all deflections "
+       "converge with mesh refinement.\n"
        "- Non-prismatic Timoshenko shear deformation is not included.")
     h1("Glossary")
     table(["Term", "Meaning"],
           [["$K_{FI}$", "Consequence-class factor"],
            ["$\\Phi$", "Dynamic amplification factor"],
+           ["$\\Phi_s$", "Timoshenko shear parameter $12EI/(G A_s L^2)$"],
            ["$L_{inf}$", "Influence length used to determine $\\Phi$"],
            ["$b_{eff}$", "Effective width of the analysis strip"],
+           ["$A_s$", "Shear area (Timoshenko)"],
+           ["Consistent nodal loads", "Distributed loads converted to exact equivalent nodal forces"],
            ["Adverse-only", "A load placed only where it worsens the effect at each point"],
            ["ULS / SLS", "Ultimate / Serviceability Limit State"],
            ["S# / W#", "Span / Wall element identifiers"],

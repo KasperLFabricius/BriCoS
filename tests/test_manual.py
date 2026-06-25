@@ -60,7 +60,8 @@ def test_all_figure_generators_return_figures():
                 manual.fig_deflection_envelope, manual.fig_soil_case,
                 manual.fig_sign_convention, manual.fig_section_shapes,
                 manual.fig_phi_curve, manual.fig_support_types,
-                manual.fig_udl_coupling_window):
+                manual.fig_udl_coupling_window, manual.fig_element_dof,
+                manual.fig_transverse_spreading):
         assert isinstance(gen(), go.Figure), gen.__name__
 
 
