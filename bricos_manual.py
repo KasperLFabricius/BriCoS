@@ -599,12 +599,11 @@ def manual_blocks():
        "window is excluded and the UDL coexists with the vehicle over its footprint.")
     fig(fig_udl_coupling_window, "Moving application: the adverse UDL fills the deck except a "
         "window around the vehicle (its footprint plus the clear distance on each side).")
-    call('theory', "These options shape the **coupled Total Envelope**: at each vehicle position "
-         "BriCoS combines the factored vehicle with the factored adverse UDL **outside** that "
-         "position's window, then envelopes it with the vehicle-absent case (full adverse UDL "
-         "alone). The Static or footprint application makes the per-step UDL the full adverse "
-         "envelope, reproducing the conservative *vehicle + full UDL* superposition. The "
-         "algorithm is detailed in Part C, *The coupled Total Envelope*.")
+    call('theory', "These options change how the UDL is coupled with the vehicle in the "
+         "**Total Envelope**: *Moving* excludes the window around each vehicle position, while "
+         "*Static* and the *footprint* option apply the full adverse UDL everywhere, reproducing "
+         "the conservative *vehicle + full UDL* superposition. The exact algorithm is in Part C, "
+         "*The coupled Total Envelope*.")
 
     # ---- Analysis & result settings -------------------------------------
     h1("Analysis & result settings")
@@ -621,10 +620,12 @@ def manual_blocks():
        "shear deformation is currently not included. The strip width $b_{eff}$ is always used "
        "(shear area, axial area and auto self-weight).")
     h2("Calculation precision")
-    md("- **Mesh size [m]** - the sub-element length. Internal forces $M, V, N$ are exact "
-       "regardless of mesh size; **deflections** are interpolated between nodes, so their "
-       "accuracy under loads improves with a finer mesh (the 0.5 m default keeps the error "
-       "negligible). A finer mesh also sharpens non-prismatic results, at some speed cost.\n"
+    md("- **Mesh size [m]** - the sub-element length. For **prismatic** members the internal "
+       "forces $M, V, N$ are exact regardless of mesh size; for **non-prismatic** (tapered / "
+       "3-point) members they **converge** as the mesh is refined rather than being exact at "
+       "any size, so use a finer mesh on tapered members. **Deflections** are interpolated "
+       "between nodes, so their accuracy under loads also improves with a finer mesh (the 0.5 m "
+       "default keeps the error negligible).\n"
        "- **Vehicle step [m]** - the moving-load increment. Smaller steps sample the envelopes "
        "more densely (more positions evaluated), at some speed cost.")
 
@@ -757,11 +758,13 @@ def manual_blocks():
        "loads x 1.0, no dynamic factor) is always available; if neither ULS nor SLS is selected "
        "it is the only result.")
     h1("The dynamic factor")
-    md("Moving-vehicle effects are amplified by the dynamic factor $\\Phi$, calculated from the "
-       "influence length (or set manually; the controls are in Part B). The influence length is "
-       "taken either per span (DK NA A.2.3.5(2)) or for the combined system (EN 1991-2:2003, "
-       "Table 6.2); $\\Phi$ can be applied per member or as a single governing value, and "
-       "reduced for SLS ($1 + (\\Phi-1)/2$, *Vejledning* 5.4.2).")
+    md("Moving-vehicle effects are amplified by the dynamic factor $\\Phi$ to account for the "
+       "dynamic interaction between the vehicle and the structure. $\\Phi$ **decreases with the "
+       "influence length** $L_{inf}$ (a longer loaded length averages out the dynamic peak), and "
+       "the serviceability check uses a reduced value ($1 + (\\Phi-1)/2$) because it targets a "
+       "less severe event. The clause basis is DK NA A.2.3.5(2), EN 1991-2:2003 Table 6.2 and "
+       "*Vejledning* 5.4.2. The options that select how $L_{inf}$ and $\\Phi$ are determined - "
+       "and the $\\Phi$ vs $L_{inf}$ curve - are in Part B, *Dynamic factor*.")
     call('standard', "The Traffic UDL is **not** amplified by $\\Phi$ - its intensity already "
          "includes the dynamic increment (DK NA A.2.3.2).")
     h1("The coupled Total Envelope")
