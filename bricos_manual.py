@@ -841,11 +841,15 @@ def manual_blocks():
     md("Each load case is enveloped first, then the design effect is the superposition of the "
        "**factored** envelopes:")
     md("$$E_d = K_{FI}\\,(\\gamma_G E_{SW} + \\gamma_{Soil} E_{Soil} + "
-       "\\gamma_Q \\Phi\\, E_{Veh} + \\gamma_Q E_{Surch})$$")
-    md("with the partial factors set per system (Part B). Because the model is linear, "
-       "enveloping each component and then summing the factored envelopes is valid. The "
-       "**Unfactored** combination (all loads $\\times 1.0$, no $\\Phi$) is always available; if "
-       "neither ULS nor SLS is selected it is the only result.")
+       "\\gamma_Q \\Phi\\, E_{Veh} + \\gamma_{UDL} E_{UDL} + \\gamma_Q E_{Surch})$$")
+    md("with the partial factors set per system (Part B). The Traffic UDL carries its own "
+       "factor $\\gamma_{UDL}$ and, unlike the vehicle term, is **not** amplified by $\\Phi$. "
+       "When both a vehicle and a UDL are present the two traffic terms ($\\gamma_Q \\Phi\\, "
+       "E_{Veh}$ and $\\gamma_{UDL} E_{UDL}$) are **not simply added** - they are combined "
+       "through the coupled Total Envelope (next). Because the model is linear, enveloping each "
+       "component and then superposing the factored envelopes is valid. The **Unfactored** "
+       "combination (all loads $\\times 1.0$, no $\\Phi$) is always available; if neither ULS "
+       "nor SLS is selected it is the only result.")
 
     h1("The dynamic factor")
     md("The dynamic factor $\\Phi$ amplifies the moving-vehicle effects to account for the "
@@ -892,11 +896,13 @@ def manual_blocks():
        "and $V$ is the horizontal shear.")
 
     h1("Equilibrium check")
-    md("After every solve BriCoS sums the applied loads and the support reactions per load case "
-       "and reports the **residual** ($\\sum$ applied $- \\sum$ reactions). A residual at "
-       "machine-zero confirms the assembly and solve are self-consistent; it is shown in the "
-       "report as a built-in QA check. Patterned cases such as the adverse-only UDL have no "
-       "single applied total and are excluded from this check.")
+    md("After every solve BriCoS sums, per load case, the applied loads and the support "
+       "reactions and reports the **residual**. The reactions are the forces the supports exert "
+       "**on** the structure, so at equilibrium they cancel the applied loads: the residual "
+       "$\\sum$ applied $+ \\sum$ reactions should be at machine-zero, confirming the assembly "
+       "and solve are self-consistent. It is shown in the report as a built-in QA check. "
+       "Patterned cases such as the adverse-only UDL have no single applied total and are "
+       "excluded from this check.")
 
     h1("Transverse load distribution on slab bridges")
     md("BriCoS analyses a **single longitudinal strip** of width $b_{eff}$ and does not "
