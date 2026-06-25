@@ -241,6 +241,76 @@ def fig_phi_curve():
     return fig
 
 
+def fig_support_types():
+    """Schematic of the four boundary-condition types and the DOFs each restrains."""
+    fig = go.Figure()
+    centres = [(4.0, "Fixed", "Kx, Ky, M"),
+               (12.0, "Pinned", "Kx, Ky"),
+               (20.0, "Roller (X-free)", "Ky"),
+               (28.0, "Spring", "Kx, Ky, M")]
+    ground = 1.4
+    for cx, name, dofs in centres:
+        # ground hatch
+        fig.add_shape(type='line', x0=cx - 2.2, y0=ground, x1=cx + 2.2, y1=ground,
+                      line=dict(color='black', width=1.4))
+        for hx in np.linspace(cx - 2.0, cx + 2.0, 7):
+            fig.add_shape(type='line', x0=hx, y0=ground, x1=hx - 0.5, y1=ground - 0.5,
+                          line=dict(color='grey', width=0.8))
+        if name == "Fixed":
+            fig.add_shape(type='rect', x0=cx - 0.9, y0=ground, x1=cx + 0.9, y1=ground + 1.0,
+                          line=dict(color='black', width=1.2), fillcolor='rgba(90,90,90,0.18)')
+        elif name == "Pinned":
+            fig.add_trace(go.Scatter(x=[cx, cx - 1.0, cx + 1.0, cx], y=[ground + 1.4, ground, ground, ground + 1.4],
+                                     mode='lines', line=dict(color='black', width=1.4), hoverinfo='skip'))
+        elif name.startswith("Roller"):
+            fig.add_trace(go.Scatter(x=[cx, cx - 1.0, cx + 1.0, cx], y=[ground + 1.4, ground + 0.45, ground + 0.45, ground + 1.4],
+                                     mode='lines', line=dict(color='black', width=1.4), hoverinfo='skip'))
+            fig.add_trace(go.Scatter(x=[cx - 0.6, cx, cx + 0.6], y=[ground + 0.2] * 3, mode='markers',
+                                     marker=dict(symbol='circle', size=8, color='white',
+                                                 line=dict(color='black', width=1)), hoverinfo='skip'))
+        else:  # Spring
+            zz_y = np.linspace(ground, ground + 1.4, 9)
+            zz_x = cx + 0.45 * np.array([0, 1, -1, 1, -1, 1, -1, 1, 0])
+            fig.add_trace(go.Scatter(x=zz_x, y=zz_y, mode='lines', line=dict(color='black', width=1.4), hoverinfo='skip'))
+        # node + member stub
+        fig.add_trace(go.Scatter(x=[cx], y=[ground + 1.45], mode='markers',
+                                 marker=dict(symbol='circle', size=7, color='black'), hoverinfo='skip'))
+        fig.add_shape(type='line', x0=cx - 1.6, y0=ground + 1.45, x1=cx + 1.6, y1=ground + 1.45,
+                      line=dict(color='#1f3b66', width=3))
+        fig.add_annotation(x=cx, y=ground + 2.2, text=f"<b>{name}</b>", showarrow=False, font=dict(size=11))
+        fig.add_annotation(x=cx, y=ground - 0.95, text=dofs, showarrow=False, font=dict(size=9, color='grey'))
+    return _blank_axes(fig, x_range=[0, 32], y_range=[-0.6, 4.6], height=240)
+
+
+def fig_udl_coupling_window():
+    """How the Traffic UDL couples with a moving vehicle: the UDL fills the deck
+    except a window around the vehicle (its footprint plus the clear distance)."""
+    fig = go.Figure()
+    deck_y = 2.0
+    fig.add_shape(type='line', x0=0, y0=deck_y, x1=30, y1=deck_y, line=dict(color='black', width=2.5))
+    veh_lo, veh_hi = 13.0, 17.0          # vehicle footprint
+    gap = 3.0                             # clear distance each side
+    w_lo, w_hi = veh_lo - gap, veh_hi + gap
+    # adverse UDL fill on the loaded regions (outside the window)
+    for x0, x1 in [(0, w_lo), (w_hi, 30)]:
+        fig.add_shape(type='rect', x0=x0, y0=deck_y, x1=x1, y1=deck_y + 1.1,
+                      fillcolor='rgba(33,102,64,0.18)', line=dict(width=0))
+        for ax in np.arange(x0 + 0.4, x1, 1.2):
+            _arrow(fig, ax, deck_y + 1.1, ax, deck_y + 0.15, 'rgb(33,102,64)', 1.1)
+    # excluded window
+    fig.add_shape(type='rect', x0=w_lo, y0=deck_y - 0.1, x1=w_hi, y1=deck_y + 1.4,
+                  fillcolor='rgba(200,200,200,0.25)', line=dict(color='grey', width=0.8, dash='dot'))
+    # vehicle axles
+    for ax in [veh_lo + 0.4, 15.0, veh_hi - 0.4]:
+        _arrow(fig, ax, deck_y + 1.6, ax, deck_y + 0.1, 'red', 2.0)
+    fig.add_annotation(x=15.0, y=deck_y + 1.95, text="<b>Vehicle</b>", showarrow=False, font=dict(size=11, color='red'))
+    fig.add_annotation(x=15.0, y=deck_y - 0.7, text="window: no UDL", showarrow=False, font=dict(size=9, color='grey'))
+    fig.add_annotation(x=(w_lo + veh_lo) / 2, y=deck_y - 0.35, text="clear dist.", showarrow=False, font=dict(size=8, color='grey'))
+    fig.add_annotation(x=5.0, y=deck_y + 1.45, text="adverse UDL", showarrow=False, font=dict(size=9, color='rgb(33,102,64)'))
+    fig.add_annotation(x=25.0, y=deck_y + 1.45, text="adverse UDL", showarrow=False, font=dict(size=9, color='rgb(33,102,64)'))
+    return _blank_axes(fig, x_range=[-1, 31], y_range=[0.5, 4.4], height=240)
+
+
 # ==========================================================================
 # CONTENT - structured blocks (single source for app + PDF)
 # ==========================================================================
@@ -275,9 +345,18 @@ def manual_blocks():
     call = lambda k, t: B.append(('callout', k, t))
     fig = lambda f, c: B.append(('figure', f, c))
     table = lambda h, r: B.append(('table', h, r))
+    part = lambda t: B.append(('part', t))
 
-    md(f"*BriCoS v{data_mod.APP_VERSION} - user manual. Worked example: a 2-span "
-       "integral frame bridge, carried through every section below.*")
+    md(f"*BriCoS v{data_mod.APP_VERSION} - user manual. This is the complete reference for the "
+       "program: every feature and option, and the theory behind the solver. It is written to "
+       "stand on its own - you should be able to understand what BriCoS does and how to use it "
+       "without having opened it. A worked example (a 2-span integral frame bridge) is carried "
+       "through to illustrate.*")
+
+    # =====================================================================
+    # PART A - GET STARTED
+    # =====================================================================
+    part("Part A - Get started")
 
     # ---- 1. Introduction -------------------------------------------------
     h1("1. Introduction & purpose")
@@ -370,42 +449,91 @@ def manual_blocks():
          "factors), and therefore whether a quick conservative check is enough or a more "
          "detailed analysis is warranted.")
 
-    # ---- 3. Modelling concepts ------------------------------------------
-    h1("3. Modelling concepts")
-    h2("3.1 Systems A and B")
-    md("BriCoS always holds two models. Define one and leave the other empty, or define both to "
-       "compare them on the same diagrams (System A in blue, System B in red). The *Copy Data* "
-       "tools clone one system into the other as a starting point.")
-    h2("3.2 Model type")
-    md("- **Frame** - decks (spans) on vertical walls/piers; used for integral/portal frames.\n"
-       "- **Beam** - a continuous beam on point supports, no walls.\n"
-       "- **Superstructure** - a deck on supports, for superstructure-only checks.")
-    h2("3.3 Spans, walls, nodes and supports")
-    md("Members are **spans** (`S1, S2, ...`, the horizontal deck elements) and **walls** "
-       "(`W1, W2, ...`, the vertical members in Frame mode). Each member is meshed into "
-       "sub-elements for the analysis. Supports are defined per node as fixed, pinned, roller "
-       "or an elastic spring with stiffnesses $K_x$, $K_y$, $K_\\theta$.")
-    call('theory', "Supports use the penalty method: fixed/pinned restraints are very stiff "
-         "springs ($k \\approx 10^{14}$), and elastic foundations use your specified spring "
-         "stiffnesses directly.")
-    h2("3.4 Sections - the Section Profiler")
-    md("Each member has a cross-section defined either by **height** $h$ (with the effective "
-       "width $b_{eff}$, giving $I = b_{eff} h^3/12$) or directly by **inertia** $I$. The "
-       "*Section Profiler* lets the depth vary along a member:")
-    fig(fig_section_shapes, "Section depth shapes: constant, linear taper, and a 3-point "
-        "(start/mid/end) profile. Tapers are integrated per sub-element.")
-    call('concept', "$b_{eff}$ is the effective width of the analysis strip. Define loads as "
-         "line loads on that strip; BriCoS does not spread loads transversely - you choose the "
-         "width that your loads and section refer to.")
-    h2("3.5 Alignment")
-    md("Spans can be inclined (by slope % or end-to-end height difference), so skewed or ramped "
-       "decks can be modelled. Inclination changes how axial and shear resolve in the member's "
-       "local axes (below).")
+    # =====================================================================
+    # PART B - FEATURE & OPTION REFERENCE
+    # =====================================================================
+    part("Part B - Feature & option reference")
 
-    # ---- 4. Loads --------------------------------------------------------
-    h1("4. Loads")
-    md("BriCoS separates **permanent** actions from **variable (traffic)** actions so they can "
-       "be factored independently in the combinations.")
+    # ---- The workspace ---------------------------------------------------
+    h1("The workspace: systems, files and sessions")
+    md("The screen is split into a **sidebar** (all inputs, grouped in expandable panels) and a "
+       "**main panel** (the result diagrams and toolbar). BriCoS always holds **two independent "
+       "models, System A and System B**. The **Active System** selector chooses which one the "
+       "sidebar edits; both are drawn together on every diagram - **System A in blue, System B "
+       "in red** - so you always see the comparison.")
+    md("- **Copy Data** - clone one system into the other (A to B or B to A) as a starting point "
+       "for a variant.\n"
+       "- **Reset Data** - clear a system or restore the default example.\n"
+       "- **File Operations (Save/Load)** - download the entire configuration of both systems "
+       "as a CSV file, and re-upload it later to continue exactly where you left off.\n"
+       "- **Autosave** - the session is saved automatically on each interaction (clicks, edits); "
+       "it does not save while idle, so a browser refresh will not lose committed work.")
+    call('tip', "To analyse a single structure, define one system and leave the other empty. An "
+         "incompletely defined system is reported as a **warning and excluded** from the results "
+         "and report - it never blocks the system that is complete.")
+
+    # ---- Modelling the structure ----------------------------------------
+    h1("Modelling the structure")
+    h2("Model type")
+    md("Set under *Design Factors & Type*:\n"
+       "- **Frame** - decks (spans) carried on vertical walls/piers, with full wall-slab "
+       "interaction. Soil and surcharge on the walls are available in this mode. Use it for "
+       "integral and portal frames.\n"
+       "- **Superstructure** - the deck alone on point supports, with no walls (a beam on "
+       "supports). Use it for superstructure-only checks. Switching to Superstructure sets the "
+       "wall heights and inertias to zero and removes soil/surcharge; switching back to Frame "
+       "restores them.")
+    h2("Geometry: spans, walls and nodes")
+    md("Choose the **number of spans** and each **span length** $L$; for a frame, set each "
+       "**wall height** $h$. Members are named **spans** ($S1, S2, \\ldots$, the horizontal "
+       "deck) and **walls** ($W1, W2, \\ldots$, the vertical members). Each member is meshed "
+       "into sub-elements for the analysis (see *Calculation precision*). Supports sit at the "
+       "deck nodes (Superstructure) or the wall bases (Frame).")
+    h2("Sections and the Section Profiler")
+    md("Each member's cross-section is defined in one of two ways:\n"
+       "- **By height** $h$ - with the strip width $b_{eff}$ this gives $I = b_{eff} h^3/12$. "
+       "Required for auto self-weight and the section-depth overlay.\n"
+       "- **By inertia** $I$ - enter the second moment of area directly (e.g. a cracked or "
+       "transformed section). The depth-based features are then unavailable.\n"
+       "The **Section Profiler (Advanced)** lets the depth vary along a member:")
+    table(["Shape", "Depth along the member", "Use"],
+          [["Constant", "One depth, end to end", "Prismatic members"],
+           ["Linear taper", "Straight variation, start to end", "Haunched / tapered spans"],
+           ["3-point", "Start, mid and end depths", "Drop panels, mid-span haunches"]])
+    fig(fig_section_shapes, "The three Section Profiler depth shapes. Tapers are integrated per "
+        "sub-element, so non-prismatic results converge as the mesh is refined.")
+    call('concept', "$b_{eff}$ is the width of the **analysis strip**. All loads are line loads "
+         "on that strip and BriCoS does not spread them transversely - you choose the width your "
+         "loads and section refer to.")
+    call('tip', "**Slab bridges:** because BriCoS analyses a single longitudinal strip with no "
+         "transverse distribution, its section forces are **conservative** for slabs. Accounting "
+         "for **transverse load spreading** - a wider effective width over which a wheel/axle "
+         "load distributes across the slab - can reduce the design moments and shears "
+         "**considerably**. Reflect it by choosing $b_{eff}$ and the line-load intensities to "
+         "represent the spread load, or by applying a separate transverse distribution outside "
+         "BriCoS.")
+    h2("Boundary conditions")
+    md("Each support node is one of the following. Internally, restraints use the **penalty "
+       "method** (a restrained DOF is a very stiff spring, $k \\approx 10^{14}$); a Custom "
+       "spring uses your stiffnesses directly to model an elastic foundation or finite bearing "
+       "stiffness.")
+    table(["Support", "Restrains", "Typical use"],
+          [["Fixed", "$K_x$, $K_y$ and rotation", "Frame wall base (encastre)"],
+           ["Pinned", "$K_x$ and $K_y$ (rotation free)", "Pinned bearing"],
+           ["Roller (X-free)", "$K_y$ only", "Expansion bearing"],
+           ["Custom spring", "User $K_x$, $K_y$, $K_\\theta$", "Elastic foundation / bearing"]])
+    fig(fig_support_types, "The four support types and the degrees of freedom each restrains.")
+    h2("Alignment")
+    md("A span can be **Straight (horizontal)** or **Inclined**. Inclination is set either by "
+       "**Slope [%]** or by **Delta height (end - start) [m]**, so ramped or stepped decks can "
+       "be modelled. Inclination changes how the axial force $N$ and shear $V$ resolve in the "
+       "member's local axes (see Part C, *Sign convention & local axes*).")
+
+    # ---- Loads -----------------------------------------------------------
+    h1("Loads")
+    md("BriCoS separates **permanent** actions from **variable (traffic)** actions so they are "
+       "factored independently in the combinations. The table summarises every load; the "
+       "subsections give the options.")
     table(["Load", "What it is", "How it is applied"],
           [["Dead Load", "Permanent superimposed load (surfacing, ballast, parapets)",
             "Per-span line load [kN/m]"],
@@ -416,27 +544,190 @@ def manual_blocks():
            ["Surcharge", "Traffic/area surcharge behind walls", "Pressure on the wall face"],
            ["Traffic UDL", "Uniformly distributed traffic load", "Adverse-only line load on the deck"],
            ["Vehicle", "Axle-load model(s), moving", "Stepped across the structure (A and/or B)"]])
-    h2("4.1 Self-weight: manual vs automatic")
-    md("By default you enter all permanent load as the **Dead Load** line load. Turn on "
-       "**auto self-weight** to have BriCoS compute the structural self-weight as "
-       "$\\gamma \\cdot b_{eff} \\cdot h$ per sub-element from a unit weight $\\gamma$; the "
-       "Dead Load then carries only superimposed actions. Auto self-weight requires "
-       "height-defined sections.")
-    h2("4.2 Traffic UDL")
-    md("The Traffic UDL is a line load applied **adverse-only** - placed only where it worsens "
-       "the effect at each result point - per EN 1991-2:2003, 4.3.2(1)(b).")
-    h2("4.3 Vehicles")
-    md("A vehicle is a set of axle loads and spacings (standard classification vehicles are "
-       "available, or define your own). BriCoS steps the vehicle across the structure to build "
-       "the moving-load envelope. Two vehicles (A and B) and travel direction (forward / reverse "
-       "/ both) are supported.")
-    call('standard', "Standard vehicle classes follow the Danish classification system; the "
-         "partial factor on the vehicle (e.g. $\\gamma_Q = 1.4$) follows *Vejledning* 5.3.1 / "
-         "Bilag 3.")
+    h2("Dead Load and self-weight")
+    md("- **Dead Load** - the per-span permanent line load [kN/m]. With auto self-weight off it "
+       "carries all permanent load; with it on it carries only **superimposed** actions "
+       "(surfacing, ballast, parapets).\n"
+       "- **Auto-calculate self-weight** (*Analysis & Result Settings*) - computes the "
+       "structural self-weight of decks and walls as $\\gamma \\cdot b_{eff} \\cdot h$ per "
+       "sub-element from the **unit weight** $\\gamma$ (reinforced concrete approx. 25 kN/m^3) "
+       "and reports it as a separate *Self-weight* load case, factored like the Dead Load. It "
+       "requires **height-defined** sections, and $b_{eff}$ is then the physical cross-section "
+       "width.")
+    h2("Soil and surcharge (Frame)")
+    md("- **Soil** - backfill pressure on a wall face, entered as a **linear pressure profile** "
+       "(top and bottom intensity) per face.\n"
+       "- **Surcharge** - a traffic/area surcharge acting on the wall face.\n"
+       "- **Surcharge combination** (*Analysis & Result Settings*) sets how the surcharge and "
+       "the deck vehicle interact: **Exclusive** takes $\\max(\\text{Vehicle}, "
+       "\\text{Surcharge})$; **Simultaneous** applies $\\text{Vehicle} + \\text{Surcharge}$ "
+       "together.")
+    fig(fig_soil_case, "Soil (earth-pressure) bending in the worked example - one of the "
+        "permanent load cases that can be inspected on its own.")
+    h2("Traffic UDL")
+    md("The Traffic UDL is a uniformly distributed traffic load entered as a **line load** $q$ "
+       "[kN/m] on the analysis strip - like the self-weight, you account for the loaded width "
+       "yourself. It is applied **adverse-only** (placed only where it worsens the effect at "
+       "each result point, per EN 1991-2:2003 4.3.2(1)(b)), and the dynamic factor $\\Phi$ is "
+       "**not** applied to it because its intensity already includes the dynamic increment "
+       "(DK NA A.2.3.2). Set $q = 0$ to deactivate it.")
+    h2("Vehicles")
+    md("Define **Vehicle A** and, optionally, **Vehicle B** under *Vehicle Definitions*. Each is "
+       "either a built-in **classification vehicle** (standard LM3 classes per DS/EN 1991-2 "
+       "DK NA:2017) or **Custom**:\n"
+       "- **Loads** - axle loads in tonnes [t], comma-separated, e.g. `10, 10, 15`.\n"
+       "- **Axle spacing** - incremental spacing in metres [m]; the first value is 0 and each "
+       "subsequent value is the distance from the previous axle (not a cumulative position). "
+       "The list length must equal the number of loads, e.g. `0, 1.5, 3.0`.\n"
+       "- **Clear Vehicle** removes the vehicle.\n"
+       "**Vehicle Direction** (*Analysis & Result Settings*, shared by both systems) is "
+       "**Forward** (left to right), **Reverse** (right to left, axles inverted) or **Both** "
+       "(the envelope of both directions).")
+    call('standard', "The partial factor on the vehicle (e.g. $\\gamma_Q = 1.4$) follows the "
+         "*Vejledning* 5.3.1 / Bilag 3; set it per system under *Design Factors & Type*.")
+    h2("Coupling the UDL with the vehicle")
+    md("When a system has **both** a vehicle and a Traffic UDL, three options control how the "
+       "UDL accompanies the moving vehicle. They have no effect when the system has no vehicle - "
+       "the UDL then simply enters as its full adverse envelope.\n"
+       "- **Application in step results** - *Moving with vehicle*: the UDL fills the deck except "
+       "a **window** around the vehicle; *Static (full deck)*: the UDL covers the full deck at "
+       "every step.\n"
+       "- **Clear distance (vehicle to UDL)** - the gap from the outermost axles to the start of "
+       "the UDL, applied in front of and behind the vehicle. The excluded window is the vehicle "
+       "footprint plus this gap on each side. Pick a preset or a custom distance.\n"
+       "- **Apply UDL also within the vehicle window** (footprint option) - when enabled, no "
+       "window is excluded and the UDL coexists with the vehicle over its footprint.")
+    fig(fig_udl_coupling_window, "Moving application: the adverse UDL fills the deck except a "
+        "window around the vehicle (its footprint plus the clear distance on each side).")
+    call('theory', "These options shape the **coupled Total Envelope**: at each vehicle position "
+         "BriCoS combines the factored vehicle with the factored adverse UDL **outside** that "
+         "position's window, then envelopes it with the vehicle-absent case (full adverse UDL "
+         "alone). The Static or footprint application makes the per-step UDL the full adverse "
+         "envelope, reproducing the conservative *vehicle + full UDL* superposition. The "
+         "algorithm is detailed in Part C, *The coupled Total Envelope*.")
 
-    # ---- 5. Theory & methodology ----------------------------------------
-    h1("5. Theory & methodology")
-    h2("5.1 Finite-element formulation")
+    # ---- Analysis & result settings -------------------------------------
+    h1("Analysis & result settings")
+    md("These shared settings (under *Analysis & Result Settings*) apply to both systems.")
+    h2("Limit states to analyse")
+    md("Toggle **ULS (Design)** and **SLS (Characteristic)** independently. ULS applies the "
+       "partial factors ($\\times K_{FI}$); SLS applies the SLS combination factors. The "
+       "**Unfactored** combination (all loads $\\times 1.0$, no dynamic factor) is always "
+       "available; if neither limit state is selected it is the only result produced.")
+    h2("Shear deformations (Timoshenko)")
+    md("Off by default. When enabled, shear flexibility is included in the stiffness of "
+       "**prismatic** members (recommended for deep beams and piers); **Poisson's ratio** "
+       "$\\nu$ then appears and feeds only the shear modulus $G$. For non-prismatic members "
+       "shear deformation is currently not included. The strip width $b_{eff}$ is always used "
+       "(shear area, axial area and auto self-weight).")
+    h2("Calculation precision")
+    md("- **Mesh size [m]** - the sub-element length. Internal forces $M, V, N$ are exact "
+       "regardless of mesh size; **deflections** are interpolated between nodes, so their "
+       "accuracy under loads improves with a finer mesh (the 0.5 m default keeps the error "
+       "negligible). A finer mesh also sharpens non-prismatic results, at some speed cost.\n"
+       "- **Vehicle step [m]** - the moving-load increment. Smaller steps sample the envelopes "
+       "more densely (more positions evaluated), at some speed cost.")
+
+    # ---- Design factors --------------------------------------------------
+    h1("Design factors, limit states & the dynamic factor")
+    md("Set per system under *Design Factors & Type*. Only the factors for the analysed limit "
+       "states are shown.")
+    h2("Material definition")
+    md("- **Eurocode ($f_{ck}$)** - the elastic modulus $E$ is derived from the concrete "
+       "strength class.\n"
+       "- **Manual (E-modulus)** - enter $E$ directly.")
+    h2("ULS partial factors")
+    md("Applied in the Design (ULS) result mode, each multiplied by $K_{FI}$. Defaults follow "
+       "the *Vejledning* Fig. B3.1.")
+    table(["Factor", "Applies to", "Notes / default"],
+          [["$K_{FI}$", "All loads in ULS (not SLS)", "Consequence class; soil may negate it"],
+           ["$\\gamma_g$", "Dead Load and Self-weight", "Permanent action factor"],
+           ["$\\gamma_j$", "Soil (earth pressure)", "Has a '1.0 (No KFI)' option for earth pressure"],
+           ["$\\gamma_{veh,A}$", "Vehicle A (with $\\Phi$) and Surcharge", "Variable traffic, model A"],
+           ["$\\gamma_{veh,B}$", "Vehicle B (with $\\Phi$)", "Variable traffic, model B"],
+           ["$\\gamma_{UDL}$", "Traffic UDL", "0.56 as companion to vehicles; 1.40 for the UDL-alone case"]])
+    call('limit', "Each permanent factor is applied to **both** the maximum and minimum result "
+         "- favourable/unfavourable permanent-load combinations are not evaluated "
+         "automatically. Where a permanent action is favourable (uplift, relieving earth "
+         "pressure), re-run with the favourable factor. The soil '1.0 (No KFI)' option gives an "
+         "effective factor of exactly 1.0 with $K_{FI}$ cancelled, as permitted for earth "
+         "pressure.")
+    h2("SLS combination factors")
+    md("Applied in the Characteristic (SLS) result mode; $K_{FI}$ is not applied in SLS. "
+       "Defaults follow the characteristic combination of *Vejledning* Fig. B3.2.")
+    table(["Action", "SLS factor (default)"],
+          [["Self-weight", "1.0"], ["Soil", "1.0"], ["Vehicle A", "1.0"],
+           ["Vehicle B", "0.75"], ["Traffic UDL", "0.40"]])
+    h2("Dynamic factor $\\Phi$")
+    md("Moving-vehicle effects are amplified by $\\Phi$. Choose how it is obtained:\n"
+       "- **Calculate** - from the **influence length** $L_{inf}$, with two bases:\n"
+       "  - *Combined system (EN 1991-2 Tab. 6.2)* - one determinant length for the whole "
+       "structure (a frame is treated as an equivalent continuous beam); generally a lower "
+       "$\\Phi$ for short spans.\n"
+       "  - *Per span (DK NA A.2.3.5(2))* - $L_{inf}$ is the actual span, evaluated per span; "
+       "walls take the maximum $\\Phi$ of the adjacent spans.\n"
+       "  Then **Phi application** is *Per member* (each span its own $\\Phi$) or *Governing* "
+       "(the largest $\\Phi$ applied to every member - conservative).\n"
+       "- **Manual** - enter $\\Phi$ directly, either **Global** (one value) or **Per span** (a "
+       "value per span; walls take the max of adjacent spans).\n"
+       "The **Phi Calculation Log** lists the resulting per-member values.")
+    md("The **SLS treatment** of $\\Phi$ (shown when SLS is analysed): *Same as ULS* (no "
+       "reduction), *Reduced* $\\Phi_{SLS} = 1 + (\\Phi-1)/2$ (*Vejledning* 5.4.2), or a "
+       "*Manual SLS value*.")
+    fig(fig_phi_curve, "Calculated dynamic factor vs influence length: 1.25 up to 5 m, "
+        "decreasing to 1.05 at 50 m.")
+
+    # ---- Results & visualization ----------------------------------------
+    h1("Results & visualization")
+    md("The main panel shows four diagrams - **Bending Moment, Shear, Normal Force, "
+       "Deflection** - for the selected **Load Case** and **Result Type**.")
+    h2("Result type")
+    table(["Result Type", "What it applies"],
+          [["Design (ULS)", "ULS partial factors $\\times K_{FI}$, with $\\Phi$ on the vehicle"],
+           ["Characteristic (SLS)", "SLS combination factors, with the SLS $\\Phi$ treatment"],
+           ["Unfactored", "All loads $\\times 1.0$, no dynamic factor"]])
+    h2("Load case")
+    md("The **Total Envelope** is the combined design result (the coupled vehicle + UDL + "
+       "permanent envelope). Individual cases - **Dead Load, Self-weight, Soil, Surcharge, "
+       "Traffic UDL, Vehicle Envelope** - are offered for checking whenever they are present in "
+       "the model.")
+    fig(fig_moment_envelope, "ULS bending Total Envelope of the worked example - the coupled "
+        "vehicle + UDL + permanent envelope used for design.")
+    fig(fig_deflection_envelope, "SLS deflection envelope of the worked example.")
+    h2("Visual toggles")
+    md("- **Labels** - value labels at the diagram extremes (on by default).\n"
+       "- **Show Supports** / **Support Size** - support symbols at the nodes, with adjustable "
+       "size.\n"
+       "- **Section Depth** - overlays each member's true depth to scale (unavailable while any "
+       "section is defined by inertia).\n"
+       "- **Element Names** - labels each member ($S1, W2, \\ldots$) in the system colour; a "
+       "single neutral label is shown where A and B coincide.\n"
+       "- **Target Diagram Height [m]** - scales the diagrams (and the element-label size).")
+    h2("Vehicle step viewer")
+    md("For a moving vehicle you can **step through positions** and read the effect at each "
+       "step, choose the **step direction** (when Both is active), and jump to the **critical "
+       "position** per member. A **step-effects selector** shows the vehicle, the UDL, or their "
+       "combination separately - useful for seeing how the coupled envelope is built and which "
+       "vehicle location governs.")
+    h2("Reactions")
+    md("Support reactions $R_x, R_y, M_z$ are tabulated per node for the selected result.")
+
+    # ---- Reports & export ------------------------------------------------
+    h1("Reports & data export")
+    md("**PDF report** (*Report Generation*) - a full document: basis of analysis, global "
+       "settings, a per-system input summary (with an element-layout diagram), the ULS/SLS "
+       "Total Envelopes, per-component results, the equilibrium check and an appendix. If only "
+       "one system is validly defined, the report covers that system alone and notes the "
+       "exclusion.")
+    md("**Data package** (*Tabular Data*) - an Excel/CSV export with a settings sheet and one "
+       "sheet per load case plus the total envelopes, for independent verification.")
+
+    # =====================================================================
+    # PART C - THEORY & METHODOLOGY
+    # =====================================================================
+    part("Part C - Theory & methodology")
+
+    h1("Finite-element formulation")
     md("BriCoS is a 2D **matrix-stiffness** solver. Prismatic members use the "
        "**Euler-Bernoulli** beam element, or **Timoshenko** when shear deformation is enabled "
        "(via $\\Phi_s = 12EI/(GA_s L^2)$). Non-prismatic members are integrated with "
@@ -447,99 +738,55 @@ def manual_blocks():
          "(exact fixed-end contributions are included). For non-prismatic members the section "
          "variation is represented per sub-element, so results **converge** as the mesh is "
          "refined rather than being exact at any mesh size.")
-    h2("5.2 Deflections")
+    h1("Deflections")
     md("Deflections are interpolated between nodes from the nodal displacements with Hermite "
        "shape functions. The local deflection of a load acting *between* nodes is not added; the "
        "resulting underestimate is bounded by about $P\\,L_{mesh}^3/(192EI)$ per point load and "
        "vanishes as the mesh is refined.")
-    h2("5.3 Moving loads")
+    h1("Moving loads")
     md("Traffic is evaluated **quasi-statically**: the vehicle is stepped across the structure "
        "and the absolute max/min envelopes of every effect are accumulated. Where both Vehicle A "
        "and B are defined, their envelopes are superposed independently (maxima may be combined "
        "even if they occur at different positions).")
-    h2("5.4 Sign convention & local axes")
+    h1("Load combinations")
+    md("Design effects are built by superposing **factored envelopes**:")
+    md("$$E_d = K_{FI}\\,(\\gamma_G E_{SW} + \\gamma_{Soil} E_{Soil} + "
+       "\\gamma_Q \\Phi\\, E_{Veh} + \\gamma_Q E_{Surch})$$")
+    md("where $K_{FI}$ is the consequence-class factor and the $\\gamma$ are the partial "
+       "factors set per system (Part B, *Design factors*). The **Unfactored** combination (all "
+       "loads x 1.0, no dynamic factor) is always available; if neither ULS nor SLS is selected "
+       "it is the only result.")
+    h1("The dynamic factor")
+    md("Moving-vehicle effects are amplified by the dynamic factor $\\Phi$, calculated from the "
+       "influence length (or set manually; the controls are in Part B). The influence length is "
+       "taken either per span (DK NA A.2.3.5(2)) or for the combined system (EN 1991-2:2003, "
+       "Table 6.2); $\\Phi$ can be applied per member or as a single governing value, and "
+       "reduced for SLS ($1 + (\\Phi-1)/2$, *Vejledning* 5.4.2).")
+    call('standard', "The Traffic UDL is **not** amplified by $\\Phi$ - its intensity already "
+         "includes the dynamic increment (DK NA A.2.3.2).")
+    h1("The coupled Total Envelope")
+    md("When a vehicle and a Traffic UDL coexist, BriCoS does not simply add their separate "
+       "envelopes. For each vehicle position it combines the factored vehicle effect with the "
+       "factored **adverse UDL outside that position's clear-distance window**, and envelopes "
+       "that together with the vehicle-absent situation (full adverse UDL alone). This coupled "
+       "result is the **Total Envelope** (see Part B for the window/clear-distance controls).")
+    h1("Sign convention & local axes")
     fig(fig_sign_convention, "Bending is sagging-positive and plotted on the tension side; "
         "$+N$ is tension. Internal-force signs follow the member's local axes.")
     md("- **Spans (horizontal):** local x aligns with global X, so $N$ is horizontal axial force "
        "and $V$ is vertical shear.\n"
        "- **Walls (vertical):** local x runs along the member, so $N$ is the vertical axial load "
        "and $V$ is the horizontal shear.")
-    h2("5.5 Equilibrium check")
+    h1("Equilibrium check")
     md("After solving, BriCoS sums the applied loads against the support reactions per load case "
        "and reports the residual as a built-in QA check (shown in the report).")
 
-    # ---- 6. Load combinations & standards -------------------------------
-    h1("6. Load combinations & standards")
-    md("Design effects are built by superposing **factored envelopes**:")
-    md("$$E_d = K_{FI}\\,(\\gamma_G E_{SW} + \\gamma_{Soil} E_{Soil} + "
-       "\\gamma_Q \\Phi\\, E_{Veh} + \\gamma_Q E_{Surch})$$")
-    md("where $K_{FI}$ is the consequence-class factor and the $\\gamma$ are the partial "
-       "factors set per system. The **Unfactored** combination (all loads x 1.0, no dynamic "
-       "factor) is always available; if neither ULS nor SLS is selected it is the only result.")
-    h2("6.1 Partial factors (ULS / SLS)")
-    md("ULS uses the design partial factors (x $K_{FI}$); SLS uses the characteristic "
-       "combination factors. The SLS set follows *Vejledning* Fig. B3.2 (e.g. Vehicle B 0.75, "
-       "Traffic UDL 0.40).")
-    h2("6.2 Dynamic factor $\\Phi$")
-    md("Moving-vehicle effects are amplified by the dynamic factor $\\Phi$, calculated from the "
-       "influence length (or set manually). The influence length is taken either per span "
-       "(DK NA A.2.3.5(2)) or for the combined system (EN 1991-2:2003, Table 6.2); $\\Phi$ can be "
-       "applied per member or as a single governing value, and reduced for SLS "
-       "($1 + (\\Phi-1)/2$, *Vejledning* 5.4.2).")
-    fig(fig_phi_curve, "Dynamic factor vs influence length (the form used by BriCoS): 1.25 up to "
-        "5 m, decreasing to 1.05 at 50 m.")
-    call('standard', "The Traffic UDL is **not** amplified by $\\Phi$ - its intensity already "
-         "includes the dynamic increment (DK NA A.2.3.2).")
-    h2("6.3 The coupled Total Envelope")
-    md("When a vehicle and a Traffic UDL coexist, BriCoS does not simply add their separate "
-       "envelopes. For each vehicle position it combines the factored vehicle effect with the "
-       "factored **adverse UDL outside that position's clear-distance window**, and envelopes "
-       "that together with the vehicle-absent situation (full adverse UDL alone). This coupled "
-       "result is the **Total Envelope**.")
-    fig(fig_moment_envelope, "ULS bending Total Envelope of the worked example - the coupled "
-        "vehicle + UDL + permanent envelope used for design.")
+    # =====================================================================
+    # PART D - REFERENCE
+    # =====================================================================
+    part("Part D - Reference")
 
-    # ---- 7. Results & visualization -------------------------------------
-    h1("7. Results & visualization")
-    md("The main panel shows four diagrams - **Bending Moment, Shear, Normal Force, "
-       "Deflection** - for the selected **Load Case** and **Result Type** (Design (ULS), "
-       "Characteristic (SLS), or Unfactored). The *Total Envelope* case is the combined design "
-       "result; individual cases (Dead Load, Soil, Surcharge, Traffic UDL, Vehicle Envelope, "
-       "Self-weight) are available for checking.")
-    fig(fig_deflection_envelope, "SLS deflection envelope of the worked example.")
-    h2("7.1 Visual toggles")
-    md("- **Labels** - value labels at the diagram extremes.\n"
-       "- **Show Supports** - support symbols at the nodes.\n"
-       "- **Section Depth** - overlays each member's true depth to scale.\n"
-       "- **Element Names** - labels each member (S1, W2, ...) in the system colour; a single "
-       "neutral label is shown where A and B coincide.\n"
-       "- **Target Diagram Height** - scales the diagrams (and the element-label size).")
-    h2("7.2 Vehicle step viewer")
-    md("For a moving vehicle you can step through positions and see the effect at each step, "
-       "and jump to the critical position per member - useful for understanding which vehicle "
-       "location governs.")
-    h2("7.3 Reactions")
-    md("Support reactions ($R_x, R_y, M_z$) are tabulated per node for the selected result.")
-
-    # ---- 8. Reports & export --------------------------------------------
-    h1("8. Reports & data export")
-    md("**PDF report** (*Report Generation*): a full document with the basis of analysis, "
-       "global settings, per-system input summary (including an element-layout diagram), the "
-       "ULS/SLS Total Envelopes, per-component results, the equilibrium check and an appendix. "
-       "If only one system is validly defined, the report covers that system alone and notes the "
-       "exclusion.")
-    md("**Data package** (*Tabular Data*): an Excel/CSV export with a settings sheet and one "
-       "sheet per load case plus the total envelopes, for independent verification.")
-
-    # ---- 9. Session management ------------------------------------------
-    h1("9. Saving & loading")
-    md("*File Operations* downloads the full configuration as a CSV you can re-upload later. "
-       "BriCoS also autosaves the session periodically (configurable), so work is not lost on a "
-       "refresh.")
-
-    # ---- 10. Reference ---------------------------------------------------
-    h1("10. Reference")
-    h2("10.1 Standards")
+    h1("Standards")
     md("- **EN 1991-2:2003** - traffic loads on bridges (UDL application 4.3.2(1)(b); dynamic "
        "factor Table 6.2).\n"
        "- **EN 1991-2 DK NA:2017** - Danish National Annex, Annex A (dynamic factor A.2.3.2; "
@@ -547,18 +794,22 @@ def manual_blocks():
        "- **Vejledning til belastnings- og beregningsgrundlag for broer** - classification "
        "factors (5.3.1), SLS dynamic-factor reduction (5.4.2), partial factors (Fig. B3.1 / "
        "B3.2, Bilag 3).")
-    h2("10.2 Key assumptions")
+    h1("Key assumptions & limitations")
     md("- 2D, linear-elastic; rigid connections on centrelines.\n"
+       "- Single longitudinal strip ($b_{eff}$); no transverse load distribution (conservative "
+       "for slabs - see Part B, *Sections and the Section Profiler*).\n"
        "- One partial factor per permanent action (max and min); favourable/unfavourable not "
        "split automatically.\n"
        "- Non-prismatic results converge with mesh refinement; prismatic results are "
        "mesh-independent.\n"
        "- Non-prismatic Timoshenko shear deformation is not included.")
-    h2("10.3 Glossary")
+    h1("Glossary")
     table(["Term", "Meaning"],
           [["$K_{FI}$", "Consequence-class factor"],
            ["$\\Phi$", "Dynamic amplification factor"],
+           ["$L_{inf}$", "Influence length used to determine $\\Phi$"],
            ["$b_{eff}$", "Effective width of the analysis strip"],
+           ["Adverse-only", "A load placed only where it worsens the effect at each point"],
            ["ULS / SLS", "Ultimate / Serviceability Limit State"],
            ["S# / W#", "Span / Wall element identifiers"],
            ["Total Envelope", "Coupled, factored design envelope (vehicle + UDL + permanent)"]])
@@ -666,6 +917,8 @@ def build_manual_pdf(buffer):
             styles.add(ParagraphStyle(name=name, parent=styles['Normal'], **kw))
 
     _add('MTitle', fontSize=20, spaceAfter=6, fontName='Helvetica-Bold')
+    _add('MPart', fontSize=17, spaceBefore=18, spaceAfter=8, fontName='Helvetica-Bold',
+         textColor=colors.HexColor('#0d2440'))
     _add('MH1', fontSize=15, spaceBefore=14, spaceAfter=6, fontName='Helvetica-Bold',
          textColor=colors.HexColor('#1f3b66'))
     _add('MH2', fontSize=12.5, spaceBefore=9, spaceAfter=4, fontName='Helvetica-Bold')
@@ -691,7 +944,10 @@ def build_manual_pdf(buffer):
         n1 = n2 = 0
         for block in manual_blocks():
             kind = block[0]
-            if kind == 'h1':
+            if kind == 'part':
+                flow.append(Spacer(1, 0.3 * cm))
+                flow.append(Paragraph(_inline_md_to_rl(block[1]), styles['MPart']))
+            elif kind == 'h1':
                 n1 += 1
                 n2 = 0
                 flow.append(Paragraph(f"{n1}. " + _inline_md_to_rl(_strip_num(block[1])), styles['MH1']))
@@ -779,7 +1035,10 @@ def render_manual_streamlit():
     n1 = n2 = 0
     for block in manual_blocks():
         kind = block[0]
-        if kind == 'h1':
+        if kind == 'part':
+            st.divider()
+            st.markdown(f"# {block[1]}")
+        elif kind == 'h1':
             n1 += 1
             n2 = 0
             st.markdown(f"## {n1}. {_strip_num(block[1])}")
