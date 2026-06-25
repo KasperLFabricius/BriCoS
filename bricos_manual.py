@@ -329,7 +329,11 @@ def fig_element_dof():
         th = np.linspace(0.25, 2.5, 30)
         fig.add_trace(go.Scatter(x=x + 1.2 * np.cos(th), y=y + 1.2 * np.sin(th), mode='lines',
                                  line=dict(color='rgb(33,102,64)', width=1.8), hoverinfo='skip'))
-        fig.add_annotation(x=x + 1.5, y=y + 1.5, text=f"&theta;<sub>{lbl}</sub>", showarrow=False,
+        # Plotly renders raw Unicode but not named HTML entities, so "&theta;"
+        # would show literally - emit the theta character (U+03B8) via chr(),
+        # keeping this source file ASCII-only.
+        theta = chr(0x3b8)
+        fig.add_annotation(x=x + 1.5, y=y + 1.5, text=f"{theta}<sub>{lbl}</sub>", showarrow=False,
                            font=dict(size=12, color='rgb(33,102,64)'))
         fig.add_annotation(x=x, y=y - 0.85, text=f"node {lbl}", showarrow=False,
                            font=dict(size=9, color='grey'))
@@ -804,6 +808,23 @@ def manual_blocks():
        "**Euler-Bernoulli**. $G$ comes from $E$ and $\\nu$, and the shear area $A_s$ from "
        "$b_{eff}$. Shear deformation matters when a member is short relative to its depth (deep "
        "beams, squat piers).")
+    md("Written out explicitly, with $k_a = EA/L$ the axial stiffness and "
+       "$\\beta = EI/[L^3(1+\\Phi_s)]$ the bending base term, the element's local stiffness "
+       "matrix - for the degrees of freedom ordered $u_i, v_i, \\theta_i, u_j, v_j, \\theta_j$ - "
+       "is:")
+    table(["", "$u_i$", "$v_i$", "$\\theta_i$", "$u_j$", "$v_j$", "$\\theta_j$"],
+          [["$u_i$", "$k_a$", "0", "0", "$-k_a$", "0", "0"],
+           ["$v_i$", "0", "$12\\beta$", "$6L\\beta$", "0", "$-12\\beta$", "$6L\\beta$"],
+           ["$\\theta_i$", "0", "$6L\\beta$", "$(4+\\Phi_s)L^2\\beta$", "0", "$-6L\\beta$", "$(2-\\Phi_s)L^2\\beta$"],
+           ["$u_j$", "$-k_a$", "0", "0", "$k_a$", "0", "0"],
+           ["$v_j$", "0", "$-12\\beta$", "$-6L\\beta$", "0", "$12\\beta$", "$-6L\\beta$"],
+           ["$\\theta_j$", "0", "$6L\\beta$", "$(2-\\Phi_s)L^2\\beta$", "0", "$-6L\\beta$", "$(4+\\Phi_s)L^2\\beta$"]])
+    md("Setting $\\Phi_s = 0$ reduces this to the **Euler-Bernoulli** element "
+       "($\\beta = EI/L^3$, rotational coefficients $4$ and $2$). The matrix is rotated from "
+       "local to global axes by $k_{global} = T^T k\\,T$ - with $T$ built from the element's "
+       "direction cosines $c_x, c_y$ - and assembled into the global $K$. A **non-prismatic** "
+       "member keeps these same six degrees of freedom but replaces the bending block with the "
+       "numerically integrated form below.")
     h2("Non-prismatic members")
     md("A member whose depth varies (a Section Profiler taper or 3-point profile) has no single "
        "$I$. BriCoS forms its stiffness by **displacement-based Euler-Bernoulli integration**: "
@@ -977,6 +998,7 @@ def manual_blocks():
 
 _GREEK = {
     '\\Phi': '&Phi;', '\\gamma': '&gamma;', '\\theta': '&theta;', '\\nu': '&nu;',
+    '\\beta': '&beta;', '\\alpha': '&alpha;',
     '\\approx': '&approx;', '\\cdot': '&middot;', '\\times': '&times;',
     '\\le': '&le;', '\\leq': '&le;', '\\ge': '&ge;', '\\geq': '&ge;',
 }
