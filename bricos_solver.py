@@ -227,6 +227,110 @@ def get_local_fixed_end_forces_for_load(el, load):
         return f_loc
     return el.get_fixed_end_forces(load['type'], load['params'])
 
+def accumulate_foundation_springs(nodes, elements, foundations_cfg):
+    """Nodal springs from distributed element spring supports (elastic
+    foundation). Each definition beds one whole parent member on
+    per-unit-length springs kx, ky [kN/m per m] and km [kNm/rad per m] in
+    GLOBAL axes (the same components as the point supports). Every
+    sub-element lumps half its length to each end node, so the summed nodal
+    stiffness per parent equals k_per_m * L exactly at any mesh size.
+
+    Returns (springs, node_map): {node_id: [kx, ky, km]} to merge into the
+    boundary-spring dict, and {parent: sorted node ids} for reaction
+    aggregation.
+    """
+    by_parent = {}
+    for fnd in foundations_cfg or []:
+        if not isinstance(fnd, dict):
+            continue
+        el = fnd.get('el')
+        k_vec = [max(0.0, float(fnd.get(c, 0.0) or 0.0)) for c in ('kx', 'ky', 'km')]
+        if el and any(v > 0.0 for v in k_vec):
+            by_parent[str(el)] = k_vec
+
+    springs = {}
+    node_map = {}
+    if not by_parent:
+        return springs, node_map
+    trib_end = {}
+    for el_data in elements:
+        pid = el_data.get('parent')
+        k_per_m = by_parent.get(pid)
+        if k_per_m is None:
+            continue
+        ni, nj = el_data['nodes']
+        xi, yi = nodes[ni]
+        xj, yj = nodes[nj]
+        trib = 0.5 * float(np.hypot(xj - xi, yj - yi))
+        # Equal segmentation per member: any sub-element's half-length is
+        # the tributary length of the parent's end nodes (used downstream
+        # to keep reaction rows summing exactly to the applied loads).
+        trib_end.setdefault(pid, trib)
+        pid_nodes = node_map.setdefault(pid, set())
+        for nid in (ni, nj):
+            acc = springs.setdefault(nid, [0.0, 0.0, 0.0])
+            for c in range(3):
+                acc[c] += k_per_m[c] * trib
+            pid_nodes.add(nid)
+    return springs, {p: {'nodes': sorted(s), 'end_trib': trib_end[p]}
+                     for p, s in node_map.items()}
+
+
+def foundation_reaction_resultants(case_res, foundations_cfg,
+                                    foundation_node_map=None,
+                                    point_support_nodes=None):
+    """Per-parent reaction resultants of distributed element spring supports,
+    integrated from a case dict's displacement fields: r(x) = -k_per_m * d(x),
+    R = -k_per_m * integral(d dx). Works on parent-level combined results -
+    static cases (def_x/def_y) and envelopes (def_x_max/min alike, where the
+    bound uses the opposite displacement extreme).
+
+    Where a bedded member ENDS at a point-support node, that node's
+    end-force reaction row already contains the local bedding tributary
+    share; it is subtracted here (end_trib from the foundation node map) so
+    the reaction rows sum exactly to the applied loads. Rotational bedding
+    (km) has no meaningful scalar resultant and is not reported.
+
+    Returns {parent: {'Rx_max','Rx_min','Ry_max','Ry_min'}} [kN].
+    """
+    out = {}
+    pt_nodes = set(point_support_nodes or [])
+    meta_map = foundation_node_map or {}
+    for fnd in foundations_cfg or []:
+        if not isinstance(fnd, dict):
+            continue
+        pid = fnd.get('el')
+        dat = case_res.get(pid) if pid else None
+        if dat is None or 'x' not in dat:
+            continue
+        x = np.asarray(dat['x'], dtype=float)
+        if x.size < 2:
+            continue
+
+        meta = meta_map.get(pid) or {}
+        end_trib = float(meta.get('end_trib', 0.0))
+        # (station index, node id) of the member's two ends.
+        shared_ends = [idx for idx, nid in ((0, dat.get('ni_id')), (-1, dat.get('nj_id')))
+                       if end_trib > 0.0 and nid in pt_nodes]
+
+        def bounds(def_key, k):
+            d_max = np.asarray(dat.get(f'{def_key}_max', dat.get(def_key, 0.0)), dtype=float)
+            d_min = np.asarray(dat.get(f'{def_key}_min', dat.get(def_key, 0.0)), dtype=float)
+            # k >= 0: the largest reaction comes from the most negative
+            # displacement extreme and vice versa.
+            r_max = -k * (np.trapz(d_min, x) - end_trib * sum(d_min[i] for i in shared_ends))
+            r_min = -k * (np.trapz(d_max, x) - end_trib * sum(d_max[i] for i in shared_ends))
+            return r_max, r_min
+
+        kx = max(0.0, float(fnd.get('kx', 0.0) or 0.0))
+        ky = max(0.0, float(fnd.get('ky', 0.0) or 0.0))
+        rx_max, rx_min = bounds('def_x', kx)
+        ry_max, ry_min = bounds('def_y', ky)
+        out[pid] = {'Rx_max': rx_max, 'Rx_min': rx_min,
+                    'Ry_max': ry_max, 'Ry_min': ry_min}
+    return out
+
+
 def build_stiffness_matrix(nodes, elements, restraints_stiffness, shear_config):
     node_keys = sorted(nodes.keys())
     node_map = {nid: i for i, nid in enumerate(node_keys)}
@@ -469,7 +573,9 @@ def get_safe_error_result():
         'Phi Members': {},
         'Traffic UDL': {}, 'udl_line_load': 0.0,
         'Equilibrium': {},
-        'Restrained Nodes': []
+        'Restrained Nodes': [],
+        'Point Support Nodes': [],
+        'Foundation Node Map': {}
     }
 
 def split_distributed_trapezoid_for_sub_element(params_list, loc_start, loc_end, tol=1e-9):
@@ -888,6 +994,27 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
     if len(elems_base) == 0:
         # Return None for nodes and props to signal invalid geometry to UI/Report
         return get_safe_error_result(), None, None, "No valid structural elements defined."
+
+    # Distributed element spring supports (elastic foundation): lump the
+    # per-unit-length stiffness to the mesh nodes by tributary length and
+    # merge into the boundary-spring dict, so assembly, the -k*d reaction
+    # sums and the equilibrium check treat them exactly like point supports.
+    # Point-support ids are recorded FIRST: reaction tables keep listing
+    # those per node and aggregate the remaining (pure foundation) nodes
+    # per parent member.
+    point_support_nodes = sorted(restraints.keys())
+    found_springs, foundation_node_map = accumulate_foundation_springs(
+        nodes, elems_base, params.get('elastic_foundations'))
+    for nid, add_vec in found_springs.items():
+        base_vec = restraints.get(nid)
+        if base_vec is None:
+            restraints[nid] = list(add_vec)
+        else:
+            # New list on purpose: the stored vector may reference the
+            # params['supports'] entry and must not be mutated in place.
+            restraints[nid] = [
+                (0.0 if base_vec[c] is None else float(base_vec[c])) + add_vec[c]
+                for c in range(3)]
 
     shear_config = {
         'use': params.get('use_shear_def', False),
@@ -1773,6 +1900,10 @@ def _run_raw_analysis_cached(params, phi_val_override=None):
         # zero-height wall places its restraint at the top node (200+i),
         # which coordinate/id heuristics misclassify as a free node.
         'Restrained Nodes': sorted(restraints.keys()),
+        # Point supports vs distributed element springs: reaction summaries
+        # list the former per node and aggregate the latter per parent.
+        'Point Support Nodes': point_support_nodes,
+        'Foundation Node Map': foundation_node_map,
         'Reactions': calculate_reactions(nodes, res_sw),
         # Process-unique identity for the combine_results memo: a raw
         # result reused from the solver cache keeps its token, a fresh
@@ -2159,5 +2290,7 @@ def _combine_results_impl(raw_res, params, result_mode):
         'Phi Members': phi_members,
         'phi_sls_mode_applied': sls_mode if sls_active else 'Same',
         'Restrained Nodes': raw_res.get('Restrained Nodes', []),
+        'Point Support Nodes': raw_res.get('Point Support Nodes', []),
+        'Foundation Node Map': raw_res.get('Foundation Node Map', {}),
         'Reactions': raw_res.get('Reactions', {})
     }

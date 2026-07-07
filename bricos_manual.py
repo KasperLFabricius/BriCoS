@@ -248,7 +248,8 @@ def fig_support_types():
     centres = [(4.0, "Fixed", "Kx, Ky, M"),
                (12.0, "Pinned", "Kx, Ky"),
                (20.0, "Roller (X-free)", "Ky"),
-               (28.0, "Spring", "Kx, Ky, M")]
+               (28.0, "Spring", "Kx, Ky, M"),
+               (36.0, "Element spring", "k per metre")]
     ground = 1.4
     for cx, name, dofs in centres:
         # ground hatch
@@ -269,18 +270,25 @@ def fig_support_types():
             fig.add_trace(go.Scatter(x=[cx - 0.6, cx, cx + 0.6], y=[ground + 0.2] * 3, mode='markers',
                                      marker=dict(symbol='circle', size=8, color='white',
                                                  line=dict(color='black', width=1)), hoverinfo='skip'))
-        else:  # Spring
+        elif name == "Spring":
             zz_y = np.linspace(ground, ground + 1.4, 9)
             zz_x = cx + 0.45 * np.array([0, 1, -1, 1, -1, 1, -1, 1, 0])
             fig.add_trace(go.Scatter(x=zz_x, y=zz_y, mode='lines', line=dict(color='black', width=1.4), hoverinfo='skip'))
+        else:  # Element spring: distributed mini-springs along the member
+            for sx in np.linspace(cx - 1.4, cx + 1.4, 4):
+                zz_y = np.linspace(ground, ground + 1.4, 9)
+                zz_x = sx + 0.18 * np.array([0, 1, -1, 1, -1, 1, -1, 1, 0])
+                fig.add_trace(go.Scatter(x=zz_x, y=zz_y, mode='lines',
+                                         line=dict(color='black', width=1.1), hoverinfo='skip'))
         # node + member stub
-        fig.add_trace(go.Scatter(x=[cx], y=[ground + 1.45], mode='markers',
-                                 marker=dict(symbol='circle', size=7, color='black'), hoverinfo='skip'))
+        if name != "Element spring":
+            fig.add_trace(go.Scatter(x=[cx], y=[ground + 1.45], mode='markers',
+                                     marker=dict(symbol='circle', size=7, color='black'), hoverinfo='skip'))
         fig.add_shape(type='line', x0=cx - 1.6, y0=ground + 1.45, x1=cx + 1.6, y1=ground + 1.45,
                       line=dict(color='#1f3b66', width=3))
         fig.add_annotation(x=cx, y=ground + 2.2, text=f"<b>{name}</b>", showarrow=False, font=dict(size=11))
         fig.add_annotation(x=cx, y=ground - 0.95, text=dofs, showarrow=False, font=dict(size=9, color='grey'))
-    return _blank_axes(fig, x_range=[0, 32], y_range=[-0.6, 4.6], height=240)
+    return _blank_axes(fig, x_range=[0, 40], y_range=[-0.6, 4.6], height=240)
 
 
 def fig_udl_coupling_window():
@@ -578,8 +586,20 @@ def manual_blocks():
           [["Fixed", "$K_x$, $K_y$ and rotation", "Frame wall base (encastre)"],
            ["Pinned", "$K_x$ and $K_y$ (rotation free)", "Pinned bearing"],
            ["Roller (X-free)", "$K_y$ only", "Expansion bearing"],
-           ["Custom spring", "User $K_x$, $K_y$, $K_\\theta$", "Elastic foundation / bearing"]])
-    fig(fig_support_types, "The four support types and the degrees of freedom each restrains.")
+           ["Custom spring", "User $K_x$, $K_y$, $K_\\theta$", "Elastic foundation / bearing"],
+           ["Element spring", "Distributed $K_x$, $K_y$, $K_\\theta$ per metre",
+            "Bedded member (soil-supported slab / wall)"]])
+    fig(fig_support_types, "The support types and the degrees of freedom each restrains. The "
+        "element spring beds a whole member on distributed springs.")
+    md("**Element Spring Supports (Elastic Foundation)** bed a whole member - a span or a wall "
+       "- on distributed springs along its **full length**: pick the element (S1, W1, ...) and "
+       "enter $K_x$, $K_y$ [kN/m per m] and $K_\\theta$ [kNm/rad per m] in **global axes**, the "
+       "same components as the point supports. This is the classical **beam on elastic "
+       "foundation** (Winkler) model: use $K_y$ under a ground-bearing span, $K_x$ for lateral "
+       "subgrade reaction on a buried wall. The stiffness is lumped to the mesh nodes by "
+       "tributary length (the summed nodal stiffness equals $k \\cdot L$ at any mesh size), and "
+       "the reaction table reports one **integrated resultant row per bedded element** "
+       "alongside the point-support rows.")
     h2("Alignment")
     md("A span can be **Straight (horizontal)** or **Inclined**. Inclination is set either by "
        "**Slope [%]** or by **Delta height (end - start) [m]**, so ramped or stepped decks can "
@@ -921,8 +941,9 @@ def manual_blocks():
        "**on** the structure, so at equilibrium they cancel the applied loads: the residual "
        "$\\sum$ applied $+ \\sum$ reactions should be at machine-zero, confirming the assembly "
        "and solve are self-consistent. It is shown in the report as a built-in QA check. "
-       "Patterned cases such as the adverse-only UDL have no single applied total and are "
-       "excluded from this check.")
+       "Element spring supports enter the sums like any other spring ($-k \\cdot d$ at every "
+       "bedded mesh node), so a bedded model must balance the same way. Patterned cases such "
+       "as the adverse-only UDL have no single applied total and are excluded from this check.")
 
     h1("Transverse load distribution on slab bridges")
     md("BriCoS analyses a **single longitudinal strip** of width $b_{eff}$ and does not "

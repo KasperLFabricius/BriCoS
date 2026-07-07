@@ -792,16 +792,22 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
     if old_mode != new_mode_sel:
         # Handle Mode Switching Logic
         if new_mode_sel == 'Superstructure':
+            fnd_all = p.get('elastic_foundations', [])
+            fnd_walls = [f for f in fnd_all if str(f.get('el', '')).startswith('W')]
             st.session_state[curr]['backup'] = {
                 'h_list': copy.deepcopy(p['h_list']),
                 'Iw_list': copy.deepcopy(p['Iw_list']),
                 'soil': copy.deepcopy(p['soil']),
-                'surcharge': copy.deepcopy(p['surcharge'])
+                'surcharge': copy.deepcopy(p['surcharge']),
+                # Wall spring supports have no member in Superstructure mode;
+                # stash them with the walls and restore together.
+                'elastic_foundations_walls': copy.deepcopy(fnd_walls),
             }
             p['h_list'] = [0.0] * len(p['h_list'])
             p['Iw_list'] = [0.0] * len(p['Iw_list'])
             p['soil'] = []
             p['surcharge'] = []
+            p['elastic_foundations'] = [f for f in fnd_all if f not in fnd_walls]
         elif new_mode_sel == 'Frame':
             b = st.session_state[curr].get('backup', {})
             if b:
@@ -809,6 +815,12 @@ with st.sidebar.expander("Design Factors & Type", expanded=False):
                  p['Iw_list'] = b.get('Iw_list', p['Iw_list'])
                  p['soil'] = b.get('soil', p['soil'])
                  p['surcharge'] = b.get('surcharge', p['surcharge'])
+                 restored = b.get('elastic_foundations_walls', [])
+                 if restored:
+                     kept = p.get('elastic_foundations', [])
+                     have = {f.get('el') for f in kept}
+                     p['elastic_foundations'] = kept + [
+                         f for f in restored if f.get('el') not in have]
         p['mode'] = new_mode_sel
         p['last_mode'] = new_mode_sel
         st.rerun()
@@ -1186,6 +1198,65 @@ with st.sidebar.expander("Boundary Conditions", expanded=False):
             ky = col_k2.number_input(f"Ky", value=float(curr_s['k'][1]), format="%.1e", key=f"{curr}_ky_{i}", disabled=ui_locked)
             km = col_k3.number_input(f"Km", value=float(curr_s['k'][2]), format="%.1e", key=f"{curr}_km_{i}", disabled=ui_locked)
             p['supports'][i]['k'] = [kx, ky, km]
+
+    # --- ELEMENT SPRING SUPPORTS (ELASTIC FOUNDATION) ---
+    st.markdown("---")
+    st.markdown("**Element Spring Supports (Elastic Foundation)**")
+    help_efnd = (
+        "Distributed spring support along the FULL length of an element, "
+        "entered per unit length: Kx, Ky [kN/m per m] and Km [kNm/rad per m] "
+        "in global axes - the same components as the point supports. The "
+        "solver lumps the stiffness to the mesh nodes by tributary length "
+        "(summed nodal stiffness = k x L at any mesh size). Reactions are "
+        "reported as one resultant row per bedded element."
+    )
+    if not isinstance(p.get('elastic_foundations'), list):
+        p['elastic_foundations'] = []
+
+    # Eligible members: all spans, plus active walls in Frame mode.
+    ef_eligible = [f"S{i+1}" for i in range(n_spans)]
+    if p['mode'] == 'Frame':
+        ef_eligible += [f"W{i+1}" for i in range(n_spans + 1)
+                        if p['h_list'][i] > 1e-4]
+    ef_used = [f.get('el') for f in p['elastic_foundations'] if isinstance(f, dict)]
+    # Definitions that no longer match the geometry (mode/span-count edits)
+    # stay in the dict - validation reports them - but are flagged here.
+    for fnd in list(p['elastic_foundations']):
+        el = fnd.get('el') if isinstance(fnd, dict) else None
+        if not el:
+            p['elastic_foundations'].remove(fnd)
+            continue
+        gone = el not in ef_eligible
+        c_el, c_kx, c_ky, c_km = st.columns([1.1, 2, 2, 2])
+        c_el.markdown(f"**{el}**" + (" :warning:" if gone else ""))
+        fnd['kx'] = c_kx.number_input(
+            "Kx [kN/m/m]", value=float(fnd.get('kx', 0.0)), min_value=0.0,
+            format="%.1e", key=f"{curr}_ef_kx_{el}", disabled=ui_locked, help=help_efnd)
+        fnd['ky'] = c_ky.number_input(
+            "Ky [kN/m/m]", value=float(fnd.get('ky', 0.0)), min_value=0.0,
+            format="%.1e", key=f"{curr}_ef_ky_{el}", disabled=ui_locked)
+        fnd['km'] = c_km.number_input(
+            "Km [kNm/rad/m]", value=float(fnd.get('km', 0.0)), min_value=0.0,
+            format="%.1e", key=f"{curr}_ef_km_{el}", disabled=ui_locked)
+        if c_el.button("Remove", key=f"{curr}_ef_rm_{el}", disabled=ui_locked,
+                       help=f"Remove the {el} spring support"):
+            p['elastic_foundations'] = [
+                f for f in p['elastic_foundations'] if f.get('el') != el]
+            st.rerun()
+
+    ef_free = [e for e in ef_eligible if e not in ef_used]
+    if ef_free:
+        c_sel, c_add = st.columns([3, 1])
+        ef_new = c_sel.selectbox(
+            "Add spring support on element", ef_free,
+            key=f"{curr}_ef_add_sel", disabled=ui_locked, help=help_efnd)
+        c_add.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
+        if c_add.button("Add", key=f"{curr}_ef_add_btn", disabled=ui_locked):
+            p['elastic_foundations'].append(
+                {'el': ef_new, 'kx': 0.0, 'ky': 0.0, 'km': 0.0})
+            st.rerun()
+    elif not p['elastic_foundations']:
+        st.caption("No eligible elements (define spans/walls first).")
 
 # --- VEHICLES ---
 with st.sidebar.expander("Vehicle Definitions", expanded=False):

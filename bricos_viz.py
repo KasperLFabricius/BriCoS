@@ -440,6 +440,44 @@ def create_plotly_fig(
                 
                 _add_support_icon(fig, pos_x, pos_y, s_type, support_size, color_override)
 
+            # Distributed element spring supports (elastic foundation):
+            # 45-degree hatch ticks along the bedded member, on the span
+            # underside / wall outside, sized by the support-size control.
+            for fnd in params.get('elastic_foundations', []) or []:
+                el = str(fnd.get('el', '')) if isinstance(fnd, dict) else ''
+                if len(el) < 2 or not el[1:].isdigit():
+                    continue
+                if not any(float(fnd.get(c, 0.0) or 0.0) > 0.0 for c in ('kx', 'ky', 'km')):
+                    continue
+                idx = int(el[1:]) - 1
+                if el.startswith('S'):
+                    n_a, n_b = 200 + idx, 200 + idx + 1
+                elif el.startswith('W'):
+                    n_a, n_b = 100 + idx, 200 + idx
+                else:
+                    continue
+                if not sys_nodes_dict or n_a not in sys_nodes_dict or n_b not in sys_nodes_dict:
+                    continue
+                xa, ya = sys_nodes_dict[n_a]
+                xb, yb = sys_nodes_dict[n_b]
+                L_el = float(np.hypot(xb - xa, yb - ya))
+                if L_el < 1e-6:
+                    continue
+                ux, uy = (xb - xa) / L_el, (yb - ya) / L_el
+                px, py = uy, -ux  # spans: downward; walls: outward (+x)
+                t_len = 0.45 * support_size
+                n_ticks = int(max(9, min(41, L_el / 0.5 + 1)))
+                xs, ys = [], []
+                for tpos in np.linspace(0.0, 1.0, n_ticks):
+                    cx0 = xa + (xb - xa) * tpos
+                    cy0 = ya + (yb - ya) * tpos
+                    xs += [cx0, cx0 + (px - ux) * t_len * 0.7, None]
+                    ys += [cy0, cy0 + (py - uy) * t_len * 0.7, None]
+                fig.add_trace(go.Scatter(
+                    x=xs, y=ys, mode='lines',
+                    line=dict(color=color_override, width=1),
+                    opacity=0.55, hoverinfo='skip', showlegend=False))
+
         # UPDATED: Only draw supports if geometry data (geom_A/geom_B) is present and non-empty.
         # geom_A/B are typically the 'Dead Load' result dictionaries containing element definitions.
         # If the solver returns an error state, these will be empty.

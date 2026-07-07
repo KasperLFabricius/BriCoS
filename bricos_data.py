@@ -11,7 +11,7 @@ import time
 # GLOBAL CONFIGURATION
 # ==========================================
 
-APP_VERSION = "0.90"
+APP_VERSION = "0.91"
 AUTOSAVE_FILE = "latest_session.csv"
 
 # ==========================================
@@ -200,6 +200,10 @@ def sanitize_input_data(data):
     # udl_sls_factor; it is now part of the SLS factor set (sls_udl).
     if 'udl_sls_factor' in data:
         data['sls_udl'] = data.pop('udl_sls_factor')
+
+    # Element spring supports arrived in v0.91; older sessions lack the key.
+    if not isinstance(data.get('elastic_foundations'), list):
+        data['elastic_foundations'] = []
 
     return data
 
@@ -812,6 +816,34 @@ def validate_analysis_inputs(params: dict, system_label: str = "System") -> list
         elif any(float(v) < 0.0 for v in k_vec):
             errors.append(f"{system_label}: Support {i+1} stiffness values must not be negative.")
 
+    seen_fnd = set()
+    for fnd in params.get('elastic_foundations', []) or []:
+        el = fnd.get('el') if isinstance(fnd, dict) else None
+        label = f"Element spring support '{el}'" if el else "Element spring support"
+        if not isinstance(fnd, dict) or not isinstance(el, str):
+            errors.append(f"{system_label}: Element spring support definition is malformed.")
+            continue
+        if el in seen_fnd:
+            errors.append(f"{system_label}: {label} is defined more than once.")
+        seen_fnd.add(el)
+        valid_el = False
+        if el.startswith('S') and el[1:].isdigit():
+            valid_el = 1 <= int(el[1:]) <= active_spans
+        elif el.startswith('W') and el[1:].isdigit():
+            idx = int(el[1:])
+            if mode != "Frame":
+                errors.append(f"{system_label}: {label} requires Frame mode (no walls in Superstructure).")
+                continue
+            h_w = _as_float(_list_value(params.get('h_list', []), idx - 1, 0.0), 0.0)
+            valid_el = (1 <= idx <= active_spans + 1) and h_w > ACTIVE_WALL_TOLERANCE_M
+        if not valid_el:
+            errors.append(f"{system_label}: {label} refers to an element not present in the model.")
+        k_vals = [fnd.get('kx', 0.0), fnd.get('ky', 0.0), fnd.get('km', 0.0)]
+        if any(not _is_finite_number(v) for v in k_vals):
+            errors.append(f"{system_label}: {label} stiffness values must be finite.")
+        elif any(float(v) < 0.0 for v in k_vals):
+            errors.append(f"{system_label}: {label} stiffness values must not be negative.")
+
     if mode == "Frame":
         for i in range(active_spans + 1):
             h = _as_float(_list_value(params.get('h_list', []), i, 0.0), 0.0)
@@ -880,10 +912,11 @@ def get_def():
         'E_span_list': [33e6]*10,
         'E_wall_list': [33e6]*11,
         
-        'supports': [], 
-        'soil': [], 
-        'surcharge': [], 
-        
+        'supports': [],
+        'elastic_foundations': [],
+        'soil': [],
+        'surcharge': [],
+
         # Default Vehicle A
         'vehicle': veh_obj, 
         'vehicle_loads': veh_l_str, 
@@ -972,9 +1005,10 @@ def get_clear(name_suffix, current_mode):
         'E_span_list': [30e6]*10, 'E_wall_list': [30e6]*11,
         
         'supports': [],
+        'elastic_foundations': [],
         'soil': [],
-        'surcharge': [], 
-        
+        'surcharge': [],
+
         'vehicle': {'loads': [], 'spacing': []},
         'vehicle_loads': "", 'vehicle_space': "",
         'vehicleB': {'loads': [], 'spacing': []},
@@ -1208,7 +1242,11 @@ def force_ui_update(sys_key, data):
     # alike). Only prefixed keys - a broad "_k" substring match would also
     # delete unrelated keys such as f"{sys_key}_kfi".
     spring_prefixes = (f"{sys_key}_kx_", f"{sys_key}_ky_", f"{sys_key}_km_",
-                       f"{sys_key}_supp_t_")
+                       f"{sys_key}_supp_t_",
+                       # Element spring supports (elastic foundation): the
+                       # editor widgets seed themselves from the dict when
+                       # their keys are absent, so clearing is sufficient.
+                       f"{sys_key}_ef_")
     supp_keys = [k for k in st.session_state.keys() if k.startswith(spring_prefixes)]
     for k in supp_keys: del st.session_state[k]
 

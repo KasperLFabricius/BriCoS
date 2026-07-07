@@ -697,36 +697,57 @@ def render_results_section(sysA, sysB, raw_res_A, raw_res_B, nodes_A, nodes_B):
         
         # C. Reactions
         st.markdown("##### Envelope Support Reactions")
-        restrained_A = (raw_res_A or {}).get('Restrained Nodes')
-        restrained_B = (raw_res_B or {}).get('Restrained Nodes')
+        # Point supports are listed per node; distributed element spring
+        # supports (elastic foundation) are reported as one integrated
+        # resultant row per bedded member. Older cached results without the
+        # split fall back to listing every restrained node.
+        restrained_A = ((raw_res_A or {}).get('Point Support Nodes')
+                        or (raw_res_A or {}).get('Restrained Nodes'))
+        restrained_B = ((raw_res_B or {}).get('Point Support Nodes')
+                        or (raw_res_B or {}).get('Restrained Nodes'))
         reactsA = get_reaction_envelope(rA, nodes_A, sysA['mode'], restrained_A)
         reactsB = get_reaction_envelope(rB, nodes_B, sysB['mode'], restrained_B) if valid_B else {}
-        
+
+        fndA = solver.foundation_reaction_resultants(
+            rA, sysA.get('elastic_foundations'),
+            (raw_res_A or {}).get('Foundation Node Map'), restrained_A)
+        fndB = solver.foundation_reaction_resultants(
+            rB, sysB.get('elastic_foundations'),
+            (raw_res_B or {}).get('Foundation Node Map'), restrained_B) if valid_B else {}
+
         all_react_nodes = sorted(list(set(reactsA.keys()) | set(reactsB.keys())))
+        all_fnd_parents = sorted(set(fndA.keys()) | set(fndB.keys()),
+                                 key=lambda x: (x[0], int(x[1:])))
         r_rows = []
-        
-        for nid in all_react_nodes:
-            label = f"Node {nid}"
-            if nid >= 200: label = f"Support {nid-200+1}"
-            elif nid >= 100: label = f"Wall {nid-100+1} Base"
-            
+
+        def _reaction_row(label, dA, dB, comps):
             row = {"Location": label}
-            dA = reactsA.get(nid, {})
-            dB = reactsB.get(nid, {}) if valid_B else {}
-            
             for comp in ['Rx', 'Ry', 'Mz']:
                 for bnd in ['max', 'min']:
                     key = f"{comp}_{bnd}"
-                    valA = dA.get(key)
-                    
+                    valA = dA.get(key) if comp in comps else None
                     if valid_B:
-                        valB = dB.get(key)
+                        valB = (dB.get(key) if comp in comps else None)
                         row[f"{comp} ({bnd}) A"] = f"{valA:.1f}" if valA is not None else "--"
                         row[f"{comp} ({bnd}) B"] = f"{valB:.1f}" if valB is not None else "--"
                         row[f"{comp} ({bnd}) %"] = calc_diff(valA, valB, is_max_case=(bnd=='max'))
                     else:
                         row[f"{comp} ({bnd})"] = f"{valA:.1f}" if valA is not None else "--"
-            r_rows.append(row)
+            return row
+
+        for nid in all_react_nodes:
+            label = f"Node {nid}"
+            if nid >= 200: label = f"Support {nid-200+1}"
+            elif nid >= 100: label = f"Wall {nid-100+1} Base"
+            r_rows.append(_reaction_row(
+                label, reactsA.get(nid, {}),
+                reactsB.get(nid, {}) if valid_B else {}, ('Rx', 'Ry', 'Mz')))
+
+        for pid in all_fnd_parents:
+            # Rotational bedding has no scalar resultant -> Mz shown as --.
+            r_rows.append(_reaction_row(
+                f"{pid} - Elastic foundation", fndA.get(pid, {}),
+                fndB.get(pid, {}) if valid_B else {}, ('Rx', 'Ry')))
         
         if r_rows:
             df_react = pd.DataFrame(r_rows)
