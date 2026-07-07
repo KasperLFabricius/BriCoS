@@ -692,9 +692,12 @@ class BricosReportGenerator:
             "analysis is stated under Global Analysis Settings.")
 
         # Condensed 1.3
-        add_sub("1.2 Boundary Conditions", 
+        add_sub("1.2 Boundary Conditions",
             "Supports are modeled using the Penalty Method with high-stiffness springs for Fixed/Pinned supports (<i>k</i> &approx; 10<sup>14</sup>) "
-            "and discrete springs for elastic foundations based on user-specified stiffness (<i>K<sub>x</sub>, K<sub>y</sub>, K<sub>&theta;</sub></i>).")
+            "and discrete springs for elastic foundations based on user-specified stiffness (<i>K<sub>x</sub>, K<sub>y</sub>, K<sub>&theta;</sub></i>). "
+            "Distributed element spring supports (elastic foundation along a member) are entered per unit length and lumped to the mesh nodes by "
+            "tributary length, so the summed nodal stiffness equals <i>k</i> &middot; <i>L</i> at any mesh size; their reactions are reported as one "
+            "integrated resultant per bedded member.")
 
         # Condensed 1.4
         add_sub("1.3 Moving Load Analysis",
@@ -1215,6 +1218,25 @@ class BricosReportGenerator:
             t = self._make_std_table(supp_data, [4*cm, 4*cm, 7*cm])
             self.elements.append(KeepTogether([
                 Paragraph("Boundary Conditions:", self.styles['SwecoSmall']), t]))
+
+        # 3b. ELEMENT SPRING SUPPORTS (ELASTIC FOUNDATION)
+        fnd_list = [f for f in p.get('elastic_foundations', []) or []
+                    if isinstance(f, dict) and f.get('el')]
+        if fnd_list:
+            self.elements.append(Spacer(1, 0.2*cm))
+            fnd_data = [["Element", "Kx [kN/m per m]", "Ky [kN/m per m]",
+                         "Km [kNm/rad per m]"]]
+            for f in sorted(fnd_list, key=lambda x: (x['el'][0], int(x['el'][1:]))):
+                fnd_data.append([
+                    f['el'],
+                    f"{float(f.get('kx', 0.0)):.2e}",
+                    f"{float(f.get('ky', 0.0)):.2e}",
+                    f"{float(f.get('km', 0.0)):.2e}"])
+            t = self._make_std_table(fnd_data, [3*cm, 4*cm, 4*cm, 4*cm])
+            self.elements.append(KeepTogether([
+                Paragraph("Element Spring Supports (Elastic Foundation) - "
+                          "distributed along the full member length, global axes:",
+                          self.styles['SwecoSmall']), t]))
 
         # 4. SOIL
         soil_list = p.get('soil', [])
@@ -1979,12 +2001,15 @@ class BricosReportGenerator:
     def _valid_support_nodes(params, raw_res):
         """Node ids to show in reaction tables.
 
-        Prefers the solver-reported 'Restrained Nodes' (authoritative,
+        Prefers the solver-reported 'Point Support Nodes' (authoritative,
         includes Frame-mode supports placed at top nodes for zero-height
-        walls). Falls back to the legacy id-range heuristic for results
-        produced before the key existed.
+        walls; excludes distributed-spring mesh nodes, which are reported
+        as one resultant row per bedded member instead). Falls back to
+        'Restrained Nodes' and then to the legacy id-range heuristic for
+        results produced before these keys existed.
         """
-        restrained = (raw_res or {}).get('Restrained Nodes')
+        restrained = ((raw_res or {}).get('Point Support Nodes')
+                      or (raw_res or {}).get('Restrained Nodes'))
         if restrained:
             return set(restrained)
         params = params or {}
@@ -2035,7 +2060,37 @@ class BricosReportGenerator:
                     else:
                          row.append(f"{vA:.1f}")
             table_data.append(row)
-        
+
+        # Distributed element spring supports: one integrated resultant row
+        # per bedded member (rotational bedding has no scalar resultant).
+        fndA = solver.foundation_reaction_resultants(
+            resA_full, (paramsA or {}).get('elastic_foundations'),
+            (self.raw_A or {}).get('Foundation Node Map'),
+            (self.raw_A or {}).get('Point Support Nodes'))
+        fndB = {}
+        if self.valid_B:
+            fndB = solver.foundation_reaction_resultants(
+                resB_full, (paramsB or {}).get('elastic_foundations'),
+                (self.raw_B or {}).get('Foundation Node Map'),
+                (self.raw_B or {}).get('Point Support Nodes'))
+        for pid in sorted(set(fndA.keys()) | set(fndB.keys()),
+                          key=lambda x: (x[0], int(x[1:]))):
+            dA = fndA.get(pid, {}); dB = fndB.get(pid, {})
+            row = [f"{pid} fnd."]
+            for comp in ['Rx', 'Ry']:
+                for bound in ['max', 'min']:
+                    k = f"{comp}_{bound}"
+                    if self.valid_B:
+                        vA = dA.get(k); vB = dB.get(k)
+                        sA = f"{vA:.1f}" if vA is not None else "--"
+                        sB = f"{vB:.1f}" if vB is not None else "--"
+                        row.append(f"{sA} / {sB}")
+                    else:
+                        vA = dA.get(k)
+                        row.append(f"{vA:.1f}" if vA is not None else "--")
+            row.extend(["--", "--"])
+            table_data.append(row)
+
         t = self._make_std_table(table_data, col_widths, font_size=7, header_rows=2)
         self.elements.append(KeepTogether([t]))
 

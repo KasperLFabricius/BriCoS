@@ -94,3 +94,20 @@ def test_pdf_builds_a_valid_document(monkeypatch):
     data = manual.build_manual_pdf_bytes()
     assert data[:5] == b'%PDF-'
     assert len(data) > 5000
+
+
+def test_fig_to_png_returns_none_on_failure():
+    def boom():
+        raise RuntimeError("no chrome")
+    assert manual._fig_to_png(boom, timeout=5) is None
+
+
+def test_fig_to_png_times_out_instead_of_hanging():
+    # A render that never completes must not block: it returns the sentinel so
+    # the PDF build can skip the remaining figures rather than hang forever.
+    import time
+
+    def hang():
+        time.sleep(30)
+        raise AssertionError("should have timed out")
+    assert manual._fig_to_png(hang, timeout=0.05) is manual._FIG_TIMED_OUT
