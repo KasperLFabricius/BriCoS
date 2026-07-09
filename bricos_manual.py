@@ -16,6 +16,7 @@ mathematics is LaTeX ($...$), never literal non-ASCII glyphs.
 """
 import io
 import re
+import threading
 
 import numpy as np
 import plotly.graph_objects as go
@@ -406,10 +407,8 @@ def manual_blocks():
     part = lambda t: B.append(('part', t))
 
     md(f"*BriCoS v{data_mod.APP_VERSION} - user manual. This is the complete reference for the "
-       "program: every feature and option, and the theory behind the solver. It is written to "
-       "stand on its own - you should be able to understand what BriCoS does and how to use it "
-       "without having opened it. A worked example (a 2-span integral frame bridge) is carried "
-       "through to illustrate.*")
+       "program: every feature and option, and the theory behind the solver. A worked example "
+       "(a 2-span integral frame bridge) is carried through to illustrate.*")
 
     # =====================================================================
     # PART A - GET STARTED
@@ -1031,13 +1030,38 @@ def _png_size(png):
     return int.from_bytes(png[16:20], 'big'), int.from_bytes(png[20:24], 'big')
 
 
-def _fig_to_png(fig_callable):
-    try:
-        buf = io.BytesIO()
-        fig_callable().write_image(buf, format='png', scale=2)
-        return buf.getvalue()
-    except Exception:
-        return None
+# A single hung kaleido export would otherwise block the whole PDF build - and
+# the app's UI - forever, so each figure render runs with a hard timeout.
+_FIG_EXPORT_TIMEOUT_S = 30.0
+_FIG_TIMED_OUT = object()
+
+
+def _fig_to_png(fig_callable, timeout=_FIG_EXPORT_TIMEOUT_S):
+    """Render a manual figure to PNG bytes. Returns None if the render fails,
+    and the ``_FIG_TIMED_OUT`` sentinel if it does not finish within ``timeout``.
+
+    kaleido's ``write_image`` can block indefinitely when its headless-browser
+    export server is in a bad state (no launchable Chrome/Edge, or a stale sync
+    server left over from a previous export). Running it in a daemon thread with
+    a join timeout guarantees the PDF still completes - with placeholders -
+    instead of hanging the program.
+    """
+    out = {}
+
+    def _work():
+        try:
+            buf = io.BytesIO()
+            fig_callable().write_image(buf, format='png', scale=2)
+            out['png'] = buf.getvalue()
+        except Exception:
+            out['png'] = None
+
+    worker = threading.Thread(target=_work, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        return _FIG_TIMED_OUT
+    return out.get('png')
 
 
 def _render_md_pdf(text, flow, styles, Paragraph):
@@ -1115,6 +1139,7 @@ def build_manual_pdf(buffer):
     # builds the flow, rendering each Plotly figure to PNG inside the context.
     with report.persistent_image_export():
         n1 = n2 = 0
+        figures_hung = False  # set once a kaleido export times out; skip the rest
         for block in manual_blocks():
             kind = block[0]
             if kind == 'part':
@@ -1143,7 +1168,15 @@ def build_manual_pdf(buffer):
                 flow.append(KeepTogether([t]))
                 flow.append(Spacer(1, 0.15 * cm))
             elif kind == 'figure':
-                png = _fig_to_png(block[1])
+                png = None
+                if not figures_hung:
+                    png = _fig_to_png(block[1])
+                    if png is _FIG_TIMED_OUT:
+                        # A hung export means kaleido is wedged; skip the
+                        # remaining figures rather than waiting out the timeout
+                        # on each one, so the PDF still finishes promptly.
+                        figures_hung = True
+                        png = None
                 if png:
                     w, h = _png_size(png)
                     img_w = PAGE_W
